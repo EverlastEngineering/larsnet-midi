@@ -1,6 +1,11 @@
 # MIDI Conversion Configuration
 # Settings for converting drum stems to MIDI notes
 
+# Audio Processing
+audio:
+  force_mono: true     # Convert stereo files to mono before analysis (recommended)
+                       # Uses average of left/right channels
+
 # Onset Detection Parameters (applies to all stems)
 onset_detection:
   threshold: 0.15      # Onset strength threshold (0-1). Lower = more sensitive, catches quieter hits

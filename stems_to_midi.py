@@ -285,6 +285,11 @@ def process_stem_to_midi(
     # Load audio
     audio, sr = sf.read(str(audio_path))
     
+    # Convert to mono if configured (and if stereo)
+    if config['audio']['force_mono'] and audio.ndim == 2:
+        audio = np.mean(audio, axis=1)
+        print(f"    Converted stereo to mono")
+    
     # Check if audio is essentially silent (max amplitude below threshold)
     max_amplitude = np.max(np.abs(audio))
     print(f"    Max amplitude: {max_amplitude:.6f}")
@@ -307,17 +312,15 @@ def process_stem_to_midi(
     print(f"    Found {len(onset_times)} hits (before filtering) -> MIDI note {getattr(drum_mapping, stem_type)}")
     
     # Calculate peak amplitudes for all stems (for velocity calculation)
+    # Calculate peak amplitudes for all stems (for velocity calculation)
+    # Audio is already mono at this point
     peak_amplitudes = []
     for onset_time in onset_times:
         onset_sample = int(onset_time * sr)
         peak_window = int(0.01 * sr)  # 10ms window
-        peak_end = min(onset_sample + peak_window, len(audio) if audio.ndim == 1 else len(audio[:, 0]))
+        peak_end = min(onset_sample + peak_window, len(audio))
         
-        if audio.ndim == 1:
-            peak_segment = audio[onset_sample:peak_end]
-        else:
-            peak_segment = np.mean(audio[onset_sample:peak_end], axis=1)
-        
+        peak_segment = audio[onset_sample:peak_end]
         peak_amplitude = np.max(np.abs(peak_segment)) if len(peak_segment) > 0 else 0
         peak_amplitudes.append(peak_amplitude)
     
@@ -346,13 +349,11 @@ def process_stem_to_midi(
             onset_sample = int(onset_time * sr)
             
             # Analyze a 50ms window after onset
+            # Audio is already mono at this point
             window_samples = int(0.05 * sr)
-            end_sample = min(onset_sample + window_samples, len(audio) if audio.ndim == 1 else len(audio[:, 0]))
+            end_sample = min(onset_sample + window_samples, len(audio))
             
-            if audio.ndim == 1:
-                segment = audio[onset_sample:end_sample]
-            else:
-                segment = np.mean(audio[onset_sample:end_sample], axis=1)
+            segment = audio[onset_sample:end_sample]
             
             if len(segment) < 100:
                 continue
