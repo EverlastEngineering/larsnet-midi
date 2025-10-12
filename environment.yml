@@ -30,3 +30,4 @@ dependencies:
       - torchaudio
       - librosa>=0.10.0
       - midiutil>=1.2.1
+      - mido>=1.2.10

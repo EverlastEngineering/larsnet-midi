@@ -10,6 +10,7 @@ import numpy as np
 import librosa
 import soundfile as sf
 from midiutil import MIDIFile
+import mido
 import argparse
 import yaml
 from typing import Union, List, Tuple, Dict, Optional
@@ -298,16 +299,32 @@ def process_stem_to_midi(
         print(f"    Audio is silent, skipping...")
         return []
     
-    # Detect onsets with increased sensitivity
-    # Use wait=1 for fast repeated hits (like drum rolls, double hits)
-    # Lower threshold and delta for more sensitive detection
-    onset_times, onset_strengths = detect_onsets(
-        audio,
-        sr,
-        threshold=0.15,  # Lower than onset_threshold to catch more hits (default 0.3)
-        delta=0.005,     # Lower delta for more sensitive peak picking (default 0.01)
-        wait=1           # Allow onsets only 1 frame apart (~11ms at 44.1kHz) for fast hits
-    )
+    # Detect onsets using config settings (or learning mode settings if enabled)
+    learning_mode = config.get('learning_mode', {}).get('enabled', False)
+    
+    if learning_mode:
+        # Ultra-sensitive detection for learning mode (catch everything)
+        learning_config = config['learning_mode']
+        onset_times, onset_strengths = detect_onsets(
+            audio,
+            sr,
+            hop_length=config['onset_detection']['hop_length'],
+            threshold=learning_config['learning_onset_threshold'],
+            delta=learning_config['learning_delta'],
+            wait=learning_config['learning_wait']
+        )
+        print(f"    Learning mode: Ultra-sensitive detection (threshold={learning_config['learning_onset_threshold']})")
+    else:
+        # Normal detection from config
+        onset_config = config['onset_detection']
+        onset_times, onset_strengths = detect_onsets(
+            audio,
+            sr,
+            hop_length=onset_config['hop_length'],
+            threshold=onset_config['threshold'],
+            delta=onset_config['delta'],
+            wait=onset_config['wait']
+        )
     
     print(f"    Found {len(onset_times)} hits (before filtering) -> MIDI note {getattr(drum_mapping, stem_type)}")
     
@@ -409,15 +426,16 @@ def process_stem_to_midi(
             geomean_threshold = snare_config['geomean_threshold']
             is_real_snare = (body_wire_geomean > geomean_threshold)
             
-            # Keep if it's a real snare
-            if is_real_snare:
+            # In learning mode, keep ALL detections but mark them
+            if learning_mode or is_real_snare:
                 filtered_times.append(onset_time)
                 filtered_strengths.append(strength)
                 filtered_amplitudes.append(peak_amplitude)
                 filtered_geomeans.append(body_wire_geomean)
-                ratios_kept.append(snare_ratio)
+                # Store whether this would normally be kept or rejected
+                ratios_kept.append(snare_ratio if is_real_snare else -snare_ratio)  # Negative = would be rejected
                 amplitudes_kept.append(peak_amplitude)
-            else:
+            elif not learning_mode:
                 ratios_rejected.append(snare_ratio)
         
         onset_times = np.array(filtered_times)
@@ -525,7 +543,16 @@ def process_stem_to_midi(
     # Create MIDI events
     events = []
     for i, (time, value) in enumerate(zip(onset_times, normalized_values)):
-        velocity = estimate_velocity(value, min_velocity, max_velocity)
+        # In learning mode, check if this hit would normally be rejected
+        is_rejected_in_learning = False
+        if learning_mode and stem_type == 'snare' and i < len(ratios_kept):
+            is_rejected_in_learning = (ratios_kept[i] < 0)  # Negative ratio = rejected
+        
+        if is_rejected_in_learning:
+            # Mark rejected hits with velocity=1 so user can easily identify them
+            velocity = config['learning_mode']['rejected_velocity']
+        else:
+            velocity = estimate_velocity(value, min_velocity, max_velocity)
         
         # Adjust note for open hi-hat
         if stem_type == 'hihat' and hihat_states[i] == 'open':
@@ -594,6 +621,171 @@ def create_midi_file(
         midi.writeFile(f)
     
     print(f"  Created MIDI file with {total_events} notes")
+
+
+def read_midi_notes(midi_path: Union[str, Path], target_note: int) -> List[float]:
+    """
+    Read note times from a MIDI file for a specific MIDI note number.
+    
+    Args:
+        midi_path: Path to MIDI file
+        target_note: MIDI note number to extract (e.g., 38 for snare)
+    
+    Returns:
+        List of note times in seconds
+    """
+    midi_file = mido.MidiFile(str(midi_path))
+    note_times = []
+    current_time = 0.0
+    
+    # Get ticks per beat for time conversion
+    ticks_per_beat = midi_file.ticks_per_beat
+    tempo = 500000  # Default tempo (120 BPM in microseconds per beat)
+    
+    for track in midi_file.tracks:
+        current_time = 0.0
+        for msg in track:
+            current_time += mido.tick2second(msg.time, ticks_per_beat, tempo)
+            
+            if msg.type == 'set_tempo':
+                tempo = msg.tempo
+            elif msg.type == 'note_on' and msg.note == target_note and msg.velocity > 0:
+                note_times.append(current_time)
+    
+    return sorted(note_times)
+
+
+def learn_threshold_from_midi(
+    audio_path: Union[str, Path],
+    original_midi_path: Union[str, Path],
+    edited_midi_path: Union[str, Path],
+    stem_type: str,
+    config: Dict,
+    drum_mapping: DrumMapping
+) -> Dict[str, float]:
+    """
+    Learn optimal threshold by comparing original (all detections) with user-edited MIDI.
+    
+    Args:
+        audio_path: Path to audio file
+        original_midi_path: MIDI with ALL detections (from learning mode)
+        edited_midi_path: User-edited MIDI (false positives removed)
+        stem_type: Type of stem ('snare', etc.)
+        config: Configuration dict
+        drum_mapping: MIDI note mapping
+    
+    Returns:
+        Dictionary with suggested thresholds
+    """
+    print(f"\n  Learning thresholds for {stem_type}...")
+    
+    # Get MIDI note for this stem
+    target_note = getattr(drum_mapping, stem_type)
+    
+    # Read both MIDI files
+    original_times = read_midi_notes(original_midi_path, target_note)
+    edited_times = read_midi_notes(edited_midi_path, target_note)
+    
+    print(f"    Original detections: {len(original_times)}")
+    print(f"    User kept: {len(edited_times)}")
+    print(f"    User removed: {len(original_times) - len(edited_times)}")
+    
+    # Load audio and re-analyze all original detections
+    audio, sr = sf.read(str(audio_path))
+    
+    if config['audio']['force_mono'] and audio.ndim == 2:
+        audio = np.mean(audio, axis=1)
+    
+    # Analyze spectral properties of kept vs removed hits
+    kept_geomeans = []
+    removed_geomeans = []
+    
+    # Match tolerance: 50ms
+    match_tolerance = 0.05
+    
+    for orig_time in original_times:
+        # Check if this time exists in edited MIDI
+        is_kept = any(abs(orig_time - edit_time) < match_tolerance for edit_time in edited_times)
+        
+        # Analyze this onset
+        onset_sample = int(orig_time * sr)
+        window_samples = int(0.05 * sr)
+        end_sample = min(onset_sample + window_samples, len(audio))
+        segment = audio[onset_sample:end_sample]
+        
+        if len(segment) < 100:
+            continue
+        
+        # FFT analysis
+        fft = np.fft.rfft(segment)
+        freqs = np.fft.rfftfreq(len(segment), 1/sr)
+        magnitude = np.abs(fft)
+        
+        # Get spectral energies
+        if stem_type == 'snare':
+            snare_config = config['snare']
+            body_energy = np.sum(magnitude[(freqs >= snare_config['body_freq_min']) & (freqs < snare_config['body_freq_max'])])
+            wire_energy = np.sum(magnitude[(freqs >= snare_config['wire_freq_min']) & (freqs < snare_config['wire_freq_max'])])
+            geomean = np.sqrt(body_energy * wire_energy)
+            
+            if is_kept:
+                kept_geomeans.append(geomean)
+            else:
+                removed_geomeans.append(geomean)
+    
+    # Calculate suggested threshold
+    if kept_geomeans and removed_geomeans:
+        min_kept = min(kept_geomeans)
+        max_removed = max(removed_geomeans)
+        
+        # Suggest threshold halfway between max removed and min kept
+        suggested_threshold = (max_removed + min_kept) / 2.0
+        
+        print(f"\n    Analysis:")
+        print(f"      Kept hits - GeoMean range: {min_kept:.1f} - {max(kept_geomeans):.1f}")
+        print(f"      Removed hits - GeoMean range: {min(removed_geomeans):.1f} - {max_removed:.1f}")
+        print(f"      Suggested threshold: {suggested_threshold:.1f}")
+        print(f"      (Midpoint between max removed ({max_removed:.1f}) and min kept ({min_kept:.1f}))")
+        
+        return {
+            'geomean_threshold': suggested_threshold,
+            'kept_range': (min_kept, max(kept_geomeans)),
+            'removed_range': (min(removed_geomeans), max_removed)
+        }
+    else:
+        print("    Not enough data to suggest threshold")
+        return {}
+
+
+def save_calibrated_config(config: Dict, learned_thresholds: Dict[str, Dict], output_path: Union[str, Path]):
+    """
+    Save a new config file with learned thresholds.
+    
+    Args:
+        config: Original configuration
+        learned_thresholds: Dictionary mapping stem types to learned threshold dicts
+        output_path: Where to save the calibrated config
+    """
+    # Deep copy config
+    import copy
+    calibrated_config = copy.deepcopy(config)
+    
+    # Update thresholds
+    for stem_type, thresholds in learned_thresholds.items():
+        if stem_type in calibrated_config and 'geomean_threshold' in thresholds:
+            calibrated_config[stem_type]['geomean_threshold'] = thresholds['geomean_threshold']
+            print(f"  Updated {stem_type} geomean_threshold: {thresholds['geomean_threshold']:.1f}")
+    
+    # Disable learning mode in the new config
+    if 'learning_mode' in calibrated_config:
+        calibrated_config['learning_mode']['enabled'] = False
+    
+    # Save
+    with open(output_path, 'w') as f:
+        yaml.dump(calibrated_config, f, default_flow_style=False, sort_keys=False)
+    
+    print(f"\n  Saved calibrated config to: {output_path}")
+    print(f"  You can now use this config for production MIDI conversion!")
 
 
 def stems_to_midi(
@@ -696,14 +888,26 @@ def stems_to_midi(
         
         # Create MIDI file
         if events_by_stem:
-            midi_path = output_dir / f"{audio_file.stem}.mid"
+            # Add suffix for learning mode
+            learning_mode = config.get('learning_mode', {}).get('enabled', False)
+            if learning_mode:
+                suffix = config['learning_mode']['learning_midi_suffix']
+                midi_path = output_dir / f"{audio_file.stem}{suffix}.mid"
+            else:
+                midi_path = output_dir / f"{audio_file.stem}.mid"
+            
             create_midi_file(
                 events_by_stem,
                 midi_path,
                 tempo=tempo,
                 track_name=f"Drums - {audio_file.stem}"
             )
-            print(f"  Saved: {midi_path}\n")
+            
+            if learning_mode:
+                print(f"  Saved LEARNING MIDI: {midi_path}")
+                print(f"  ** Load in DAW, delete false positives (velocity=1 hits), save as: {audio_file.stem}_edited.mid **\n")
+            else:
+                print(f"  Saved: {midi_path}\n")
         else:
             print(f"  No events detected, skipping MIDI creation\n")
     
@@ -759,6 +963,16 @@ MIDI Note Mapping (General MIDI):
                         choices=['kick', 'snare', 'toms', 'hihat', 'cymbals'],
                         help="Specific stems to process (default: all).")
     
+    # Learning mode arguments
+    learning_group = parser.add_argument_group('Threshold Learning Mode')
+    learning_group.add_argument('--learn', action='store_true',
+                               help="Enable learning mode (exports all detections, rejected=velocity 1).")
+    learning_group.add_argument('--learn-from-midi', type=str, nargs=3, metavar=('AUDIO', 'ORIG_MIDI', 'EDITED_MIDI'),
+                               help="Learn thresholds from edited MIDI. Args: audio_file original_midi edited_midi")
+    learning_group.add_argument('--learn-stem', type=str, default='snare',
+                               choices=['kick', 'snare', 'toms', 'hihat', 'cymbals'],
+                               help="Stem type for learning (default: snare).")
+    
     args = parser.parse_args()
     
     # Validate
@@ -771,13 +985,85 @@ MIDI Note Mapping (General MIDI):
     if args.min_vel > args.max_vel:
         parser.error("--min-vel cannot be greater than --max-vel")
     
-    stems_to_midi(
-        stems_dir=args.input_dir,
-        output_dir=args.output_dir,
-        onset_threshold=args.threshold,
-        min_velocity=args.min_vel,
-        max_velocity=args.max_vel,
-        tempo=args.tempo,
-        detect_hihat_open=args.detect_hihat_open,
-        stems_to_process=args.stems
-    )
+    # Handle learning mode workflows
+    if args.learn_from_midi:
+        # Learn thresholds from edited MIDI
+        from pathlib import Path
+        
+        audio_file = Path(args.learn_from_midi[0])
+        orig_midi = Path(args.learn_from_midi[1])
+        edited_midi = Path(args.learn_from_midi[2])
+        
+        if not audio_file.exists():
+            parser.error(f"Audio file not found: {audio_file}")
+        if not orig_midi.exists():
+            parser.error(f"Original MIDI not found: {orig_midi}")
+        if not edited_midi.exists():
+            parser.error(f"Edited MIDI not found: {edited_midi}")
+        
+        # Load config
+        config = load_config()
+        drum_mapping = DrumMapping()
+        
+        # Learn thresholds
+        learned = learn_threshold_from_midi(
+            audio_file,
+            orig_midi,
+            edited_midi,
+            args.learn_stem,
+            config,
+            drum_mapping
+        )
+        
+        if learned:
+            # Save calibrated config
+            output_config = Path(config['learning_mode']['calibrated_config_output'])
+            save_calibrated_config(config, {args.learn_stem: learned}, output_config)
+    
+    elif args.learn:
+        # Enable learning mode in config temporarily
+        import tempfile
+        import shutil
+        
+        # Load and modify config
+        config = load_config()
+        config['learning_mode']['enabled'] = True
+        
+        # Save to temp file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+            temp_config = f.name
+        
+        try:
+            # Run conversion with learning mode
+            print("=== LEARNING MODE ENABLED ===")
+            print("All detections will be exported. Rejected hits have velocity=1.")
+            print("Load MIDI in DAW, delete false positives, save as *_edited.mid")
+            print("Then run: python stems_to_midi.py --learn-from-midi <audio> <original_midi> <edited_midi>\n")
+            
+            stems_to_midi(
+                stems_dir=args.input_dir,
+                output_dir=args.output_dir,
+                onset_threshold=args.threshold,
+                min_velocity=args.min_vel,
+                max_velocity=args.max_vel,
+                tempo=args.tempo,
+                detect_hihat_open=args.detect_hihat_open,
+                stems_to_process=args.stems
+            )
+        finally:
+            # Clean up temp config
+            Path(temp_config).unlink()
+    
+    else:
+        # Normal mode
+        stems_to_midi(
+            stems_dir=args.input_dir,
+            output_dir=args.output_dir,
+            onset_threshold=args.threshold,
+            min_velocity=args.min_vel,
+            max_velocity=args.max_vel,
+            tempo=args.tempo,
+            detect_hihat_open=args.detect_hihat_open,
+            stems_to_process=args.stems
+        )

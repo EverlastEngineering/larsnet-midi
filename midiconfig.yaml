@@ -71,3 +71,20 @@ midi:
 debug:
   show_all_onsets: true      # Show detailed analysis of all detected onsets
   show_spectral_data: true   # Show spectral energy values (BodyE, WireE, etc)
+
+# Threshold Learning Mode
+# This workflow helps calibrate thresholds for your specific drum recordings
+learning_mode:
+  enabled: false                    # Enable learning mode
+  export_all_detections: true       # Export ALL detected onsets (even rejected ones)
+  rejected_velocity: 1               # Velocity for rejected hits (so you can see them)
+  kept_velocity_normal: true         # Use normal velocity calculation for kept hits
+  
+  # In learning mode, use very sensitive detection to catch everything
+  learning_onset_threshold: 0.05    # Very low threshold to catch all possible hits
+  learning_delta: 0.002              # Very sensitive peak picking
+  learning_wait: 1                   # Allow very close hits
+  
+  # Output locations for learning workflow
+  learning_midi_suffix: "_learning"  # Suffix for learning MIDI files
+  calibrated_config_output: "midiconfig_calibrated.yaml"  # Where to save learned config
