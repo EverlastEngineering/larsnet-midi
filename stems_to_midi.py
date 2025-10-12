@@ -264,7 +264,7 @@ def process_stem_to_midi(
     Returns:
         List of MIDI events: [{'time': float, 'note': int, 'velocity': int, 'duration': float}, ...]
     """
-    print(f"  Processing {stem_type}...")
+    print(f"  Processing {stem_type} from: {audio_path.name}")
     
     # Load audio
     audio, sr = sf.read(str(audio_path))
@@ -276,7 +276,7 @@ def process_stem_to_midi(
         threshold=onset_threshold
     )
     
-    print(f"    Found {len(onset_times)} hits")
+    print(f"    Found {len(onset_times)} hits -> MIDI note {getattr(drum_mapping, stem_type)}")
     
     if len(onset_times) == 0:
         return []
@@ -398,15 +398,23 @@ def stems_to_midi(
     # Initialize drum mapping
     drum_mapping = DrumMapping()
     
-    # Find all audio files (use kick directory as reference)
-    kick_dir = stems_dir / 'kick'
-    if not kick_dir.exists():
-        raise RuntimeError(f"Kick directory not found: {kick_dir}")
+    # Find all audio files (use first available stem directory as reference)
+    audio_files = []
+    reference_dir = None
     
-    audio_files = list(kick_dir.glob('*.wav'))
+    for stem_type in stems_to_process:
+        stem_dir = stems_dir / stem_type
+        if stem_dir.exists():
+            audio_files = list(stem_dir.glob('*.wav'))
+            if audio_files:
+                reference_dir = stem_dir
+                break
+    
+    if not reference_dir:
+        raise RuntimeError(f"No stem directories found in {stems_dir} for: {stems_to_process}")
     
     if not audio_files:
-        raise RuntimeError(f"No .wav files found in {kick_dir}")
+        raise RuntimeError(f"No .wav files found in {reference_dir}")
     
     print(f"Processing {len(audio_files)} file(s)...")
     print(f"Settings:")
