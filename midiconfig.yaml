@@ -1,0 +1,68 @@
+# MIDI Conversion Configuration
+# Settings for converting drum stems to MIDI notes
+
+# Onset Detection Parameters (applies to all stems)
+onset_detection:
+  threshold: 0.15      # Onset strength threshold (0-1). Lower = more sensitive, catches quieter hits
+  delta: 0.005         # Peak picking sensitivity. Lower = more sensitive
+  wait: 1              # Minimum frames between peaks. 1 = ~11ms, allows fast repeated hits
+  hop_length: 512      # Samples between frames. Affects time resolution
+
+# Per-Stem Filtering Settings
+# Each stem can have custom spectral filtering to reject artifacts and bleed
+
+kick:
+  # Kick drum (bass drum) settings
+  midi_note: 36
+  geomean_threshold: null  # Not used for kick yet
+  
+snare:
+  # Snare drum settings
+  midi_note: 38
+  
+  # Spectral filtering uses FFT analysis to distinguish real snare hits from artifacts
+  # Real snare has energy in both body (150-400Hz) and wires (2-8kHz)
+  # Artifacts (clicks, bleed) have low energy in both ranges
+  
+  geomean_threshold: 100.0   # Geometric mean of body+wire energy
+                              # Real snares: 250-1200, Artifacts: 20-100
+                              # Set to 100 to be conservative (catches all real snares)
+                              # Increase to 150-200 for stricter filtering
+  
+  # Spectral ranges for analysis (Hz)
+  low_freq_min: 40           # Start of low frequency range (kick bleed)
+  low_freq_max: 150          # End of low frequency range
+  body_freq_min: 150         # Start of snare body range
+  body_freq_max: 400         # End of snare body range
+  wire_freq_min: 2000        # Start of snare wire range
+  wire_freq_max: 8000        # End of snare wire range
+
+toms:
+  # Tom drums settings
+  midi_note: 45
+  geomean_threshold: null  # Not used for toms yet
+  
+hihat:
+  # Hi-hat settings
+  midi_note: 42              # Closed hi-hat
+  midi_note_open: 46         # Open hi-hat
+  geomean_threshold: null    # Not used for hihat yet
+  detect_open: true          # Try to detect open vs closed hi-hat
+  decay_threshold: 0.65      # Threshold for open detection (higher = fewer open detections)
+  
+cymbals:
+  # Crash/ride cymbal settings
+  midi_note: 49
+  geomean_threshold: null  # Not used for cymbals yet
+
+# MIDI Output Settings
+midi:
+  min_velocity: 40           # Minimum MIDI velocity (1-127)
+  max_velocity: 127          # Maximum MIDI velocity
+  default_tempo: 120.0       # Default tempo in BPM
+  max_note_duration: 0.5     # Maximum duration for any note (seconds)
+  
+# Debug Output
+debug:
+  show_all_onsets: true      # Show detailed analysis of all detected onsets
+  show_spectral_data: true   # Show spectral energy values (BodyE, WireE, etc)

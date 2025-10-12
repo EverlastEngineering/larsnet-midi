@@ -11,8 +11,23 @@ import librosa
 import soundfile as sf
 from midiutil import MIDIFile
 import argparse
-from typing import Union, List, Tuple, Dict
+import yaml
+from typing import Union, List, Tuple, Dict, Optional
 from dataclasses import dataclass
+
+
+def load_config(config_path: Optional[Path] = None) -> Dict:
+    """Load MIDI conversion configuration from YAML file."""
+    if config_path is None:
+        config_path = Path(__file__).parent / 'midiconfig.yaml'
+    
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+    
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    return config
 
 
 @dataclass
@@ -244,6 +259,7 @@ def process_stem_to_midi(
     audio_path: Union[str, Path],
     stem_type: str,
     drum_mapping: DrumMapping,
+    config: Dict,
     onset_threshold: float = 0.3,
     min_velocity: int = 40,
     max_velocity: int = 127,
@@ -269,14 +285,211 @@ def process_stem_to_midi(
     # Load audio
     audio, sr = sf.read(str(audio_path))
     
-    # Detect onsets with proper threshold
+    # Check if audio is essentially silent (max amplitude below threshold)
+    max_amplitude = np.max(np.abs(audio))
+    print(f"    Max amplitude: {max_amplitude:.6f}")
+    
+    if max_amplitude < 0.001:  # Essentially silent (less than -60dB)
+        print(f"    Audio is silent, skipping...")
+        return []
+    
+    # Detect onsets with increased sensitivity
+    # Use wait=1 for fast repeated hits (like drum rolls, double hits)
+    # Lower threshold and delta for more sensitive detection
     onset_times, onset_strengths = detect_onsets(
         audio,
         sr,
-        threshold=onset_threshold
+        threshold=0.15,  # Lower than onset_threshold to catch more hits (default 0.3)
+        delta=0.005,     # Lower delta for more sensitive peak picking (default 0.01)
+        wait=1           # Allow onsets only 1 frame apart (~11ms at 44.1kHz) for fast hits
     )
     
-    print(f"    Found {len(onset_times)} hits -> MIDI note {getattr(drum_mapping, stem_type)}")
+    print(f"    Found {len(onset_times)} hits (before filtering) -> MIDI note {getattr(drum_mapping, stem_type)}")
+    
+    # Calculate peak amplitudes for all stems (for velocity calculation)
+    peak_amplitudes = []
+    for onset_time in onset_times:
+        onset_sample = int(onset_time * sr)
+        peak_window = int(0.01 * sr)  # 10ms window
+        peak_end = min(onset_sample + peak_window, len(audio) if audio.ndim == 1 else len(audio[:, 0]))
+        
+        if audio.ndim == 1:
+            peak_segment = audio[onset_sample:peak_end]
+        else:
+            peak_segment = np.mean(audio[onset_sample:peak_end], axis=1)
+        
+        peak_amplitude = np.max(np.abs(peak_segment)) if len(peak_segment) > 0 else 0
+        peak_amplitudes.append(peak_amplitude)
+    
+    peak_amplitudes = np.array(peak_amplitudes)
+    
+    # For snare specifically, filter out kick bleed by checking spectral content
+    if stem_type == 'snare' and len(onset_times) > 0:
+        original_count = len(onset_times)
+        # Store originals for debug output
+        onset_times_orig = onset_times.copy()
+        onset_strengths_orig = onset_strengths.copy()
+        peak_amplitudes_orig = peak_amplitudes.copy()
+        
+        filtered_times = []
+        filtered_strengths = []
+        filtered_amplitudes = []
+        filtered_geomeans = []
+        ratios_kept = []
+        amplitudes_kept = []
+        ratios_rejected = []
+        
+        # Store raw spectral data for ALL onsets
+        all_onset_data = []
+        
+        for onset_time, strength, peak_amplitude in zip(onset_times, onset_strengths, peak_amplitudes):
+            onset_sample = int(onset_time * sr)
+            
+            # Analyze a 50ms window after onset
+            window_samples = int(0.05 * sr)
+            end_sample = min(onset_sample + window_samples, len(audio) if audio.ndim == 1 else len(audio[:, 0]))
+            
+            if audio.ndim == 1:
+                segment = audio[onset_sample:end_sample]
+            else:
+                segment = np.mean(audio[onset_sample:end_sample], axis=1)
+            
+            if len(segment) < 100:
+                continue
+            
+            # peak_amplitude already calculated above
+            
+            # Compute FFT
+            fft = np.fft.rfft(segment)
+            freqs = np.fft.rfftfreq(len(segment), 1/sr)
+            magnitude = np.abs(fft)
+            
+            # Use frequency ranges from config
+            snare_config = config['snare']
+            low_energy = np.sum(magnitude[(freqs >= snare_config['low_freq_min']) & (freqs < snare_config['low_freq_max'])])
+            snare_body_energy = np.sum(magnitude[(freqs >= snare_config['body_freq_min']) & (freqs < snare_config['body_freq_max'])])
+            snare_wire_energy = np.sum(magnitude[(freqs >= snare_config['wire_freq_min']) & (freqs < snare_config['wire_freq_max'])])
+            
+            # Multiple criteria for real snare:
+            # 1. Spectral: Should have good mid-frequency body energy (not just highs)
+            # 2. Amplitude: Should be reasonably loud (normalized to max in file)
+            # 3. Balance: Should not be ONLY high frequencies (that's a click)
+            
+            total_snare_energy = snare_body_energy + snare_wire_energy
+            
+            if low_energy > 0:
+                snare_ratio = total_snare_energy / low_energy
+            else:
+                snare_ratio = 100  # No low energy
+            
+            # Calculate multiple potential discriminators
+            total_snare = snare_body_energy + snare_wire_energy
+            body_to_wire = snare_body_energy / snare_wire_energy if snare_wire_energy > 0 else 0
+            body_times_wire = snare_body_energy * snare_wire_energy
+            body_wire_geomean = np.sqrt(snare_body_energy * snare_wire_energy)
+            
+            # Store all data for this onset
+            all_onset_data.append({
+                'time': onset_time,
+                'strength': strength,
+                'amplitude': peak_amplitude,
+                'low_energy': low_energy,
+                'snare_body_energy': snare_body_energy,
+                'snare_wire_energy': snare_wire_energy,
+                'ratio': snare_ratio,
+                'total_snare': total_snare,
+                'body_to_wire': body_to_wire,
+                'body_times_wire': body_times_wire,
+                'body_wire_geomean': body_wire_geomean
+            })
+            
+            # Filter based on geometric mean of body and wire energy
+            # Use threshold from config (default 100, can adjust per file/drum style)
+            geomean_threshold = snare_config['geomean_threshold']
+            is_real_snare = (body_wire_geomean > geomean_threshold)
+            
+            # Keep if it's a real snare
+            if is_real_snare:
+                filtered_times.append(onset_time)
+                filtered_strengths.append(strength)
+                filtered_amplitudes.append(peak_amplitude)
+                filtered_geomeans.append(body_wire_geomean)
+                ratios_kept.append(snare_ratio)
+                amplitudes_kept.append(peak_amplitude)
+            else:
+                ratios_rejected.append(snare_ratio)
+        
+        onset_times = np.array(filtered_times)
+        onset_strengths = np.array(filtered_strengths)
+        peak_amplitudes = np.array(filtered_amplitudes)
+        snare_geomeans = np.array(filtered_geomeans)
+        
+        # Show ALL onset data in chronological order with multiple ratios
+        print(f"\n      ALL DETECTED ONSETS - SPECTRAL ANALYSIS:")
+        print(f"      Using GeoMean threshold: {geomean_threshold}")
+        print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body Energy (150-400Hz), WireE=Wire Energy (2-8kHz)")
+        print(f"      GeoMean=sqrt(BodyE*WireE) - measures combined spectral energy")
+        print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {'BodyE':>8s} {'WireE':>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
+        for idx, data in enumerate(all_onset_data):
+            is_real_snare = (data['body_wire_geomean'] > geomean_threshold)
+            status = 'KEPT' if is_real_snare else 'REJECTED'
+            print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['snare_body_energy']:8.1f} {data['snare_wire_energy']:8.1f} "
+                  f"{data['total_snare']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")
+        
+        # Show summary statistics
+        kept_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] > geomean_threshold]
+        rejected_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] <= geomean_threshold]
+        
+        print(f"\n      FILTERING SUMMARY:")
+        print(f"        GeoMean threshold: {geomean_threshold} (adjustable in midiconfig.yaml)")
+        print(f"        Total onsets detected: {len(all_onset_data)}")
+        print(f"        Kept (GeoMean > {geomean_threshold}): {len(kept_geomeans)}")
+        print(f"        Rejected (GeoMean <= {geomean_threshold}): {len(rejected_geomeans)}")
+        if kept_geomeans:
+            print(f"        Kept GeoMean range: {min(kept_geomeans):.1f} - {max(kept_geomeans):.1f}")
+        if rejected_geomeans:
+            print(f"        Rejected GeoMean range: {min(rejected_geomeans):.1f} - {max(rejected_geomeans):.1f}")
+        
+        print(f"\n    After spectral filtering: {len(onset_times)} hits (rejected {len(ratios_rejected)} kick bleed)")
+        
+        # ALSO show first 20 REJECTED hits to understand what we're filtering out
+        if ratios_rejected:
+            print(f"      First 20 REJECTED hits (for comparison):")
+            rejected_count = 0
+            for onset_time, strength, peak_amplitude in zip(onset_times_orig, onset_strengths_orig, peak_amplitudes_orig):
+                onset_sample = int(onset_time * sr)
+                window_samples = int(0.05 * sr)
+                end_sample = min(onset_sample + window_samples, len(audio) if audio.ndim == 1 else len(audio[:, 0]))
+                
+                if audio.ndim == 1:
+                    segment = audio[onset_sample:end_sample]
+                else:
+                    segment = np.mean(audio[onset_sample:end_sample], axis=1)
+                
+                if len(segment) < 100:
+                    continue
+                
+                fft = np.fft.rfft(segment)
+                freqs = np.fft.rfftfreq(len(segment), 1/sr)
+                magnitude = np.abs(fft)
+                
+                low_energy = np.sum(magnitude[(freqs >= 40) & (freqs < 150)])
+                snare_body_energy = np.sum(magnitude[(freqs >= 150) & (freqs < 400)])
+                snare_wire_energy = np.sum(magnitude[(freqs >= 2000) & (freqs < 8000)])
+                total_snare_energy = snare_body_energy + snare_wire_energy
+                
+                if low_energy > 0:
+                    snare_ratio = total_snare_energy / low_energy
+                else:
+                    snare_ratio = 100
+                
+                is_kick_bleed = (snare_ratio < 2.0)
+                
+                if is_kick_bleed:
+                    print(f"        Time: {onset_time:.3f}s, Ratio: {snare_ratio:.2f}, Amp: {peak_amplitude:.3f}, Reason: kick_bleed")
+                    rejected_count += 1
+                    if rejected_count >= 20:
+                        break
     
     if len(onset_times) == 0:
         return []
@@ -290,10 +503,28 @@ def process_stem_to_midi(
     else:
         hihat_states = ['closed'] * len(onset_times)
     
+    # Calculate velocity based on spectral energy for snare, amplitude for others
+    if stem_type == 'snare' and len(snare_geomeans) > 0:
+        # For snare, use geometric mean of body and wire energy (better correlates with loudness)
+        max_geomean = np.max(snare_geomeans)
+        if max_geomean > 0:
+            normalized_values = snare_geomeans / max_geomean
+        else:
+            normalized_values = np.ones_like(snare_geomeans)
+    elif len(peak_amplitudes) > 0:
+        # For other stems, use peak amplitude
+        max_amp = np.max(peak_amplitudes)
+        if max_amp > 0:
+            normalized_values = peak_amplitudes / max_amp
+        else:
+            normalized_values = np.ones_like(peak_amplitudes)
+    else:
+        normalized_values = np.array([])
+    
     # Create MIDI events
     events = []
-    for i, (time, strength) in enumerate(zip(onset_times, onset_strengths)):
-        velocity = estimate_velocity(strength, min_velocity, max_velocity)
+    for i, (time, value) in enumerate(zip(onset_times, normalized_values)):
+        velocity = estimate_velocity(value, min_velocity, max_velocity)
         
         # Adjust note for open hi-hat
         if stem_type == 'hihat' and hihat_states[i] == 'open':
@@ -391,6 +622,16 @@ def stems_to_midi(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
+    # Load configuration
+    try:
+        config = load_config()
+        print(f"Loaded configuration from: midiconfig.yaml")
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        print("Creating default config file...")
+        # Config file will be created by default in the same directory
+        raise
+    
     # Default stems to process
     if stems_to_process is None:
         stems_to_process = ['kick', 'snare', 'toms', 'hihat', 'cymbals']
@@ -442,6 +683,7 @@ def stems_to_midi(
                 stem_file,
                 stem_type,
                 drum_mapping,
+                config,
                 onset_threshold=onset_threshold,
                 min_velocity=min_velocity,
                 max_velocity=max_velocity,
