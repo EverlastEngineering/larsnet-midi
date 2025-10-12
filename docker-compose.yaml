@@ -1,0 +1,22 @@
+services:
+  larsnet_env:
+    # Use the Dockerfile located in the current directory (.) to build the image
+    build: .
+    
+    # Map the entire host project directory (.) to the container's working directory /app.
+    # This automatically includes all source files and subdirectories like the models folder,
+    # enabling live development where host changes are reflected immediately in the container.
+    volumes:
+      - .:/app
+    
+    # You can open ports if your application needs to expose a web interface.
+    # ports:
+    #   - "8888:8888" # Example for Jupyter Notebooks
+    
+    # To keep the container running for inspection, we override the Dockerfile's CMD
+    # of ["/bin/bash"] to use 'tail -f /dev/null'.
+    command: tail -f /dev/null
+    
+    # If you need to enter the container interactively (good for development):
+    stdin_open: true  # Keep STDIN open
+    tty: true         # Allocate a pseudo-TTY

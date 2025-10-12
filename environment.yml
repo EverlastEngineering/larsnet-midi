@@ -1,0 +1,32 @@
+name: myenv-arm
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - scipy
+  - pandas
+  - libopenblas
+  - libgomp
+  - pyyaml
+  - tqdm
+  - sympy
+  - jinja2
+  - filelock
+  - markupsafe
+  - typing-extensions
+  - zlib
+  - bzip2
+  - xz
+  - ncurses
+  - readline
+  - sqlite
+  - tk
+  - yaml
+  - pip
+  - pip:
+      - soundfile
+      - torch
+      - torchaudio
+      - librosa>=0.10.0
+      - midiutil>=1.2.1

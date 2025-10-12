@@ -1,0 +1,279 @@
+"""
+Sidechain compression to reduce bleed between stems.
+
+Uses the separated snare track as a sidechain trigger to duck the kick track
+when the snare is playing, effectively removing snare bleed from the kick.
+"""
+
+from pathlib import Path
+import numpy as np
+import soundfile as sf
+from scipy import signal
+import argparse
+from typing import Union, Tuple
+
+
+def envelope_follower(audio: np.ndarray, sr: int, attack_ms: float = 5.0, release_ms: float = 50.0) -> np.ndarray:
+    """
+    Create an envelope follower for the audio signal.
+    
+    Args:
+        audio: Input audio (mono or stereo)
+        sr: Sample rate
+        attack_ms: Attack time in milliseconds
+        release_ms: Release time in milliseconds
+    
+    Returns:
+        Envelope of the audio signal
+    """
+    # Convert to mono if stereo
+    if audio.ndim == 2:
+        audio = np.mean(audio, axis=1)
+    
+    # Get absolute values (rectify)
+    rectified = np.abs(audio)
+    
+    # Calculate coefficients
+    attack_coef = np.exp(-1.0 / (sr * attack_ms / 1000.0))
+    release_coef = np.exp(-1.0 / (sr * release_ms / 1000.0))
+    
+    # Apply envelope follower
+    envelope = np.zeros_like(rectified)
+    envelope[0] = rectified[0]
+    
+    for i in range(1, len(rectified)):
+        if rectified[i] > envelope[i-1]:
+            # Attack
+            envelope[i] = attack_coef * envelope[i-1] + (1 - attack_coef) * rectified[i]
+        else:
+            # Release
+            envelope[i] = release_coef * envelope[i-1] + (1 - release_coef) * rectified[i]
+    
+    return envelope
+
+
+def sidechain_compress(
+    main_audio: np.ndarray,
+    sidechain_audio: np.ndarray,
+    sr: int,
+    threshold_db: float = -30.0,
+    ratio: float = 10.0,
+    attack_ms: float = 1.0,
+    release_ms: float = 100.0,
+    makeup_gain_db: float = 0.0,
+    knee_db: float = 3.0
+) -> np.ndarray:
+    """
+    Apply sidechain compression to main audio based on sidechain audio.
+    
+    Args:
+        main_audio: Audio to be compressed (kick track)
+        sidechain_audio: Audio that triggers compression (snare track)
+        sr: Sample rate
+        threshold_db: Threshold in dB below which no compression occurs
+        ratio: Compression ratio (higher = more aggressive ducking)
+        attack_ms: How quickly compression kicks in when snare hits
+        release_ms: How quickly compression releases after snare stops
+        makeup_gain_db: Gain to apply after compression
+        knee_db: Soft knee width in dB
+    
+    Returns:
+        Compressed audio
+    """
+    # Get envelope of sidechain (snare)
+    sidechain_envelope = envelope_follower(sidechain_audio, sr, attack_ms, release_ms)
+    
+    # Convert to dB
+    epsilon = 1e-10
+    sidechain_db = 20 * np.log10(sidechain_envelope + epsilon)
+    
+    # Calculate gain reduction
+    threshold = threshold_db
+    gain_reduction_db = np.zeros_like(sidechain_db)
+    
+    for i in range(len(sidechain_db)):
+        if sidechain_db[i] > threshold + knee_db:
+            # Above knee - full compression
+            over_threshold = sidechain_db[i] - threshold
+            gain_reduction_db[i] = -over_threshold * (1 - 1/ratio)
+        elif sidechain_db[i] > threshold - knee_db:
+            # In knee - soft compression
+            over_threshold = sidechain_db[i] - threshold + knee_db
+            gain_reduction_db[i] = -over_threshold**2 * (1 - 1/ratio) / (4 * knee_db)
+        # else: below threshold, no gain reduction
+    
+    # Convert gain reduction to linear
+    gain_linear = 10 ** (gain_reduction_db / 20.0)
+    
+    # Apply makeup gain
+    makeup_gain_linear = 10 ** (makeup_gain_db / 20.0)
+    gain_linear *= makeup_gain_linear
+    
+    # Apply gain reduction to main audio
+    if main_audio.ndim == 2:
+        # Stereo - apply same gain to both channels
+        compressed = main_audio * gain_linear[:, np.newaxis]
+    else:
+        # Mono
+        compressed = main_audio * gain_linear
+    
+    return compressed
+
+
+def process_stems(
+    stems_dir: Union[str, Path],
+    output_dir: Union[str, Path],
+    threshold_db: float = -30.0,
+    ratio: float = 10.0,
+    attack_ms: float = 1.0,
+    release_ms: float = 100.0,
+    dry_wet: float = 1.0
+):
+    """
+    Process separated stems to remove bleed using sidechain compression.
+    
+    Args:
+        stems_dir: Directory containing separated stems (should have kick/ and snare/ subdirs)
+        output_dir: Directory to save cleaned stems
+        threshold_db: Sidechain threshold in dB
+        ratio: Compression ratio (higher = more aggressive)
+        attack_ms: Attack time in milliseconds
+        release_ms: Release time in milliseconds
+        dry_wet: Mix between original (0.0) and processed (1.0)
+    """
+    stems_dir = Path(stems_dir)
+    output_dir = Path(output_dir)
+    
+    kick_dir = stems_dir / 'kick'
+    snare_dir = stems_dir / 'snare'
+    
+    if not kick_dir.exists():
+        raise RuntimeError(f"Kick directory not found: {kick_dir}")
+    if not snare_dir.exists():
+        raise RuntimeError(f"Snare directory not found: {snare_dir}")
+    
+    # Find all kick files
+    kick_files = list(kick_dir.glob('*.wav'))
+    
+    if not kick_files:
+        raise RuntimeError(f"No .wav files found in {kick_dir}")
+    
+    print(f"Processing {len(kick_files)} file(s)...")
+    print(f"Settings:")
+    print(f"  Threshold: {threshold_db} dB")
+    print(f"  Ratio: {ratio}:1")
+    print(f"  Attack: {attack_ms} ms")
+    print(f"  Release: {release_ms} ms")
+    print(f"  Dry/Wet: {dry_wet * 100:.0f}% processed")
+    print()
+    
+    for kick_file in kick_files:
+        snare_file = snare_dir / kick_file.name
+        
+        if not snare_file.exists():
+            print(f"Warning: Snare file not found for {kick_file.name}, skipping...")
+            continue
+        
+        print(f"Processing: {kick_file.name}")
+        
+        # Load audio files
+        kick_audio, sr = sf.read(str(kick_file))
+        snare_audio, sr_snare = sf.read(str(snare_file))
+        
+        if sr != sr_snare:
+            print(f"  Warning: Sample rate mismatch! Kick: {sr}Hz, Snare: {sr_snare}Hz")
+            continue
+        
+        # Ensure same length
+        min_length = min(len(kick_audio), len(snare_audio))
+        kick_audio = kick_audio[:min_length]
+        snare_audio = snare_audio[:min_length]
+        
+        # Apply sidechain compression
+        print(f"  Applying sidechain compression...")
+        kick_compressed = sidechain_compress(
+            kick_audio,
+            snare_audio,
+            sr,
+            threshold_db=threshold_db,
+            ratio=ratio,
+            attack_ms=attack_ms,
+            release_ms=release_ms
+        )
+        
+        # Dry/wet mix
+        kick_final = dry_wet * kick_compressed + (1 - dry_wet) * kick_audio
+        
+        # Save
+        output_kick_dir = output_dir / 'kick'
+        output_kick_dir.mkdir(parents=True, exist_ok=True)
+        output_file = output_kick_dir / kick_file.name
+        
+        sf.write(str(output_file), kick_final, sr)
+        print(f"  Saved: {output_file}")
+        
+        # Copy other stems unchanged
+        for stem_name in ['snare', 'toms', 'hihat', 'cymbals']:
+            stem_dir = stems_dir / stem_name
+            if stem_dir.exists():
+                output_stem_dir = output_dir / stem_name
+                output_stem_dir.mkdir(parents=True, exist_ok=True)
+                
+                stem_file = stem_dir / kick_file.name
+                if stem_file.exists():
+                    # Copy unchanged
+                    stem_audio, stem_sr = sf.read(str(stem_file))
+                    sf.write(str(output_stem_dir / kick_file.name), stem_audio, stem_sr)
+    
+    print(f"\nDone! Processed stems saved to: {output_dir}")
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description="Remove snare bleed from kick track using sidechain compression.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Basic usage
+  python sidechain_cleanup.py -i separated_stems/ -o cleaned_stems/
+  
+  # Aggressive ducking
+  python sidechain_cleanup.py -i separated_stems/ -o cleaned_stems/ -t -40 -r 20 --attack 0.5
+  
+  # Gentle/subtle ducking
+  python sidechain_cleanup.py -i separated_stems/ -o cleaned_stems/ -t -25 -r 4 --dry-wet 0.5
+        """
+    )
+    
+    parser.add_argument('-i', '--input_dir', type=str, required=True,
+                        help="Directory containing separated stems (must have kick/ and snare/ subdirectories).")
+    parser.add_argument('-o', '--output_dir', type=str, default='cleaned_stems',
+                        help="Directory to save cleaned stems (default: cleaned_stems).")
+    parser.add_argument('-t', '--threshold', type=float, default=-30.0,
+                        help="Sidechain threshold in dB. Lower = more sensitive (default: -30).")
+    parser.add_argument('-r', '--ratio', type=float, default=10.0,
+                        help="Compression ratio. Higher = more aggressive ducking (default: 10).")
+    parser.add_argument('--attack', type=float, default=1.0,
+                        help="Attack time in milliseconds. Lower = faster response (default: 1).")
+    parser.add_argument('--release', type=float, default=100.0,
+                        help="Release time in milliseconds. Lower = faster recovery (default: 100).")
+    parser.add_argument('--dry-wet', type=float, default=1.0,
+                        help="Mix between original (0.0) and processed (1.0). Default: 1.0 (fully processed).")
+    
+    args = parser.parse_args()
+    
+    # Validate
+    if not (0.0 <= args.dry_wet <= 1.0):
+        parser.error("--dry-wet must be between 0.0 and 1.0")
+    if args.ratio < 1.0:
+        parser.error("--ratio must be >= 1.0")
+    
+    process_stems(
+        stems_dir=args.input_dir,
+        output_dir=args.output_dir,
+        threshold_db=args.threshold,
+        ratio=args.ratio,
+        attack_ms=args.attack,
+        release_ms=args.release,
+        dry_wet=args.dry_wet
+    )

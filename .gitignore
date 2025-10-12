@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Output directories
+output/
+separated_stems/
+cleaned_stems/
+midi_output*/
+test_*/
+
+# Data files (but keep pretrained models)
+*.wav
+*.mp3
+*.flac
+!pretrained_larsnet_models/**/*.wav
+
+# Logs
+*.log
+
+# Environment
+.env

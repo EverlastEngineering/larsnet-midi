@@ -1,0 +1,5 @@
+# Additional requirements for MIDI conversion functionality
+# Install with: pip install -r requirements_midi.txt
+
+librosa>=0.10.0
+midiutil>=1.2.1
