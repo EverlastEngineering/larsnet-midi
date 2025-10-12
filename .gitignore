@@ -28,6 +28,7 @@ ENV/
 Thumbs.db
 
 # Output directories
+input/
 output/
 separated_stems/
 cleaned_stems/
