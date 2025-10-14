@@ -1,0 +1,20 @@
+# EQ Configuration for Post-Processing Cleanup
+# Frequency values in Hz for high-pass and low-pass filters
+# Applied after stem separation to reduce bleed between drum components
+
+kick:
+  highpass: 30.0      # Remove rumble
+  lowpass: 8000.0     # Remove cymbal bleed
+
+snare:
+  highpass: 100.0     # Remove kick bleed
+
+toms:
+  highpass: 60.0      # Remove low-frequency bleed
+  lowpass: 1500.0    # Remove high-frequency bleed
+
+hihat:
+  highpass: 5000.0     # High frequencies only
+
+cymbals:
+  highpass: 3000.0     # High frequencies with some midrange

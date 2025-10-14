@@ -63,7 +63,7 @@ python stems_to_midi.py -i <input_dir> -o <output_dir> [OPTIONS]
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `-i` / `--input_dir` | *required* | Directory with separated stems (kick/, snare/, etc.) |
+| `-i` / `--input_dir` | *required* | Directory with separated stems (track folders with stem files) |
 | `-o` / `--output_dir` | `midi_output` | Where to save MIDI files |
 | `-t` / `--threshold` | `0.3` | Onset detection sensitivity (0-1) |
 | `--min-vel` | `40` | Minimum MIDI velocity (1-127) |

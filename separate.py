@@ -1,35 +1,23 @@
-from larsnet import LarsNet
+from separation_utils import process_stems
 from pathlib import Path
 from typing import Union, Optional
-import soundfile as sf
 import argparse
 
 
 def separate(input_dir: Union[str, Path], output_dir: Union[str, Path], wiener_exponent: Optional[float], device: str):
-    input_dir = Path(input_dir)
-    output_dir = Path(output_dir)
-
-    if not input_dir.exists():
-        raise RuntimeError(f'{input_dir} was not found.')
-
-    if wiener_exponent is not None and wiener_exponent <= 0:
-        raise ValueError(f'α-Wiener filter exponent should be positive.')
-
-    larsnet = LarsNet(
-        wiener_filter=wiener_exponent is not None,
+    """
+    Separate drums without post-processing EQ.
+    
+    This is a simple wrapper around process_stems with EQ disabled.
+    """
+    process_stems(
+        input_dir=input_dir,
+        output_dir=output_dir,
         wiener_exponent=wiener_exponent,
         device=device,
-        config="config.yaml",
+        apply_eq=False,
+        verbose=True
     )
-
-    for mixture in input_dir.rglob("*.wav"):
-
-        stems = larsnet(mixture)
-
-        for stem, waveform in stems.items():
-            save_path = output_dir.joinpath(stem, f'{mixture.stem}.wav')
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-            sf.write(save_path, waveform.cpu().numpy().T, larsnet.sr)
 
 
 if __name__ == '__main__':

@@ -62,7 +62,7 @@ python sidechain_cleanup.py -i separated_stems/ -o cleaned_stems/ [OPTIONS]
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `-i` / `--input_dir` | *required* | Directory with separated stems (must contain `kick/` and `snare/` subdirs) |
+| `-i` / `--input_dir` | *required* | Directory with separated stems (must contain track subdirs with stem files) |
 | `-o` / `--output_dir` | `cleaned_stems` | Where to save cleaned stems |
 | `-t` / `--threshold` | `-30.0` | Sidechain threshold in dB (lower = more sensitive) |
 | `-r` / `--ratio` | `10.0` | Compression ratio (higher = more aggressive ducking) |
@@ -302,8 +302,21 @@ Recommended directory structure:
 ```
 project/
 ├── input/                  # Original drum mixes
+│   └── drums.wav
 ├── separated_stems/        # Initial LarsNet output
+│   └── drums/
+│       ├── drums-kick.wav
+│       ├── drums-snare.wav
+│       ├── drums-toms.wav
+│       ├── drums-hihat.wav
+│       └── drums-cymbals.wav
 ├── cleaned_stems/          # After sidechain cleanup
+│   └── drums/
+│       ├── drums-kick.wav      (cleaned)
+│       ├── drums-snare.wav
+│       ├── drums-toms.wav
+│       ├── drums-hihat.wav
+│       └── drums-cymbals.wav
 └── final_stems/           # After any additional processing
 ```
 

@@ -343,8 +343,8 @@ def process_stem_to_midi(
     
     peak_amplitudes = np.array(peak_amplitudes)
     
-    # For snare specifically, filter out kick bleed by checking spectral content
-    if stem_type == 'snare' and len(onset_times) > 0:
+    # For snare and kick, filter out artifacts/bleed by checking spectral content
+    if stem_type in ['snare', 'kick'] and len(onset_times) > 0:
         original_count = len(onset_times)
         # Store originals for debug output
         onset_times_orig = onset_times.copy()
@@ -382,29 +382,36 @@ def process_stem_to_midi(
             freqs = np.fft.rfftfreq(len(segment), 1/sr)
             magnitude = np.abs(fft)
             
-            # Use frequency ranges from config
-            snare_config = config['snare']
-            low_energy = np.sum(magnitude[(freqs >= snare_config['low_freq_min']) & (freqs < snare_config['low_freq_max'])])
-            snare_body_energy = np.sum(magnitude[(freqs >= snare_config['body_freq_min']) & (freqs < snare_config['body_freq_max'])])
-            snare_wire_energy = np.sum(magnitude[(freqs >= snare_config['wire_freq_min']) & (freqs < snare_config['wire_freq_max'])])
+            # Use frequency ranges from config based on stem type
+            if stem_type == 'snare':
+                stem_config = config['snare']
+                # For snare: analyze body (150-400Hz) and wires (2-8kHz)
+                low_energy = np.sum(magnitude[(freqs >= stem_config['low_freq_min']) & (freqs < stem_config['low_freq_max'])])
+                primary_energy = np.sum(magnitude[(freqs >= stem_config['body_freq_min']) & (freqs < stem_config['body_freq_max'])])
+                secondary_energy = np.sum(magnitude[(freqs >= stem_config['wire_freq_min']) & (freqs < stem_config['wire_freq_max'])])
+                energy_label_1 = 'BodyE'
+                energy_label_2 = 'WireE'
+            elif stem_type == 'kick':
+                stem_config = config['kick']
+                # For kick: analyze fundamental (40-80Hz) and body/attack (80-150Hz)
+                low_energy = 0  # Not used for kick (kick IS the low energy)
+                primary_energy = np.sum(magnitude[(freqs >= stem_config['fundamental_freq_min']) & (freqs < stem_config['fundamental_freq_max'])])
+                secondary_energy = np.sum(magnitude[(freqs >= stem_config['body_freq_min']) & (freqs < stem_config['body_freq_max'])])
+                energy_label_1 = 'FundE'  # Fundamental energy
+                energy_label_2 = 'BodyE'  # Body/attack energy
             
-            # Multiple criteria for real snare:
-            # 1. Spectral: Should have good mid-frequency body energy (not just highs)
-            # 2. Amplitude: Should be reasonably loud (normalized to max in file)
-            # 3. Balance: Should not be ONLY high frequencies (that's a click)
-            
-            total_snare_energy = snare_body_energy + snare_wire_energy
+            # Calculate combined metric
+            total_energy = primary_energy + secondary_energy
             
             if low_energy > 0:
-                snare_ratio = total_snare_energy / low_energy
+                spectral_ratio = total_energy / low_energy
             else:
-                snare_ratio = 100  # No low energy
+                spectral_ratio = 100  # No low energy (or not used for this stem type)
             
-            # Calculate multiple potential discriminators
-            total_snare = snare_body_energy + snare_wire_energy
-            body_to_wire = snare_body_energy / snare_wire_energy if snare_wire_energy > 0 else 0
-            body_times_wire = snare_body_energy * snare_wire_energy
-            body_wire_geomean = np.sqrt(snare_body_energy * snare_wire_energy)
+            # Calculate geometric mean (discriminator for real hits vs artifacts)
+            body_to_wire = primary_energy / secondary_energy if secondary_energy > 0 else 0
+            body_times_wire = primary_energy * secondary_energy
+            body_wire_geomean = np.sqrt(primary_energy * secondary_energy)
             
             # Store all data for this onset
             all_onset_data.append({
@@ -412,48 +419,56 @@ def process_stem_to_midi(
                 'strength': strength,
                 'amplitude': peak_amplitude,
                 'low_energy': low_energy,
-                'snare_body_energy': snare_body_energy,
-                'snare_wire_energy': snare_wire_energy,
-                'ratio': snare_ratio,
-                'total_snare': total_snare,
+                'primary_energy': primary_energy,
+                'secondary_energy': secondary_energy,
+                'ratio': spectral_ratio,
+                'total_energy': total_energy,
                 'body_to_wire': body_to_wire,
                 'body_times_wire': body_times_wire,
-                'body_wire_geomean': body_wire_geomean
+                'body_wire_geomean': body_wire_geomean,
+                'energy_label_1': energy_label_1,
+                'energy_label_2': energy_label_2
             })
             
-            # Filter based on geometric mean of body and wire energy
-            # Use threshold from config (default 100, can adjust per file/drum style)
-            geomean_threshold = snare_config['geomean_threshold']
-            is_real_snare = (body_wire_geomean > geomean_threshold)
+            # Filter based on geometric mean of primary and secondary energy
+            # Use threshold from config (default 100-150, can adjust per file/drum style)
+            geomean_threshold = stem_config['geomean_threshold']
+            is_real_hit = (body_wire_geomean > geomean_threshold)
             
             # In learning mode, keep ALL detections but mark them
-            if learning_mode or is_real_snare:
+            if learning_mode or is_real_hit:
                 filtered_times.append(onset_time)
                 filtered_strengths.append(strength)
                 filtered_amplitudes.append(peak_amplitude)
                 filtered_geomeans.append(body_wire_geomean)
                 # Store whether this would normally be kept or rejected
-                ratios_kept.append(snare_ratio if is_real_snare else -snare_ratio)  # Negative = would be rejected
+                ratios_kept.append(spectral_ratio if is_real_hit else -spectral_ratio)  # Negative = would be rejected
                 amplitudes_kept.append(peak_amplitude)
             elif not learning_mode:
-                ratios_rejected.append(snare_ratio)
+                ratios_rejected.append(spectral_ratio)
         
         onset_times = np.array(filtered_times)
         onset_strengths = np.array(filtered_strengths)
         peak_amplitudes = np.array(filtered_amplitudes)
-        snare_geomeans = np.array(filtered_geomeans)
+        stem_geomeans = np.array(filtered_geomeans)
         
         # Show ALL onset data in chronological order with multiple ratios
         print(f"\n      ALL DETECTED ONSETS - SPECTRAL ANALYSIS:")
         print(f"      Using GeoMean threshold: {geomean_threshold}")
-        print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body Energy (150-400Hz), WireE=Wire Energy (2-8kHz)")
-        print(f"      GeoMean=sqrt(BodyE*WireE) - measures combined spectral energy")
-        print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {'BodyE':>8s} {'WireE':>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
+        
+        # Configure labels based on stem type
+        if stem_type == 'snare':
+            print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body Energy (150-400Hz), WireE=Wire Energy (2-8kHz)")
+        elif stem_type == 'kick':
+            print(f"      Str=Onset Strength, Amp=Peak Amplitude, FundE=Fundamental Energy (40-80Hz), BodyE=Body Energy (80-150Hz)")
+        print(f"      GeoMean=sqrt({energy_label_1}*{energy_label_2}) - measures combined spectral energy")
+        
+        print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1+'E':>8s} {energy_label_2+'E':>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
         for idx, data in enumerate(all_onset_data):
-            is_real_snare = (data['body_wire_geomean'] > geomean_threshold)
-            status = 'KEPT' if is_real_snare else 'REJECTED'
-            print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['snare_body_energy']:8.1f} {data['snare_wire_energy']:8.1f} "
-                  f"{data['total_snare']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")
+            is_real_hit = (data['body_wire_geomean'] > geomean_threshold)
+            status = 'KEPT' if is_real_hit else 'REJECTED'
+            print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
+                  f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")
         
         # Show summary statistics
         kept_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] > geomean_threshold]
@@ -469,10 +484,10 @@ def process_stem_to_midi(
         if rejected_geomeans:
             print(f"        Rejected GeoMean range: {min(rejected_geomeans):.1f} - {max(rejected_geomeans):.1f}")
         
-        print(f"\n    After spectral filtering: {len(onset_times)} hits (rejected {len(ratios_rejected)} kick bleed)")
+        print(f"\n    After spectral filtering: {len(onset_times)} hits (rejected {len(ratios_rejected)} artifacts)")
         
         # ALSO show first 20 REJECTED hits to understand what we're filtering out
-        if ratios_rejected:
+        if ratios_rejected and False:  # Disabled for cleaner output
             print(f"      First 20 REJECTED hits (for comparison):")
             rejected_count = 0
             for onset_time, strength, peak_amplitude in zip(onset_times_orig, onset_strengths_orig, peak_amplitudes_orig):
@@ -522,14 +537,14 @@ def process_stem_to_midi(
     else:
         hihat_states = ['closed'] * len(onset_times)
     
-    # Calculate velocity based on spectral energy for snare, amplitude for others
-    if stem_type == 'snare' and len(snare_geomeans) > 0:
-        # For snare, use geometric mean of body and wire energy (better correlates with loudness)
-        max_geomean = np.max(snare_geomeans)
+    # Calculate velocity based on spectral energy for filtered stems, amplitude for others
+    if stem_type in ['snare', 'kick'] and len(stem_geomeans) > 0:
+        # For spectrally-filtered stems, use geometric mean of primary and secondary energy (better correlates with loudness)
+        max_geomean = np.max(stem_geomeans)
         if max_geomean > 0:
-            normalized_values = snare_geomeans / max_geomean
+            normalized_values = stem_geomeans / max_geomean
         else:
-            normalized_values = np.ones_like(snare_geomeans)
+            normalized_values = np.ones_like(stem_geomeans)
     elif len(peak_amplitudes) > 0:
         # For other stems, use peak amplitude
         max_amp = np.max(peak_amplitudes)
@@ -832,25 +847,30 @@ def stems_to_midi(
     # Initialize drum mapping
     drum_mapping = DrumMapping()
     
-    # Find all audio files (use first available stem directory as reference)
-    audio_files = []
-    reference_dir = None
+    # Find all audio file directories (new structure: stems_dir/input_name/)
+    # Each subdirectory should contain files like input_name-kick.wav, input_name-snare.wav, etc.
+    audio_dirs = [d for d in stems_dir.iterdir() if d.is_dir()]
     
-    for stem_type in stems_to_process:
-        stem_dir = stems_dir / stem_type
-        if stem_dir.exists():
-            audio_files = list(stem_dir.glob('*.wav'))
-            if audio_files:
-                reference_dir = stem_dir
+    if not audio_dirs:
+        raise RuntimeError(f"No subdirectories found in {stems_dir}")
+    
+    audio_files_to_process = []
+    for audio_dir in audio_dirs:
+        # Check if this directory has the stem files we need
+        has_stems = False
+        for stem_type in stems_to_process:
+            expected_file = audio_dir / f"{audio_dir.name}-{stem_type}.wav"
+            if expected_file.exists():
+                has_stems = True
                 break
+        
+        if has_stems:
+            audio_files_to_process.append(audio_dir)
     
-    if not reference_dir:
-        raise RuntimeError(f"No stem directories found in {stems_dir} for: {stems_to_process}")
+    if not audio_files_to_process:
+        raise RuntimeError(f"No valid stem directories found in {stems_dir} with expected naming pattern (e.g., name/name-kick.wav)")
     
-    if not audio_files:
-        raise RuntimeError(f"No .wav files found in {reference_dir}")
-    
-    print(f"Processing {len(audio_files)} file(s)...")
+    print(f"Processing {len(audio_files_to_process)} file(s)...")
     print(f"Settings:")
     print(f"  Onset threshold: {onset_threshold}")
     print(f"  Velocity range: {min_velocity}-{max_velocity}")
@@ -858,15 +878,15 @@ def stems_to_midi(
     print(f"  Detect open hi-hat: {detect_hihat_open}")
     print()
     
-    for audio_file in audio_files:
-        print(f"Processing: {audio_file.name}")
+    for audio_dir in audio_files_to_process:
+        base_name = audio_dir.name
+        print(f"Processing: {base_name}")
         
         events_by_stem = {}
         
         # Process each stem type
         for stem_type in stems_to_process:
-            stem_dir = stems_dir / stem_type
-            stem_file = stem_dir / audio_file.name
+            stem_file = audio_dir / f"{base_name}-{stem_type}.wav"
             
             if not stem_file.exists():
                 print(f"  Warning: {stem_type} file not found, skipping...")
@@ -892,15 +912,15 @@ def stems_to_midi(
             learning_mode = config.get('learning_mode', {}).get('enabled', False)
             if learning_mode:
                 suffix = config['learning_mode']['learning_midi_suffix']
-                midi_path = output_dir / f"{audio_file.stem}{suffix}.mid"
+                midi_path = output_dir / f"{base_name}{suffix}.mid"
             else:
-                midi_path = output_dir / f"{audio_file.stem}.mid"
+                midi_path = output_dir / f"{base_name}.mid"
             
             create_midi_file(
                 events_by_stem,
                 midi_path,
                 tempo=tempo,
-                track_name=f"Drums - {audio_file.stem}"
+                track_name=f"Drums - {base_name}"
             )
             
             if learning_mode:

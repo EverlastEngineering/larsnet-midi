@@ -133,7 +133,7 @@ def process_stems(
     Process separated stems to remove bleed using sidechain compression.
     
     Args:
-        stems_dir: Directory containing separated stems (should have kick/ and snare/ subdirs)
+        stems_dir: Directory containing separated stems (should have subdirs like: trackname/trackname-kick.wav)
         output_dir: Directory to save cleaned stems
         threshold_db: Sidechain threshold in dB
         ratio: Compression ratio (higher = more aggressive)
@@ -144,21 +144,28 @@ def process_stems(
     stems_dir = Path(stems_dir)
     output_dir = Path(output_dir)
     
-    kick_dir = stems_dir / 'kick'
-    snare_dir = stems_dir / 'snare'
+    # Find all subdirectories containing stems (new structure: stems_dir/trackname/)
+    track_dirs = [d for d in stems_dir.iterdir() if d.is_dir()]
     
-    if not kick_dir.exists():
-        raise RuntimeError(f"Kick directory not found: {kick_dir}")
-    if not snare_dir.exists():
-        raise RuntimeError(f"Snare directory not found: {snare_dir}")
+    if not track_dirs:
+        raise RuntimeError(f"No subdirectories found in {stems_dir}")
     
-    # Find all kick files
-    kick_files = list(kick_dir.glob('*.wav'))
+    # Find tracks that have both kick and snare files
+    tracks_to_process = []
+    for track_dir in track_dirs:
+        base_name = track_dir.name
+        kick_file = track_dir / f"{base_name}-kick.wav"
+        snare_file = track_dir / f"{base_name}-snare.wav"
+        
+        if kick_file.exists() and snare_file.exists():
+            tracks_to_process.append(track_dir)
+        else:
+            print(f"Warning: Skipping {base_name} - missing kick or snare file")
     
-    if not kick_files:
-        raise RuntimeError(f"No .wav files found in {kick_dir}")
+    if not tracks_to_process:
+        raise RuntimeError(f"No tracks found with both kick and snare files in {stems_dir}")
     
-    print(f"Processing {len(kick_files)} file(s)...")
+    print(f"Processing {len(tracks_to_process)} track(s)...")
     print(f"Settings:")
     print(f"  Threshold: {threshold_db} dB")
     print(f"  Ratio: {ratio}:1")
@@ -167,14 +174,12 @@ def process_stems(
     print(f"  Dry/Wet: {dry_wet * 100:.0f}% processed")
     print()
     
-    for kick_file in kick_files:
-        snare_file = snare_dir / kick_file.name
+    for track_dir in tracks_to_process:
+        base_name = track_dir.name
+        kick_file = track_dir / f"{base_name}-kick.wav"
+        snare_file = track_dir / f"{base_name}-snare.wav"
         
-        if not snare_file.exists():
-            print(f"Warning: Snare file not found for {kick_file.name}, skipping...")
-            continue
-        
-        print(f"Processing: {kick_file.name}")
+        print(f"Processing: {base_name}")
         
         # Load audio files
         kick_audio, sr = sf.read(str(kick_file))
@@ -204,26 +209,22 @@ def process_stems(
         # Dry/wet mix
         kick_final = dry_wet * kick_compressed + (1 - dry_wet) * kick_audio
         
-        # Save
-        output_kick_dir = output_dir / 'kick'
-        output_kick_dir.mkdir(parents=True, exist_ok=True)
-        output_file = output_kick_dir / kick_file.name
+        # Save - create output directory for this track
+        output_track_dir = output_dir / base_name
+        output_track_dir.mkdir(parents=True, exist_ok=True)
+        output_file = output_track_dir / f'{base_name}-kick.wav'
         
         sf.write(str(output_file), kick_final, sr)
         print(f"  Saved: {output_file}")
         
         # Copy other stems unchanged
         for stem_name in ['snare', 'toms', 'hihat', 'cymbals']:
-            stem_dir = stems_dir / stem_name
-            if stem_dir.exists():
-                output_stem_dir = output_dir / stem_name
-                output_stem_dir.mkdir(parents=True, exist_ok=True)
-                
-                stem_file = stem_dir / kick_file.name
-                if stem_file.exists():
-                    # Copy unchanged
-                    stem_audio, stem_sr = sf.read(str(stem_file))
-                    sf.write(str(output_stem_dir / kick_file.name), stem_audio, stem_sr)
+            stem_file = track_dir / f"{base_name}-{stem_name}.wav"
+            if stem_file.exists():
+                # Copy unchanged
+                stem_audio, stem_sr = sf.read(str(stem_file))
+                output_file = output_track_dir / f'{base_name}-{stem_name}.wav'
+                sf.write(str(output_file), stem_audio, stem_sr)
     
     print(f"\nDone! Processed stems saved to: {output_dir}")
 
