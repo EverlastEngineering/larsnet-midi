@@ -52,6 +52,168 @@ class DrumMapping:
     ride: int = 51          # D#2 - Ride Cymbal 1
 
 
+def detect_tom_pitch(
+    audio: np.ndarray,
+    sr: int,
+    onset_time: float,
+    method: str = 'yin',
+    min_hz: float = 60.0,
+    max_hz: float = 250.0,
+    window_ms: float = 100.0
+) -> float:
+    """
+    Detect the pitch of a tom hit using YIN or pYIN algorithm.
+    
+    Args:
+        audio: Audio signal (mono)
+        sr: Sample rate
+        onset_time: Time of onset in seconds
+        method: 'yin' or 'pyin' (pYIN is more robust but slower)
+        min_hz: Minimum expected pitch
+        max_hz: Maximum expected pitch
+        window_ms: Analysis window in milliseconds
+    
+    Returns:
+        Detected pitch in Hz, or 0 if detection failed
+    """
+    onset_sample = int(onset_time * sr)
+    window_samples = int(window_ms * sr / 1000.0)
+    end_sample = min(onset_sample + window_samples, len(audio))
+    
+    segment = audio[onset_sample:end_sample]
+    
+    if len(segment) < 512:
+        return 0.0
+    
+    try:
+        if method == 'pyin':
+            # More robust probabilistic YIN
+            f0, voiced_flag, voiced_probs = librosa.pyin(
+                segment,
+                fmin=min_hz,
+                fmax=max_hz,
+                sr=sr,
+                frame_length=2048
+            )
+            # Take median of confident detections
+            confident_pitches = f0[(voiced_flag) & (voiced_probs > 0.5)]
+            if len(confident_pitches) > 0:
+                pitch = np.median(confident_pitches[~np.isnan(confident_pitches)])
+                return float(pitch) if not np.isnan(pitch) else 0.0
+            else:
+                return 0.0
+        else:
+            # Standard YIN (faster)
+            f0 = librosa.yin(
+                segment,
+                fmin=min_hz,
+                fmax=max_hz,
+                sr=sr,
+                frame_length=2048
+            )
+            # Take median to smooth out jitter
+            pitch = np.median(f0[~np.isnan(f0)])
+            return float(pitch) if not np.isnan(pitch) else 0.0
+    except Exception as e:
+        # Fallback: use spectral peak as estimate
+        fft = np.fft.rfft(segment)
+        freqs = np.fft.rfftfreq(len(segment), 1/sr)
+        magnitude = np.abs(fft)
+        
+        # Find peak in expected range
+        mask = (freqs >= min_hz) & (freqs <= max_hz)
+        if np.any(mask):
+            peak_idx = np.argmax(magnitude[mask])
+            peak_freq = freqs[mask][peak_idx]
+            return float(peak_freq)
+        else:
+            return 0.0
+
+
+def classify_tom_pitch(pitches: np.ndarray) -> np.ndarray:
+    """
+    Classify tom pitches into low/mid/high groups using clustering.
+    
+    Args:
+        pitches: Array of detected pitches in Hz
+    
+    Returns:
+        Array of classifications: 0=low, 1=mid, 2=high
+    """
+    if len(pitches) == 0:
+        return np.array([])
+    
+    # Filter out failed detections (0 Hz)
+    valid_pitches = pitches[pitches > 0]
+    
+    if len(valid_pitches) == 0:
+        # If no valid pitches, default to mid tom
+        return np.ones(len(pitches), dtype=int)
+    
+    # If only 1-2 unique pitches, simple grouping
+    unique_pitches = np.unique(valid_pitches)
+    
+    if len(unique_pitches) == 1:
+        # All same pitch - classify as mid
+        return np.ones(len(pitches), dtype=int)
+    elif len(unique_pitches) == 2:
+        # Two toms - split into low and high
+        threshold = np.mean(unique_pitches)
+        classifications = np.where(pitches < threshold, 0, 2)
+        classifications[pitches == 0] = 1  # Failed detections go to mid
+        return classifications
+    else:
+        # 3+ unique pitches - use k-means clustering with k=3
+        try:
+            from sklearn.cluster import KMeans
+        except ImportError:
+            print("Warning: scikit-learn not installed. Using simple pitch-based classification.")
+            # Fallback: use percentiles to split into 3 groups
+            p33 = np.percentile(valid_pitches, 33)
+            p66 = np.percentile(valid_pitches, 66)
+            
+            classifications = np.ones(len(pitches), dtype=int)  # Default to mid
+            for i, pitch in enumerate(pitches):
+                if pitch > 0:
+                    if pitch < p33:
+                        classifications[i] = 0  # Low
+                    elif pitch > p66:
+                        classifications[i] = 2  # High
+                    else:
+                        classifications[i] = 1  # Mid
+            return classifications
+        
+        # Reshape for sklearn
+        valid_pitches_2d = valid_pitches.reshape(-1, 1)
+        
+        # Cluster into 3 groups
+        n_clusters = min(3, len(unique_pitches))
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        kmeans.fit(valid_pitches_2d)
+        
+        # Sort cluster centers to get low/mid/high order
+        cluster_centers = kmeans.cluster_centers_.flatten()
+        sorted_indices = np.argsort(cluster_centers)
+        
+        # Create mapping from cluster label to tom classification
+        cluster_to_tom = {sorted_indices[i]: i for i in range(n_clusters)}
+        
+        # If only 2 clusters, use 0 (low) and 2 (high), skip mid
+        if n_clusters == 2:
+            cluster_to_tom = {sorted_indices[0]: 0, sorted_indices[1]: 2}
+        
+        # Classify all pitches
+        classifications = np.ones(len(pitches), dtype=int)  # Default to mid
+        
+        for i, pitch in enumerate(pitches):
+            if pitch > 0:
+                # Find which cluster this pitch belongs to
+                cluster = kmeans.predict([[pitch]])[0]
+                classifications[i] = cluster_to_tom[cluster]
+        
+        return classifications
+
+
 def detect_onsets(
     audio: np.ndarray,
     sr: int,
@@ -366,8 +528,8 @@ def process_stem_to_midi(
     
     peak_amplitudes = np.array(peak_amplitudes)
     
-    # For snare, kick, and cymbals: filter out artifacts/bleed by checking spectral content
-    if stem_type in ['snare', 'kick', 'cymbals'] and len(onset_times) > 0:
+    # For snare, kick, toms, and cymbals: filter out artifacts/bleed by checking spectral content
+    if stem_type in ['snare', 'kick', 'toms', 'cymbals'] and len(onset_times) > 0:
         original_count = len(onset_times)
         # Store originals for debug output
         onset_times_orig = onset_times.copy()
@@ -418,6 +580,15 @@ def process_stem_to_midi(
                 stem_config = config['kick']
                 # For kick: analyze fundamental (40-80Hz) and body/attack (80-150Hz)
                 low_energy = 0  # Not used for kick (kick IS the low energy)
+                primary_energy = np.sum(magnitude[(freqs >= stem_config['fundamental_freq_min']) & (freqs < stem_config['fundamental_freq_max'])])
+                secondary_energy = np.sum(magnitude[(freqs >= stem_config['body_freq_min']) & (freqs < stem_config['body_freq_max'])])
+                energy_label_1 = 'FundE'  # Fundamental energy
+                energy_label_2 = 'BodyE'  # Body/attack energy
+            elif stem_type == 'toms':
+                stem_config = config['toms']
+                # For toms: analyze fundamental (60-150Hz) and body/attack (150-400Hz)
+                # Similar to kick but higher pitch range
+                low_energy = 0  # Not used for toms
                 primary_energy = np.sum(magnitude[(freqs >= stem_config['fundamental_freq_min']) & (freqs < stem_config['fundamental_freq_max'])])
                 secondary_energy = np.sum(magnitude[(freqs >= stem_config['body_freq_min']) & (freqs < stem_config['body_freq_max'])])
                 energy_label_1 = 'FundE'  # Fundamental energy
@@ -545,6 +716,8 @@ def process_stem_to_midi(
             print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body Energy (150-400Hz), WireE=Wire Energy (2-8kHz)")
         elif stem_type == 'kick':
             print(f"      Str=Onset Strength, Amp=Peak Amplitude, FundE=Fundamental Energy (40-80Hz), BodyE=Body Energy (80-150Hz)")
+        elif stem_type == 'toms':
+            print(f"      Str=Onset Strength, Amp=Peak Amplitude, FundE=Fundamental Energy (60-150Hz), BodyE=Body Energy (150-400Hz)")
         elif stem_type == 'cymbals':
             print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body/Wash Energy (1-4kHz), BrillE=Brilliance/Attack Energy (4-10kHz), SustainMs=Sustain Duration")
             min_sustain_ms = stem_config.get('min_sustain_ms', 50)
@@ -656,7 +829,7 @@ def process_stem_to_midi(
         hihat_states = ['closed'] * len(onset_times)
     
     # Calculate velocity based on spectral energy for filtered stems, amplitude for others
-    if stem_type in ['snare', 'kick'] and len(stem_geomeans) > 0:
+    if stem_type in ['snare', 'kick', 'toms'] and len(stem_geomeans) > 0:
         # For spectrally-filtered stems, use geometric mean of primary and secondary energy (better correlates with loudness)
         max_geomean = np.max(stem_geomeans)
         if max_geomean > 0:
@@ -673,6 +846,52 @@ def process_stem_to_midi(
     else:
         normalized_values = np.array([])
     
+    # For toms: detect pitch and classify into low/mid/high
+    tom_classifications = None
+    if stem_type == 'toms':
+        tom_config = config.get('toms', {})
+        enable_pitch = tom_config.get('enable_pitch_detection', True)
+        
+        if enable_pitch and len(onset_times) > 0:
+            print(f"\n    Detecting tom pitches...")
+            pitch_method = tom_config.get('pitch_method', 'yin')
+            min_pitch = tom_config.get('min_pitch_hz', 60.0)
+            max_pitch = tom_config.get('max_pitch_hz', 250.0)
+            
+            # Detect pitch for each tom hit
+            detected_pitches = []
+            for onset_time in onset_times:
+                pitch = detect_tom_pitch(audio, sr, onset_time, method=pitch_method, 
+                                        min_hz=min_pitch, max_hz=max_pitch)
+                detected_pitches.append(pitch)
+            
+            detected_pitches = np.array(detected_pitches)
+            
+            # Show detected pitches
+            valid_pitches = detected_pitches[detected_pitches > 0]
+            if len(valid_pitches) > 0:
+                print(f"    Detected pitches: min={np.min(valid_pitches):.1f}Hz, max={np.max(valid_pitches):.1f}Hz, mean={np.mean(valid_pitches):.1f}Hz")
+                print(f"    Unique pitches: {len(np.unique(valid_pitches))}")
+            else:
+                print(f"    Warning: No valid pitches detected, all toms will use default (mid) note")
+            
+            # Classify into low/mid/high
+            tom_classifications = classify_tom_pitch(detected_pitches)
+            
+            # Show classification summary
+            low_count = np.sum(tom_classifications == 0)
+            mid_count = np.sum(tom_classifications == 1)
+            high_count = np.sum(tom_classifications == 2)
+            print(f"    Tom classification: {low_count} low, {mid_count} mid, {high_count} high")
+            
+            # Show detailed pitch table
+            if len(onset_times) <= 20:  # Only show table if not too many
+                print(f"\n      {'Time':>8s} {'Pitch(Hz)':>10s} {'Tom':>8s}")
+                for i, (time, pitch, classification) in enumerate(zip(onset_times, detected_pitches, tom_classifications)):
+                    tom_name = ['Low', 'Mid', 'High'][classification]
+                    pitch_str = f"{pitch:.1f}" if pitch > 0 else "N/A"
+                    print(f"      {time:8.3f} {pitch_str:>10s} {tom_name:>8s}")
+    
     # Create MIDI events
     events = []
     for i, (time, value) in enumerate(zip(onset_times, normalized_values)):
@@ -687,9 +906,17 @@ def process_stem_to_midi(
         else:
             velocity = estimate_velocity(value, min_velocity, max_velocity)
         
-        # Adjust note for open hi-hat
+        # Adjust note for open hi-hat or tom classification
         if stem_type == 'hihat' and hihat_states[i] == 'open':
             midi_note = drum_mapping.hihat_open
+        elif stem_type == 'toms' and tom_classifications is not None and i < len(tom_classifications):
+            # Use low/mid/high tom note based on pitch classification
+            if tom_classifications[i] == 0:
+                midi_note = drum_mapping.tom_low
+            elif tom_classifications[i] == 2:
+                midi_note = drum_mapping.tom_high
+            else:  # mid or default
+                midi_note = drum_mapping.tom_mid
         else:
             midi_note = note
         
@@ -901,6 +1128,11 @@ def learn_threshold_from_midi(
             fundamental_energy = np.sum(magnitude[(freqs >= kick_config['fundamental_freq_min']) & (freqs < kick_config['fundamental_freq_max'])])
             body_energy = np.sum(magnitude[(freqs >= kick_config['body_freq_min']) & (freqs < kick_config['body_freq_max'])])
             geomean = np.sqrt(fundamental_energy * body_energy)
+        elif stem_type == 'toms':
+            toms_config = config['toms']
+            fundamental_energy = np.sum(magnitude[(freqs >= toms_config['fundamental_freq_min']) & (freqs < toms_config['fundamental_freq_max'])])
+            body_energy = np.sum(magnitude[(freqs >= toms_config['body_freq_min']) & (freqs < toms_config['body_freq_max'])])
+            geomean = np.sqrt(fundamental_energy * body_energy)
         elif stem_type == 'cymbals':
             # Cymbals: body/wash (1-4kHz) and brilliance/attack (4-10kHz)
             body_energy = np.sum(magnitude[(freqs >= 1000) & (freqs < 4000)])
@@ -936,6 +1168,10 @@ def learn_threshold_from_midi(
             primary_energy = body_energy
             secondary_energy = wire_energy
         elif stem_type == 'kick':
+            total_energy = fundamental_energy + body_energy
+            primary_energy = fundamental_energy
+            secondary_energy = body_energy
+        elif stem_type == 'toms':
             total_energy = fundamental_energy + body_energy
             primary_energy = fundamental_energy
             secondary_energy = body_energy
@@ -1000,6 +1236,9 @@ def learn_threshold_from_midi(
             elif stem_type == 'kick':
                 print(f"      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {'FundE':>8s} {'BodyE':>8s} {'Total':>8s} {'GeoMean':>8s} {'User':>8s} {'Current':>8s} {'Suggest':>8s} {'Result':>10s}")
                 print(f"      {'(s)':>8s} {'':>6s} {'':>6s} {'(40-80)':>8s} {'(80-150)':>8s} {'':>8s} {'':>8s} {'Action':>8s} {'Config':>8s} {'Learn':>8s} {'':>10s}")
+            elif stem_type == 'toms':
+                print(f"      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {'FundE':>8s} {'BodyE':>8s} {'Total':>8s} {'GeoMean':>8s} {'User':>8s} {'Current':>8s} {'Suggest':>8s} {'Result':>10s}")
+                print(f"      {'(s)':>8s} {'':>6s} {'':>6s} {'(60-150)':>8s} {'(150-400)':>8s} {'':>8s} {'':>8s} {'Action':>8s} {'Config':>8s} {'Learn':>8s} {'':>10s}")
             
             correct_count = 0
             suggest_correct_count = 0

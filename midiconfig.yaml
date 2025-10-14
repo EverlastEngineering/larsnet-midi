@@ -70,8 +70,31 @@ snare:
 
 toms:
   # Tom drums settings
-  midi_note: 45
-  geomean_threshold: null  # Not used for toms yet
+  midi_note_low: 45      # A1 - Low Tom
+  midi_note_mid: 47      # B1 - Mid Tom  
+  midi_note_high: 50     # D2 - High Tom
+  
+  # Onset detection (overrides global onset_detection settings for toms)
+  onset_threshold: null      # Use global setting (0.01) - toms are loud and transient
+  onset_delta: null          # Use global setting (0.005)
+  onset_wait: null           # Use global setting (1 frame ~11ms)
+  
+  # Pitch detection for automatic low/mid/high classification
+  enable_pitch_detection: true   # Detect pitch and assign to low/mid/high tom notes
+  pitch_method: 'yin'            # Pitch detection algorithm: 'yin' or 'pyin' (more robust but slower)
+  min_pitch_hz: 60               # Minimum expected tom pitch (low floor tom ~60Hz)
+  max_pitch_hz: 250              # Maximum expected tom pitch (high rack tom ~250Hz)
+  
+  # Spectral filtering (similar to kick/snare)
+  geomean_threshold: 80.0        # Geometric mean of fundamental+body energy
+                                  # Real toms: 150-600, Artifacts: 20-80
+                                  # Set to 80 to be conservative
+  
+  # Spectral ranges for analysis (Hz)
+  fundamental_freq_min: 60       # Start of fundamental range (deep toms)
+  fundamental_freq_max: 150      # End of fundamental range
+  body_freq_min: 150             # Start of body/attack range
+  body_freq_max: 400             # End of body/attack range
   
 hihat:
   # Hi-hat settings
