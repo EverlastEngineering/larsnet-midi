@@ -1,0 +1,72 @@
+audio:
+  force_mono: true
+onset_detection:
+  threshold: 0.01
+  delta: 0.005
+  wait: 1
+  hop_length: 512
+kick:
+  midi_note: 36
+  geomean_threshold: 150.0
+  fundamental_freq_min: 40
+  fundamental_freq_max: 80
+  body_freq_min: 80
+  body_freq_max: 150
+  attack_freq_min: 2000
+  attack_freq_max: 6000
+snare:
+  midi_note: 38
+  geomean_threshold: 100.0
+  low_freq_min: 40
+  low_freq_max: 150
+  body_freq_min: 150
+  body_freq_max: 400
+  wire_freq_min: 2000
+  wire_freq_max: 8000
+toms:
+  midi_note: 45
+  geomean_threshold: null
+hihat:
+  midi_note: 42
+  midi_note_open: 46
+  geomean_threshold: null
+  detect_open: true
+  decay_threshold: 0.65
+cymbals:
+  midi_note: 49
+  geomean_threshold: !!python/object/apply:numpy._core.multiarray.scalar
+  - !!python/object/apply:numpy.dtype
+    args:
+    - f8
+    - false
+    - true
+    state: !!python/tuple
+    - 3
+    - <
+    - null
+    - null
+    - null
+    - -1
+    - -1
+    - 0
+  - !!binary |
+    Z1dul9dzQkA=
+  min_sustain_ms: 150
+midi:
+  min_velocity: 40
+  max_velocity: 127
+  default_tempo: 124.0
+  max_note_duration: 0.5
+debug:
+  show_all_onsets: true
+  show_spectral_data: true
+learning_mode:
+  enabled: false
+  export_all_detections: true
+  rejected_velocity: 1
+  kept_velocity_normal: true
+  learning_onset_threshold: 0.05
+  learning_delta: 0.002
+  learning_wait: 1
+  learning_midi_suffix: _learning
+  calibrated_config_output: midiconfig_calibrated.yaml

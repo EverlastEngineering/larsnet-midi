@@ -317,14 +317,29 @@ def process_stem_to_midi(
     else:
         # Normal detection from config
         onset_config = config['onset_detection']
-        onset_times, onset_strengths = detect_onsets(
-            audio,
-            sr,
-            hop_length=onset_config['hop_length'],
-            threshold=onset_config['threshold'],
-            delta=onset_config['delta'],
-            wait=onset_config['wait']
-        )
+        
+        # Cymbals need special handling due to long decay
+        if stem_type in ['cymbals', 'hihat']:
+            # Use balanced settings - sensitive enough to catch hits, but avoid retriggering on decay
+            # Lower threshold than before to catch quieter cymbal hits
+            onset_times, onset_strengths = detect_onsets(
+                audio,
+                sr,
+                hop_length=onset_config['hop_length'],
+                threshold=0.15,  # More sensitive (was 0.3) to catch quieter hits
+                delta=0.02,  # More sensitive peak detection (was 0.05)
+                wait=10  # ~115ms min spacing (was 20/230ms) - allows closer hits
+            )
+            print(f"    Cymbal-optimized detection: threshold=0.15, delta=0.02, wait=10 (~115ms min spacing)")
+        else:
+            onset_times, onset_strengths = detect_onsets(
+                audio,
+                sr,
+                hop_length=onset_config['hop_length'],
+                threshold=onset_config['threshold'],
+                delta=onset_config['delta'],
+                wait=onset_config['wait']
+            )
     
     print(f"    Found {len(onset_times)} hits (before filtering) -> MIDI note {getattr(drum_mapping, stem_type)}")
     
@@ -343,8 +358,8 @@ def process_stem_to_midi(
     
     peak_amplitudes = np.array(peak_amplitudes)
     
-    # For snare and kick, filter out artifacts/bleed by checking spectral content
-    if stem_type in ['snare', 'kick'] and len(onset_times) > 0:
+    # For snare, kick, and cymbals: filter out artifacts/bleed by checking spectral content
+    if stem_type in ['snare', 'kick', 'cymbals'] and len(onset_times) > 0:
         original_count = len(onset_times)
         # Store originals for debug output
         onset_times_orig = onset_times.copy()
@@ -399,6 +414,43 @@ def process_stem_to_midi(
                 secondary_energy = np.sum(magnitude[(freqs >= stem_config['body_freq_min']) & (freqs < stem_config['body_freq_max'])])
                 energy_label_1 = 'FundE'  # Fundamental energy
                 energy_label_2 = 'BodyE'  # Body/attack energy
+            elif stem_type == 'cymbals':
+                stem_config = config.get('cymbals', {})
+                # For cymbals: analyze brilliance/attack (4-8kHz) and body (1-4kHz)
+                # Cymbals are mostly high frequency content
+                # Real cymbal hits have strong transient energy in the attack range
+                low_energy = 0  # Not used for cymbals
+                primary_energy = np.sum(magnitude[(freqs >= 1000) & (freqs < 4000)])  # Body/wash
+                secondary_energy = np.sum(magnitude[(freqs >= 4000) & (freqs < 10000)])  # Brilliance/attack
+                energy_label_1 = 'BodyE'  # Body/wash energy (1-4kHz)
+                energy_label_2 = 'BrillE'  # Brilliance/attack energy (4-10kHz)
+                
+                # Additionally, measure sustain duration for cymbals
+                # Real cymbal hits sustain longer than clicks/artifacts
+                sustain_duration = 0.0
+                min_sustain_ms = stem_config.get('min_sustain_ms', 50)  # Default 50ms minimum
+                
+                # Analyze up to 200ms after onset to measure sustain
+                sustain_window_samples = int(0.2 * sr)
+                sustain_end = min(onset_sample + sustain_window_samples, len(audio))
+                sustain_segment = audio[onset_sample:sustain_end]
+                
+                if len(sustain_segment) > 100:
+                    # Calculate envelope (absolute value)
+                    envelope = np.abs(sustain_segment)
+                    # Smooth envelope
+                    from scipy.signal import medfilt
+                    envelope_smooth = medfilt(envelope, kernel_size=51)
+                    
+                    # Find where envelope drops below 10% of peak
+                    peak_env = np.max(envelope_smooth)
+                    threshold_level = peak_env * 0.1
+                    
+                    # Count samples above threshold
+                    above_threshold = envelope_smooth > threshold_level
+                    if np.any(above_threshold):
+                        sustain_samples = np.sum(above_threshold)
+                        sustain_duration = (sustain_samples / sr) * 1000  # Convert to milliseconds
             
             # Calculate combined metric
             total_energy = primary_energy + secondary_energy
@@ -414,7 +466,7 @@ def process_stem_to_midi(
             body_wire_geomean = np.sqrt(primary_energy * secondary_energy)
             
             # Store all data for this onset
-            all_onset_data.append({
+            onset_data = {
                 'time': onset_time,
                 'strength': strength,
                 'amplitude': peak_amplitude,
@@ -428,12 +480,33 @@ def process_stem_to_midi(
                 'body_wire_geomean': body_wire_geomean,
                 'energy_label_1': energy_label_1,
                 'energy_label_2': energy_label_2
-            })
+            }
+            
+            # Add sustain duration for cymbals
+            if stem_type == 'cymbals':
+                onset_data['sustain_ms'] = sustain_duration
+            
+            all_onset_data.append(onset_data)
             
             # Filter based on geometric mean of primary and secondary energy
             # Use threshold from config (default 100-150, can adjust per file/drum style)
-            geomean_threshold = stem_config['geomean_threshold']
-            is_real_hit = (body_wire_geomean > geomean_threshold)
+            geomean_threshold = stem_config.get('geomean_threshold')
+            
+            # For cymbals, also check minimum sustain duration
+            if stem_type == 'cymbals':
+                min_sustain_ms = stem_config.get('min_sustain_ms', 50)
+                sustain_ok = sustain_duration >= min_sustain_ms
+                
+                if geomean_threshold is None:
+                    # Only use sustain check
+                    is_real_hit = sustain_ok
+                else:
+                    # Use both geomean and sustain
+                    is_real_hit = (body_wire_geomean > geomean_threshold) and sustain_ok
+            elif geomean_threshold is None:
+                is_real_hit = True  # Keep all detections
+            else:
+                is_real_hit = (body_wire_geomean > geomean_threshold)
             
             # In learning mode, keep ALL detections but mark them
             if learning_mode or is_real_hit:
@@ -454,35 +527,72 @@ def process_stem_to_midi(
         
         # Show ALL onset data in chronological order with multiple ratios
         print(f"\n      ALL DETECTED ONSETS - SPECTRAL ANALYSIS:")
-        print(f"      Using GeoMean threshold: {geomean_threshold}")
+        if geomean_threshold is not None:
+            print(f"      Using GeoMean threshold: {geomean_threshold}")
+        else:
+            print(f"      No threshold filtering (showing all detections)")
         
         # Configure labels based on stem type
         if stem_type == 'snare':
             print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body Energy (150-400Hz), WireE=Wire Energy (2-8kHz)")
         elif stem_type == 'kick':
             print(f"      Str=Onset Strength, Amp=Peak Amplitude, FundE=Fundamental Energy (40-80Hz), BodyE=Body Energy (80-150Hz)")
+        elif stem_type == 'cymbals':
+            print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body/Wash Energy (1-4kHz), BrillE=Brilliance/Attack Energy (4-10kHz), SustainMs=Sustain Duration")
+            min_sustain_ms = stem_config.get('min_sustain_ms', 50)
+            print(f"      Minimum sustain duration: {min_sustain_ms}ms")
         print(f"      GeoMean=sqrt({energy_label_1}*{energy_label_2}) - measures combined spectral energy")
         
-        print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1+'E':>8s} {energy_label_2+'E':>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
+        # Header row - add SustainMs for cymbals
+        if stem_type == 'cymbals':
+            print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'SustainMs':>10s} {'Status':>10s}")
+        else:
+            print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
+        
         for idx, data in enumerate(all_onset_data):
-            is_real_hit = (data['body_wire_geomean'] > geomean_threshold)
+            # Re-calculate filtering decision for display
+            if stem_type == 'cymbals':
+                min_sustain_ms = stem_config.get('min_sustain_ms', 50)
+                sustain_ok = data.get('sustain_ms', 0) >= min_sustain_ms
+                
+                if geomean_threshold is None:
+                    is_real_hit = sustain_ok
+                else:
+                    is_real_hit = (data['body_wire_geomean'] > geomean_threshold) and sustain_ok
+            elif geomean_threshold is not None:
+                is_real_hit = (data['body_wire_geomean'] > geomean_threshold)
+            else:
+                is_real_hit = True
+            
             status = 'KEPT' if is_real_hit else 'REJECTED'
-            print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
-                  f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")
+            
+            if stem_type == 'cymbals':
+                sustain_str = f"{data.get('sustain_ms', 0):10.1f}"
+                print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
+                      f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {sustain_str} {status:>10s}")
+            else:
+                print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
+                      f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")
         
         # Show summary statistics
-        kept_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] > geomean_threshold]
-        rejected_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] <= geomean_threshold]
-        
         print(f"\n      FILTERING SUMMARY:")
-        print(f"        GeoMean threshold: {geomean_threshold} (adjustable in midiconfig.yaml)")
-        print(f"        Total onsets detected: {len(all_onset_data)}")
-        print(f"        Kept (GeoMean > {geomean_threshold}): {len(kept_geomeans)}")
-        print(f"        Rejected (GeoMean <= {geomean_threshold}): {len(rejected_geomeans)}")
-        if kept_geomeans:
-            print(f"        Kept GeoMean range: {min(kept_geomeans):.1f} - {max(kept_geomeans):.1f}")
-        if rejected_geomeans:
-            print(f"        Rejected GeoMean range: {min(rejected_geomeans):.1f} - {max(rejected_geomeans):.1f}")
+        if geomean_threshold is not None:
+            kept_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] > geomean_threshold]
+            rejected_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] <= geomean_threshold]
+            print(f"        GeoMean threshold: {geomean_threshold} (adjustable in midiconfig.yaml)")
+            print(f"        Total onsets detected: {len(all_onset_data)}")
+            print(f"        Kept (GeoMean > {geomean_threshold}): {len(kept_geomeans)}")
+            print(f"        Rejected (GeoMean <= {geomean_threshold}): {len(rejected_geomeans)}")
+            if kept_geomeans:
+                print(f"        Kept GeoMean range: {min(kept_geomeans):.1f} - {max(kept_geomeans):.1f}")
+            if rejected_geomeans:
+                print(f"        Rejected GeoMean range: {min(rejected_geomeans):.1f} - {max(rejected_geomeans):.1f}")
+        else:
+            print(f"        No threshold filtering enabled")
+            print(f"        Total onsets detected: {len(all_onset_data)} (all kept)")
+            all_geomeans = [d['body_wire_geomean'] for d in all_onset_data]
+            if all_geomeans:
+                print(f"        GeoMean range: {min(all_geomeans):.1f} - {max(all_geomeans):.1f}")
         
         print(f"\n    After spectral filtering: {len(onset_times)} hits (rejected {len(ratios_rejected)} artifacts)")
         
@@ -617,16 +727,37 @@ def create_midi_file(
     midi.addTrackName(track, time, track_name)
     midi.addTempo(track, time, tempo)
     
+    # Add a marker/text event at time 0 to anchor the MIDI file
+    # This ensures proper alignment when importing into DAWs
+    beats_per_second = tempo / 60.0
+    midi.addText(track, 0.0, "START")
+    
+    # Also add a very quiet anchor note at time 0 (velocity 1, not 0)
+    # Some DAWs filter out velocity 0 notes
+    midi.addNote(
+        track=track,
+        channel=9,
+        pitch=27,  # Very low note (outside typical drum range)
+        time=0.0,  # At the very start
+        duration=0.01,  # Very short (0.01 beats)
+        volume=1  # Very quiet but not silent (velocity 1)
+    )
+    
     # Add all events
+    # Convert seconds to beats: beats = seconds * (tempo / 60)
     total_events = 0
     for stem_type, events in events_by_stem.items():
         for event in events:
+            # Convert time and duration from seconds to beats
+            time_in_beats = event['time'] * beats_per_second
+            duration_in_beats = event['duration'] * beats_per_second
+            
             midi.addNote(
                 track=track,
                 channel=channel,
                 pitch=event['note'],
-                time=event['time'],
-                duration=event['duration'],
+                time=time_in_beats,
+                duration=duration_in_beats,
                 volume=event['velocity']
             )
             total_events += 1
@@ -714,6 +845,7 @@ def learn_threshold_from_midi(
     # Analyze spectral properties of kept vs removed hits
     kept_geomeans = []
     removed_geomeans = []
+    all_analysis = []  # Store all data for detailed output
     
     # Match tolerance: 50ms
     match_tolerance = 0.05
@@ -731,24 +863,110 @@ def learn_threshold_from_midi(
         if len(segment) < 100:
             continue
         
+        # Calculate onset strength (similar to what detect_onsets does)
+        onset_env = librosa.onset.onset_strength(y=audio, sr=sr, hop_length=512, aggregate=np.median)
+        onset_frame = librosa.time_to_frames(orig_time, sr=sr, hop_length=512)
+        if onset_frame < len(onset_env):
+            onset_strength = onset_env[onset_frame]
+        else:
+            onset_strength = 0.0
+        
+        # Calculate peak amplitude
+        peak_window = int(0.01 * sr)  # 10ms window
+        peak_end = min(onset_sample + peak_window, len(audio))
+        peak_segment = audio[onset_sample:peak_end]
+        peak_amplitude = np.max(np.abs(peak_segment)) if len(peak_segment) > 0 else 0
+        
         # FFT analysis
         fft = np.fft.rfft(segment)
         freqs = np.fft.rfftfreq(len(segment), 1/sr)
         magnitude = np.abs(fft)
         
-        # Get spectral energies
+        # Get spectral energies based on stem type
         if stem_type == 'snare':
             snare_config = config['snare']
             body_energy = np.sum(magnitude[(freqs >= snare_config['body_freq_min']) & (freqs < snare_config['body_freq_max'])])
             wire_energy = np.sum(magnitude[(freqs >= snare_config['wire_freq_min']) & (freqs < snare_config['wire_freq_max'])])
             geomean = np.sqrt(body_energy * wire_energy)
+        elif stem_type == 'kick':
+            kick_config = config['kick']
+            fundamental_energy = np.sum(magnitude[(freqs >= kick_config['fundamental_freq_min']) & (freqs < kick_config['fundamental_freq_max'])])
+            body_energy = np.sum(magnitude[(freqs >= kick_config['body_freq_min']) & (freqs < kick_config['body_freq_max'])])
+            geomean = np.sqrt(fundamental_energy * body_energy)
+        elif stem_type == 'cymbals':
+            # Cymbals: body/wash (1-4kHz) and brilliance/attack (4-10kHz)
+            body_energy = np.sum(magnitude[(freqs >= 1000) & (freqs < 4000)])
+            brilliance_energy = np.sum(magnitude[(freqs >= 4000) & (freqs < 10000)])
+            geomean = np.sqrt(body_energy * brilliance_energy)
             
-            if is_kept:
-                kept_geomeans.append(geomean)
-            else:
-                removed_geomeans.append(geomean)
+            # Also calculate sustain duration for cymbals
+            sustain_duration = 0.0
+            sustain_window_samples = int(0.2 * sr)
+            sustain_end = min(onset_sample + sustain_window_samples, len(audio))
+            sustain_segment = audio[onset_sample:sustain_end]
+            
+            if len(sustain_segment) > 100:
+                from scipy.signal import medfilt
+                envelope = np.abs(sustain_segment)
+                envelope_smooth = medfilt(envelope, kernel_size=51)
+                peak_env = np.max(envelope_smooth)
+                threshold_level = peak_env * 0.1
+                above_threshold = envelope_smooth > threshold_level
+                if np.any(above_threshold):
+                    sustain_samples = np.sum(above_threshold)
+                    sustain_duration = (sustain_samples / sr) * 1000  # Convert to milliseconds
+        else:
+            continue  # Skip unsupported stem types
+        
+        # Calculate total energy
+        if stem_type == 'cymbals':
+            total_energy = body_energy + brilliance_energy
+            primary_energy = body_energy
+            secondary_energy = brilliance_energy
+        elif stem_type == 'snare':
+            total_energy = body_energy + wire_energy
+            primary_energy = body_energy
+            secondary_energy = wire_energy
+        elif stem_type == 'kick':
+            total_energy = fundamental_energy + body_energy
+            primary_energy = fundamental_energy
+            secondary_energy = body_energy
+        
+        # Store for detailed output with ALL variables
+        analysis_data = {
+            'time': orig_time,
+            'strength': onset_strength,
+            'amplitude': peak_amplitude,
+            'primary_energy': primary_energy,
+            'secondary_energy': secondary_energy,
+            'total_energy': total_energy,
+            'geomean': geomean,
+            'is_kept': is_kept
+        }
+        
+        # Add sustain duration for cymbals
+        if stem_type == 'cymbals':
+            analysis_data['sustain_ms'] = sustain_duration
+        
+        all_analysis.append(analysis_data)
+        
+        if is_kept:
+            kept_geomeans.append(geomean)
+        else:
+            removed_geomeans.append(geomean)
     
-    # Calculate suggested threshold
+    # For cymbals, also collect sustain durations
+    suggested_sustain_threshold = None
+    if stem_type == 'cymbals':
+        kept_sustains = [d['sustain_ms'] for d in all_analysis if d['is_kept']]
+        removed_sustains = [d['sustain_ms'] for d in all_analysis if not d['is_kept']]
+        
+        if kept_sustains and removed_sustains:
+            min_kept_sustain = min(kept_sustains)
+            max_removed_sustain = max(removed_sustains)
+            suggested_sustain_threshold = (max_removed_sustain + min_kept_sustain) / 2.0
+    
+    # Calculate suggested threshold first (so we can show predictions)
     if kept_geomeans and removed_geomeans:
         min_kept = min(kept_geomeans)
         max_removed = max(removed_geomeans)
@@ -756,17 +974,103 @@ def learn_threshold_from_midi(
         # Suggest threshold halfway between max removed and min kept
         suggested_threshold = (max_removed + min_kept) / 2.0
         
+        # Show detailed analysis of all hits with predictions
+        if all_analysis:
+            print(f"\n      DETAILED ANALYSIS OF ALL DETECTIONS:")
+            
+            # Get current config thresholds
+            current_geomean_threshold = config.get(stem_type, {}).get('geomean_threshold', 0)
+            current_sustain_threshold = config.get(stem_type, {}).get('min_sustain_ms', 0) if stem_type == 'cymbals' else None
+            
+            # Comprehensive header with all variables
+            if stem_type == 'cymbals':
+                print(f"      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {'BodyE':>8s} {'BrillE':>8s} {'Total':>8s} {'GeoMean':>8s} {'Sustain':>8s} {'User':>8s} {'Current':>8s} {'Suggest':>8s} {'Result':>10s}")
+                print(f"      {'(s)':>8s} {'':>6s} {'':>6s} {'(1-4k)':>8s} {'(4-10k)':>8s} {'':>8s} {'':>8s} {'(ms)':>8s} {'Action':>8s} {'Config':>8s} {'Learn':>8s} {'':>10s}")
+            elif stem_type == 'snare':
+                print(f"      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {'BodyE':>8s} {'WireE':>8s} {'Total':>8s} {'GeoMean':>8s} {'User':>8s} {'Current':>8s} {'Suggest':>8s} {'Result':>10s}")
+                print(f"      {'(s)':>8s} {'':>6s} {'':>6s} {'(150-400)':>8s} {'(2-8k)':>8s} {'':>8s} {'':>8s} {'Action':>8s} {'Config':>8s} {'Learn':>8s} {'':>10s}")
+            elif stem_type == 'kick':
+                print(f"      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {'FundE':>8s} {'BodyE':>8s} {'Total':>8s} {'GeoMean':>8s} {'User':>8s} {'Current':>8s} {'Suggest':>8s} {'Result':>10s}")
+                print(f"      {'(s)':>8s} {'':>6s} {'':>6s} {'(40-80)':>8s} {'(80-150)':>8s} {'':>8s} {'':>8s} {'Action':>8s} {'Config':>8s} {'Learn':>8s} {'':>10s}")
+            
+            correct_count = 0
+            suggest_correct_count = 0
+            for data in all_analysis:
+                user_action = 'KEPT' if data['is_kept'] else 'REMOVED'
+                
+                # Check against CURRENT config thresholds
+                if stem_type == 'cymbals' and current_sustain_threshold is not None:
+                    current_would_be = 'KEPT' if (data['geomean'] > current_geomean_threshold and 
+                                                   data.get('sustain_ms', 0) > current_sustain_threshold) else 'REMOVED'
+                else:
+                    current_would_be = 'KEPT' if data['geomean'] > current_geomean_threshold else 'REMOVED'
+                
+                # Check against SUGGESTED thresholds (from learning)
+                if stem_type == 'cymbals' and suggested_sustain_threshold is not None:
+                    suggest_would_be = 'KEPT' if (data['geomean'] > suggested_threshold and 
+                                                   data.get('sustain_ms', 0) > suggested_sustain_threshold) else 'REMOVED'
+                else:
+                    suggest_would_be = 'KEPT' if data['geomean'] > suggested_threshold else 'REMOVED'
+                
+                # Check if current config classifies correctly
+                is_correct = (user_action == current_would_be)
+                if is_correct:
+                    correct_count += 1
+                
+                # Check if suggested thresholds would classify correctly
+                is_suggest_correct = (user_action == suggest_would_be)
+                if is_suggest_correct:
+                    suggest_correct_count += 1
+                
+                # Show result based on suggested vs current
+                if is_correct and is_suggest_correct:
+                    result = '✓ Both OK'
+                elif is_correct and not is_suggest_correct:
+                    result = '✓ Cur OK'
+                elif not is_correct and is_suggest_correct:
+                    result = '✓ Sug OK'
+                else:
+                    result = '✗ Both Bad'
+                
+                # Print with all variables
+                if stem_type == 'cymbals':
+                    print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
+                          f"{data['total_energy']:8.1f} {data['geomean']:8.1f} {data.get('sustain_ms', 0):8.1f} {user_action:>8s} {current_would_be:>8s} {suggest_would_be:>8s} {result:>10s}")
+                else:
+                    print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
+                          f"{data['total_energy']:8.1f} {data['geomean']:8.1f} {user_action:>8s} {current_would_be:>8s} {suggest_would_be:>8s} {result:>10s}")
+            
+            current_accuracy = (correct_count / len(all_analysis)) * 100
+            suggest_accuracy = (suggest_correct_count / len(all_analysis)) * 100
+            print(f"\n      Current config accuracy: {correct_count}/{len(all_analysis)} ({current_accuracy:.1f}%)")
+            print(f"      Suggested threshold accuracy: {suggest_correct_count}/{len(all_analysis)} ({suggest_accuracy:.1f}%)")
+        
         print(f"\n    Analysis:")
         print(f"      Kept hits - GeoMean range: {min_kept:.1f} - {max(kept_geomeans):.1f}")
         print(f"      Removed hits - GeoMean range: {min(removed_geomeans):.1f} - {max_removed:.1f}")
-        print(f"      Suggested threshold: {suggested_threshold:.1f}")
+        print(f"      Suggested GeoMean threshold: {suggested_threshold:.1f}")
         print(f"      (Midpoint between max removed ({max_removed:.1f}) and min kept ({min_kept:.1f}))")
         
-        return {
+        # Add sustain threshold info for cymbals
+        if stem_type == 'cymbals' and suggested_sustain_threshold is not None:
+            kept_sustains = [d['sustain_ms'] for d in all_analysis if d['is_kept']]
+            removed_sustains = [d['sustain_ms'] for d in all_analysis if not d['is_kept']]
+            print(f"\n      Kept hits - Sustain range: {min(kept_sustains):.1f}ms - {max(kept_sustains):.1f}ms")
+            print(f"      Removed hits - Sustain range: {min(removed_sustains):.1f}ms - {max(removed_sustains):.1f}ms")
+            print(f"      Suggested SustainMs threshold: {suggested_sustain_threshold:.1f}ms")
+            print(f"      (Midpoint between max removed ({max(removed_sustains):.1f}ms) and min kept ({min(kept_sustains):.1f}ms))")
+        
+        result = {
             'geomean_threshold': suggested_threshold,
             'kept_range': (min_kept, max(kept_geomeans)),
             'removed_range': (min(removed_geomeans), max_removed)
         }
+        
+        # Add sustain threshold for cymbals
+        if stem_type == 'cymbals' and suggested_sustain_threshold is not None:
+            result['min_sustain_ms'] = suggested_sustain_threshold
+        
+        return result
     else:
         print("    Not enough data to suggest threshold")
         return {}
@@ -965,7 +1269,7 @@ MIDI Note Mapping (General MIDI):
         """
     )
     
-    parser.add_argument('-i', '--input_dir', type=str, required=True,
+    parser.add_argument('-i', '--input_dir', type=str, required=False,
                         help="Directory containing separated stems (must have kick/, snare/, etc. subdirectories).")
     parser.add_argument('-o', '--output_dir', type=str, default='midi_output',
                         help="Directory to save MIDI files (default: midi_output).")
@@ -975,8 +1279,8 @@ MIDI Note Mapping (General MIDI):
                         help="Minimum MIDI velocity (1-127, default: 40).")
     parser.add_argument('--max-vel', type=int, default=127,
                         help="Maximum MIDI velocity (1-127, default: 127).")
-    parser.add_argument('--tempo', type=float, default=120.0,
-                        help="Tempo in BPM for MIDI timing (default: 120).")
+    parser.add_argument('--tempo', type=float, default=None,
+                        help="Tempo in BPM for MIDI timing (default: read from midiconfig.yaml).")
     parser.add_argument('--detect-hihat-open', action='store_true',
                         help="Enable open/closed hi-hat detection (disabled by default - most hits will be closed).")
     parser.add_argument('--stems', type=str, nargs='+',
@@ -994,6 +1298,16 @@ MIDI Note Mapping (General MIDI):
                                help="Stem type for learning (default: snare).")
     
     args = parser.parse_args()
+    
+    # Validate that -i is provided unless using --learn-from-midi
+    if not args.learn_from_midi and not args.input_dir:
+        parser.error("-i/--input_dir is required unless using --learn-from-midi")
+    
+    # Load config to get default tempo if not specified
+    if args.tempo is None:
+        config = load_config()
+        args.tempo = config['midi']['default_tempo']
+        print(f"Using tempo from config: {args.tempo} BPM\n")
     
     # Validate
     if not (0.0 <= args.threshold <= 1.0):

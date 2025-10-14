@@ -74,13 +74,16 @@ hihat:
 cymbals:
   # Crash/ride cymbal settings
   midi_note: 49
-  geomean_threshold: null  # Not used for cymbals yet
+  geomean_threshold: 10     # Spectral filtering threshold (null = disabled)
+  min_sustain_ms: 150          # Minimum sustain duration in milliseconds
+                              # Real cymbal hits sustain longer than clicks/artifacts
+                              # Typical values: 30-100ms
 
 # MIDI Output Settings
 midi:
   min_velocity: 40           # Minimum MIDI velocity (1-127)
   max_velocity: 127          # Maximum MIDI velocity
-  default_tempo: 120.0       # Default tempo in BPM
+  default_tempo: 124.0       # Default tempo in BPM
   max_note_duration: 0.5     # Maximum duration for any note (seconds)
   
 # Debug Output
