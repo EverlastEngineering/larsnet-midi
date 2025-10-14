@@ -20,6 +20,11 @@ kick:
   # Kick drum (bass drum) settings
   midi_note: 36
   
+  # Onset detection (overrides global onset_detection settings for kick)
+  onset_threshold: null      # Use global setting (0.01) - kicks are loud and easy to detect
+  onset_delta: null          # Use global setting (0.005)
+  onset_wait: null           # Use global setting (1 frame ~11ms)
+  
   # Spectral filtering uses FFT analysis to distinguish real kicks from artifacts
   # Real kick has energy in both fundamental (40-80Hz) and body/attack (80-150Hz)
   # Artifacts (snare bleed, clicks) have low energy in fundamental range
@@ -40,6 +45,11 @@ kick:
 snare:
   # Snare drum settings
   midi_note: 38
+  
+  # Onset detection (overrides global onset_detection settings for snare)
+  onset_threshold: null      # Use global setting (0.01) - snares are loud and transient
+  onset_delta: null          # Use global setting (0.005)
+  onset_wait: null           # Use global setting (1 frame ~11ms)
   
   # Spectral filtering uses FFT analysis to distinguish real snare hits from artifacts
   # Real snare has energy in both body (150-400Hz) and wires (2-8kHz)
@@ -74,10 +84,19 @@ hihat:
 cymbals:
   # Crash/ride cymbal settings
   midi_note: 49
-  geomean_threshold: 10     # Spectral filtering threshold (null = disabled)
-  min_sustain_ms: 150          # Minimum sustain duration in milliseconds
+  
+  # Onset detection (overrides global onset_detection settings for cymbals)
+  # Cymbals need special handling due to long decay - prevent retriggering on sustain
+  onset_threshold: 0.15      # Less sensitive than global (0.01) to avoid retriggering on decay
+  onset_delta: 0.02          # Less sensitive peak picking (global: 0.005)
+  onset_wait: 10             # Longer wait between peaks: 10 frames = ~115ms (global: 1 frame = ~11ms)
+  
+  # Spectral filtering
+  geomean_threshold: 10      # Geometric mean of body (1-4kHz) + brilliance (4-10kHz) energy
+                              # Real cymbals: 50-500, Artifacts: 5-20
+  min_sustain_ms: 150        # Minimum sustain duration in milliseconds
                               # Real cymbal hits sustain longer than clicks/artifacts
-                              # Typical values: 30-100ms
+                              # Typical values: 100-200ms
 
 # MIDI Output Settings
 midi:

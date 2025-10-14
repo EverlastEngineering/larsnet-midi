@@ -318,28 +318,36 @@ def process_stem_to_midi(
         # Normal detection from config
         onset_config = config['onset_detection']
         
-        # Cymbals need special handling due to long decay
-        if stem_type in ['cymbals', 'hihat']:
-            # Use balanced settings - sensitive enough to catch hits, but avoid retriggering on decay
-            # Lower threshold than before to catch quieter cymbal hits
-            onset_times, onset_strengths = detect_onsets(
-                audio,
-                sr,
-                hop_length=onset_config['hop_length'],
-                threshold=0.15,  # More sensitive (was 0.3) to catch quieter hits
-                delta=0.02,  # More sensitive peak detection (was 0.05)
-                wait=10  # ~115ms min spacing (was 20/230ms) - allows closer hits
-            )
-            print(f"    Cymbal-optimized detection: threshold=0.15, delta=0.02, wait=10 (~115ms min spacing)")
-        else:
-            onset_times, onset_strengths = detect_onsets(
-                audio,
-                sr,
-                hop_length=onset_config['hop_length'],
-                threshold=onset_config['threshold'],
-                delta=onset_config['delta'],
-                wait=onset_config['wait']
-            )
+        # Check if this stem has custom onset detection settings
+        stem_config = config.get(stem_type, {})
+        
+        # Use stem-specific settings if provided, otherwise fall back to global
+        threshold = stem_config.get('onset_threshold')
+        if threshold is None:
+            threshold = onset_config['threshold']
+        
+        delta = stem_config.get('onset_delta')
+        if delta is None:
+            delta = onset_config['delta']
+        
+        wait = stem_config.get('onset_wait')
+        if wait is None:
+            wait = onset_config['wait']
+        
+        onset_times, onset_strengths = detect_onsets(
+            audio,
+            sr,
+            hop_length=onset_config['hop_length'],
+            threshold=threshold,
+            delta=delta,
+            wait=wait
+        )
+        
+        # Log if using custom settings
+        if (stem_config.get('onset_threshold') is not None or 
+            stem_config.get('onset_delta') is not None or 
+            stem_config.get('onset_wait') is not None):
+            print(f"    {stem_type.capitalize()}-specific onset detection: threshold={threshold}, delta={delta}, wait={wait} (~{wait*11:.0f}ms min spacing)")
     
     print(f"    Found {len(onset_times)} hits (before filtering) -> MIDI note {getattr(drum_mapping, stem_type)}")
     
