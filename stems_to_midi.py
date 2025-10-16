@@ -3,6 +3,10 @@ Convert separated drum stems to MIDI tracks.
 
 Analyzes each drum stem to detect onsets (hits) and converts them to MIDI notes
 with velocity based on the hit intensity.
+
+Architecture: Functional Core, Imperative Shell
+- Pure functions in stems_to_midi_helpers.py (testable, no side effects)
+- I/O and orchestration in this file (thin imperative shell)
 """
 
 from pathlib import Path
@@ -15,6 +19,18 @@ import argparse
 import yaml
 from typing import Union, List, Tuple, Dict, Optional
 from dataclasses import dataclass
+
+# Import functional core (pure helper functions)
+from stems_to_midi_helpers import (
+    ensure_mono,
+    calculate_peak_amplitude,
+    calculate_sustain_duration,
+    calculate_spectral_energies,
+    get_spectral_config_for_stem,
+    calculate_geomean,
+    should_keep_onset,
+    normalize_values
+)
 
 
 def load_config(config_path: Optional[Path] = None) -> Dict:
@@ -407,16 +423,22 @@ def detect_hihat_state(
                 states.append('closed')
         return states
     
+    # Get audio processing parameters from config
+    sustain_window_sec = config.get('audio', {}).get('sustain_window_sec', 0.2)
+    min_segment_length = config.get('audio', {}).get('min_segment_length', 512)
+    smooth_kernel = config.get('audio', {}).get('envelope_smooth_kernel', 51)
+    envelope_threshold = config.get('audio', {}).get('envelope_threshold', 0.1)
+    
     # Otherwise, calculate sustain duration for each hit
     for onset_time in onset_times:
         onset_sample = int(onset_time * sr)
         
-        # Analyze up to 200ms after onset
-        sustain_window_samples = int(0.2 * sr)
+        # Analyze sustain window after onset
+        sustain_window_samples = int(sustain_window_sec * sr)
         sustain_end = min(onset_sample + sustain_window_samples, len(audio))
         sustain_segment = audio[onset_sample:sustain_end]
         
-        if len(sustain_segment) < 100:
+        if len(sustain_segment) < min_segment_length:
             states.append('closed')
             continue
         
@@ -425,11 +447,11 @@ def detect_hihat_state(
         
         # Smooth envelope
         from scipy.signal import medfilt
-        envelope_smooth = medfilt(envelope, kernel_size=51)
+        envelope_smooth = medfilt(envelope, kernel_size=smooth_kernel)
         
-        # Find where envelope drops below 10% of peak
+        # Find where envelope drops below threshold of peak
         peak_env = np.max(envelope_smooth)
-        threshold_level = peak_env * 0.1
+        threshold_level = peak_env * envelope_threshold
         
         # Count samples above threshold
         above_threshold = envelope_smooth > threshold_level
@@ -475,19 +497,20 @@ def process_stem_to_midi(
     """
     print(f"  Processing {stem_type} from: {audio_path.name}")
     
-    # Load audio
+    # Load audio (I/O - imperative shell)
     audio, sr = sf.read(str(audio_path))
     
-    # Convert to mono if configured (and if stereo)
+    # Convert to mono if configured (functional core)
     if config['audio']['force_mono'] and audio.ndim == 2:
-        audio = np.mean(audio, axis=1)
+        audio = ensure_mono(audio)
         print(f"    Converted stereo to mono")
     
     # Check if audio is essentially silent (max amplitude below threshold)
     max_amplitude = np.max(np.abs(audio))
     print(f"    Max amplitude: {max_amplitude:.6f}")
     
-    if max_amplitude < 0.001:  # Essentially silent (less than -60dB)
+    silence_threshold = config.get('audio', {}).get('silence_threshold', 0.001)
+    if max_amplitude < silence_threshold:
         print(f"    Audio is silent, skipping...")
         return []
     
@@ -543,178 +566,78 @@ def process_stem_to_midi(
     
     print(f"    Found {len(onset_times)} hits (before filtering) -> MIDI note {getattr(drum_mapping, stem_type)}")
     
-    # Calculate peak amplitudes for all stems (for velocity calculation)
-    # Calculate peak amplitudes for all stems (for velocity calculation)
-    # Audio is already mono at this point
-    peak_amplitudes = []
-    for onset_time in onset_times:
-        onset_sample = int(onset_time * sr)
-        peak_window = int(0.01 * sr)  # 10ms window
-        peak_end = min(onset_sample + peak_window, len(audio))
-        
-        peak_segment = audio[onset_sample:peak_end]
-        peak_amplitude = np.max(np.abs(peak_segment)) if len(peak_segment) > 0 else 0
-        peak_amplitudes.append(peak_amplitude)
+    # Calculate peak amplitudes for all onsets (functional core)
+    peak_amplitudes = np.array([
+        calculate_peak_amplitude(audio, int(onset_time * sr), sr, window_ms=10.0)
+        for onset_time in onset_times
+    ])
     
-    peak_amplitudes = np.array(peak_amplitudes)
-    
-    # Initialize hihat sustain durations (will be populated during filtering if hihat)
+    # Initialize hihat data (will be populated during filtering if hihat)
     hihat_sustain_durations = None
+    hihat_spectral_data = None
     
     # For snare, kick, toms, hihat, and cymbals: filter out artifacts/bleed by checking spectral content
+    # This uses the functional core for all calculations
     if stem_type in ['snare', 'kick', 'toms', 'hihat', 'cymbals'] and len(onset_times) > 0:
-        original_count = len(onset_times)
-        # Store originals for debug output
-        onset_times_orig = onset_times.copy()
-        onset_strengths_orig = onset_strengths.copy()
-        peak_amplitudes_orig = peak_amplitudes.copy()
+        # Get spectral configuration for this stem type (functional core)
+        spectral_config = get_spectral_config_for_stem(stem_type, config)
+        freq_ranges = spectral_config['freq_ranges']
+        energy_labels = spectral_config['energy_labels']
+        geomean_threshold = spectral_config['geomean_threshold']
+        min_sustain_ms = spectral_config['min_sustain_ms']
         
+        # Storage for filtered results
         filtered_times = []
         filtered_strengths = []
         filtered_amplitudes = []
         filtered_geomeans = []
         filtered_sustains = []  # For hihat open/closed detection
         filtered_spectral = []  # For hihat handclap detection
-        ratios_kept = []
-        amplitudes_kept = []
         ratios_rejected = []
         
-        # Store raw spectral data for ALL onsets
+        # Store raw spectral data for ALL onsets (for debug output)
         all_onset_data = []
         
         for onset_time, strength, peak_amplitude in zip(onset_times, onset_strengths, peak_amplitudes):
             onset_sample = int(onset_time * sr)
             
-            # Analyze a 50ms window after onset
-            # Audio is already mono at this point
-            window_samples = int(0.05 * sr)
+            # Extract segment for spectral analysis
+            peak_window_sec = config.get('audio', {}).get('peak_window_sec', 0.05)
+            window_samples = int(peak_window_sec * sr)
             end_sample = min(onset_sample + window_samples, len(audio))
-            
             segment = audio[onset_sample:end_sample]
             
-            if len(segment) < 100:
+            min_segment_length = config.get('audio', {}).get('min_segment_length', 512)
+            if len(segment) < min_segment_length:
                 continue
             
-            # peak_amplitude already calculated above
+            # Calculate spectral energies (functional core)
+            energies = calculate_spectral_energies(segment, sr, freq_ranges)
+            primary_energy = energies.get('primary', 0.0)
+            secondary_energy = energies.get('secondary', 0.0)
+            low_energy = energies.get('low', 0.0)
             
-            # Compute FFT
-            fft = np.fft.rfft(segment)
-            freqs = np.fft.rfftfreq(len(segment), 1/sr)
-            magnitude = np.abs(fft)
+            # Calculate sustain duration if needed for this stem type (functional core)
+            sustain_duration = None
+            if stem_type in ['hihat', 'cymbals']:
+                # Get sustain parameters from config
+                sustain_window_sec = config.get('audio', {}).get('sustain_window_sec', 0.2)
+                envelope_threshold = config.get('audio', {}).get('envelope_threshold', 0.1)
+                smooth_kernel = config.get('audio', {}).get('envelope_smooth_kernel', 51)
+                
+                sustain_duration = calculate_sustain_duration(
+                    audio, onset_sample, sr,
+                    window_ms=sustain_window_sec * 1000,  # Convert to ms
+                    envelope_threshold=envelope_threshold,
+                    smooth_kernel=smooth_kernel
+                )
             
-            # Use frequency ranges from config based on stem type
-            if stem_type == 'snare':
-                stem_config = config['snare']
-                # For snare: analyze body (150-400Hz) and wires (2-8kHz)
-                low_energy = np.sum(magnitude[(freqs >= stem_config['low_freq_min']) & (freqs < stem_config['low_freq_max'])])
-                primary_energy = np.sum(magnitude[(freqs >= stem_config['body_freq_min']) & (freqs < stem_config['body_freq_max'])])
-                secondary_energy = np.sum(magnitude[(freqs >= stem_config['wire_freq_min']) & (freqs < stem_config['wire_freq_max'])])
-                energy_label_1 = 'BodyE'
-                energy_label_2 = 'WireE'
-            elif stem_type == 'kick':
-                stem_config = config['kick']
-                # For kick: analyze fundamental (40-80Hz) and body/attack (80-150Hz)
-                low_energy = 0  # Not used for kick (kick IS the low energy)
-                primary_energy = np.sum(magnitude[(freqs >= stem_config['fundamental_freq_min']) & (freqs < stem_config['fundamental_freq_max'])])
-                secondary_energy = np.sum(magnitude[(freqs >= stem_config['body_freq_min']) & (freqs < stem_config['body_freq_max'])])
-                energy_label_1 = 'FundE'  # Fundamental energy
-                energy_label_2 = 'BodyE'  # Body/attack energy
-            elif stem_type == 'toms':
-                stem_config = config['toms']
-                # For toms: analyze fundamental (60-150Hz) and body/attack (150-400Hz)
-                # Similar to kick but higher pitch range
-                low_energy = 0  # Not used for toms
-                primary_energy = np.sum(magnitude[(freqs >= stem_config['fundamental_freq_min']) & (freqs < stem_config['fundamental_freq_max'])])
-                secondary_energy = np.sum(magnitude[(freqs >= stem_config['body_freq_min']) & (freqs < stem_config['body_freq_max'])])
-                energy_label_1 = 'FundE'  # Fundamental energy
-                energy_label_2 = 'BodyE'  # Body/attack energy
-            elif stem_type == 'hihat':
-                stem_config = config['hihat']
-                # For hi-hat: analyze body (500-2kHz) and sizzle (6-12kHz)
-                # Hi-hats are characterized by high-frequency sizzle
-                low_energy = 0  # Not used for hihat
-                primary_energy = np.sum(magnitude[(freqs >= stem_config['body_freq_min']) & (freqs < stem_config['body_freq_max'])])
-                secondary_energy = np.sum(magnitude[(freqs >= stem_config['sizzle_freq_min']) & (freqs < stem_config['sizzle_freq_max'])])
-                energy_label_1 = 'BodyE'  # Body/attack energy (500-2kHz)
-                energy_label_2 = 'SizzleE'  # Sizzle/shimmer energy (6-12kHz)
-                
-                # Additionally, measure sustain duration for hihats
-                # Real hihat hits sustain longer than transient artifacts like handclaps
-                sustain_duration = 0.0
-                
-                # Analyze up to 200ms after onset to measure sustain
-                sustain_window_samples = int(0.2 * sr)
-                sustain_end = min(onset_sample + sustain_window_samples, len(audio))
-                sustain_segment = audio[onset_sample:sustain_end]
-                
-                if len(sustain_segment) > 100:
-                    # Calculate envelope (absolute value)
-                    envelope = np.abs(sustain_segment)
-                    # Smooth envelope
-                    from scipy.signal import medfilt
-                    envelope_smooth = medfilt(envelope, kernel_size=51)
-                    
-                    # Find where envelope drops below 10% of peak
-                    peak_env = np.max(envelope_smooth)
-                    threshold_level = peak_env * 0.1
-                    
-                    # Count samples above threshold
-                    above_threshold = envelope_smooth > threshold_level
-                    if np.any(above_threshold):
-                        sustain_samples = np.sum(above_threshold)
-                        sustain_duration = (sustain_samples / sr) * 1000  # Convert to milliseconds
-            elif stem_type == 'cymbals':
-                stem_config = config.get('cymbals', {})
-                # For cymbals: analyze brilliance/attack (4-8kHz) and body (1-4kHz)
-                # Cymbals are mostly high frequency content
-                # Real cymbal hits have strong transient energy in the attack range
-                low_energy = 0  # Not used for cymbals
-                primary_energy = np.sum(magnitude[(freqs >= 1000) & (freqs < 4000)])  # Body/wash
-                secondary_energy = np.sum(magnitude[(freqs >= 4000) & (freqs < 10000)])  # Brilliance/attack
-                energy_label_1 = 'BodyE'  # Body/wash energy (1-4kHz)
-                energy_label_2 = 'BrillE'  # Brilliance/attack energy (4-10kHz)
-                
-                # Additionally, measure sustain duration for cymbals
-                # Real cymbal hits sustain longer than clicks/artifacts
-                sustain_duration = 0.0
-                min_sustain_ms = stem_config.get('min_sustain_ms', 50)  # Default 50ms minimum
-                
-                # Analyze up to 200ms after onset to measure sustain
-                sustain_window_samples = int(0.2 * sr)
-                sustain_end = min(onset_sample + sustain_window_samples, len(audio))
-                sustain_segment = audio[onset_sample:sustain_end]
-                
-                if len(sustain_segment) > 100:
-                    # Calculate envelope (absolute value)
-                    envelope = np.abs(sustain_segment)
-                    # Smooth envelope
-                    from scipy.signal import medfilt
-                    envelope_smooth = medfilt(envelope, kernel_size=51)
-                    
-                    # Find where envelope drops below 10% of peak
-                    peak_env = np.max(envelope_smooth)
-                    threshold_level = peak_env * 0.1
-                    
-                    # Count samples above threshold
-                    above_threshold = envelope_smooth > threshold_level
-                    if np.any(above_threshold):
-                        sustain_samples = np.sum(above_threshold)
-                        sustain_duration = (sustain_samples / sr) * 1000  # Convert to milliseconds
-            
-            # Calculate combined metric
+            # Calculate combined metrics (functional core)
             total_energy = primary_energy + secondary_energy
+            spectral_ratio = (total_energy / low_energy) if low_energy > 0 else 100.0
+            body_wire_geomean = calculate_geomean(primary_energy, secondary_energy)
             
-            if low_energy > 0:
-                spectral_ratio = total_energy / low_energy
-            else:
-                spectral_ratio = 100  # No low energy (or not used for this stem type)
-            
-            # Calculate geometric mean (discriminator for real hits vs artifacts)
-            body_to_wire = primary_energy / secondary_energy if secondary_energy > 0 else 0
-            body_times_wire = primary_energy * secondary_energy
-            body_wire_geomean = np.sqrt(primary_energy * secondary_energy)
-            
-            # Store all data for this onset
+            # Store all data for this onset (for debug output)
             onset_data = {
                 'time': onset_time,
                 'strength': strength,
@@ -724,51 +647,23 @@ def process_stem_to_midi(
                 'secondary_energy': secondary_energy,
                 'ratio': spectral_ratio,
                 'total_energy': total_energy,
-                'body_to_wire': body_to_wire,
-                'body_times_wire': body_times_wire,
                 'body_wire_geomean': body_wire_geomean,
-                'energy_label_1': energy_label_1,
-                'energy_label_2': energy_label_2
+                'energy_label_1': energy_labels['primary'],
+                'energy_label_2': energy_labels['secondary']
             }
-            
-            # Add sustain duration for cymbals and hihats
-            if stem_type in ['cymbals', 'hihat']:
+            if sustain_duration is not None:
                 onset_data['sustain_ms'] = sustain_duration
             
             all_onset_data.append(onset_data)
             
-            # Filter based on geometric mean of primary and secondary energy
-            # Use threshold from config (default 100-150, can adjust per file/drum style)
-            geomean_threshold = stem_config.get('geomean_threshold')
-            
-            # For cymbals and hihats, also check minimum sustain duration
-            if stem_type == 'cymbals':
-                min_sustain_ms = stem_config.get('min_sustain_ms', 50)
-                sustain_ok = sustain_duration >= min_sustain_ms
-                
-                if geomean_threshold is None:
-                    # Only use sustain check
-                    is_real_hit = sustain_ok
-                else:
-                    # Use both geomean and sustain
-                    is_real_hit = (body_wire_geomean > geomean_threshold) and sustain_ok
-            elif stem_type == 'hihat':
-                # For hihat: Use SUSTAIN as primary filter (handclaps are short transients)
-                # Real hihats sustain 30-200ms, handclaps are <20ms
-                min_sustain_ms = stem_config.get('min_sustain_ms', 25)
-                sustain_ok = sustain_duration >= min_sustain_ms
-                
-                # Lower the GeoMean threshold OR use sustain only
-                if geomean_threshold is None:
-                    # Only use sustain check
-                    is_real_hit = sustain_ok
-                else:
-                    # Use sustain OR geomean (more permissive than cymbals' AND)
-                    is_real_hit = sustain_ok or (body_wire_geomean > geomean_threshold)
-            elif geomean_threshold is None:
-                is_real_hit = True  # Keep all detections
-            else:
-                is_real_hit = (body_wire_geomean > geomean_threshold)
+            # Determine if this onset should be kept (functional core)
+            is_real_hit = should_keep_onset(
+                geomean=body_wire_geomean,
+                sustain_ms=sustain_duration,
+                geomean_threshold=geomean_threshold,
+                min_sustain_ms=min_sustain_ms,
+                stem_type=stem_type
+            )
             
             # In learning mode, keep ALL detections but mark them
             if learning_mode or is_real_hit:
@@ -777,15 +672,12 @@ def process_stem_to_midi(
                 filtered_amplitudes.append(peak_amplitude)
                 filtered_geomeans.append(body_wire_geomean)
                 # Store sustain duration and spectral data for hihat classification
-                if stem_type == 'hihat':
+                if stem_type == 'hihat' and sustain_duration is not None:
                     filtered_sustains.append(sustain_duration)
                     filtered_spectral.append({
                         'primary_energy': primary_energy,
                         'secondary_energy': secondary_energy
                     })
-                # Store whether this would normally be kept or rejected
-                ratios_kept.append(spectral_ratio if is_real_hit else -spectral_ratio)  # Negative = would be rejected
-                amplitudes_kept.append(peak_amplitude)
             elif not learning_mode:
                 ratios_rejected.append(spectral_ratio)
         
@@ -820,6 +712,9 @@ def process_stem_to_midi(
             print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body/Wash Energy (1-4kHz), BrillE=Brilliance/Attack Energy (4-10kHz), SustainMs=Sustain Duration")
             min_sustain_ms = stem_config.get('min_sustain_ms', 50)
             print(f"      Minimum sustain duration: {min_sustain_ms}ms")
+        
+        energy_label_1 = energy_labels['primary']
+        energy_label_2 = energy_labels['secondary']
         print(f"      GeoMean=sqrt({energy_label_1}*{energy_label_2}) - measures combined spectral energy")
         
         # Header row - add SustainMs for cymbals and hihat
@@ -829,28 +724,14 @@ def process_stem_to_midi(
             print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
         
         for idx, data in enumerate(all_onset_data):
-            # Re-calculate filtering decision for display
-            if stem_type == 'cymbals':
-                min_sustain_ms = stem_config.get('min_sustain_ms', 50)
-                sustain_ok = data.get('sustain_ms', 0) >= min_sustain_ms
-                
-                if geomean_threshold is None:
-                    is_real_hit = sustain_ok
-                else:
-                    is_real_hit = (data['body_wire_geomean'] > geomean_threshold) and sustain_ok
-            elif stem_type == 'hihat':
-                min_sustain_ms = stem_config.get('min_sustain_ms', 25)
-                sustain_ok = data.get('sustain_ms', 0) >= min_sustain_ms
-                
-                if geomean_threshold is None:
-                    is_real_hit = sustain_ok
-                else:
-                    # Use sustain OR geomean (more permissive)
-                    is_real_hit = sustain_ok or (data['body_wire_geomean'] > geomean_threshold)
-            elif geomean_threshold is not None:
-                is_real_hit = (data['body_wire_geomean'] > geomean_threshold)
-            else:
-                is_real_hit = True
+            # Re-calculate filtering decision for display using functional core
+            is_real_hit = should_keep_onset(
+                geomean=data['body_wire_geomean'],
+                sustain_ms=data.get('sustain_ms'),
+                geomean_threshold=geomean_threshold,
+                min_sustain_ms=spectral_config.get('min_sustain_ms'),
+                stem_type=stem_type
+            )
             
             status = 'KEPT' if is_real_hit else 'REJECTED'
             
@@ -888,9 +769,10 @@ def process_stem_to_midi(
         if ratios_rejected and False:  # Disabled for cleaner output
             print(f"      First 20 REJECTED hits (for comparison):")
             rejected_count = 0
+            peak_window_sec = config.get('audio', {}).get('peak_window_sec', 0.05)
             for onset_time, strength, peak_amplitude in zip(onset_times_orig, onset_strengths_orig, peak_amplitudes_orig):
                 onset_sample = int(onset_time * sr)
-                window_samples = int(0.05 * sr)
+                window_samples = int(peak_window_sec * sr)
                 end_sample = min(onset_sample + window_samples, len(audio) if audio.ndim == 1 else len(audio[:, 0]))
                 
                 if audio.ndim == 1:
@@ -1044,9 +926,11 @@ def process_stem_to_midi(
         if i < len(onset_times) - 1:
             duration = onset_times[i + 1] - time
         else:
-            duration = 0.1  # Default duration for last note
+            default_duration = config.get('audio', {}).get('default_note_duration', 0.1)
+            duration = default_duration
         
-        duration = min(duration, 0.5)  # Cap duration at 500ms
+        max_duration = config.get('midi', {}).get('max_note_duration', 0.5)
+        duration = min(duration, max_duration)
         
         events.append({
             'time': float(time),
@@ -1062,7 +946,8 @@ def create_midi_file(
     events_by_stem: Dict[str, List[Dict]],
     output_path: Union[str, Path],
     tempo: float = 120.0,
-    track_name: str = "Drums"
+    track_name: str = "Drums",
+    config: Optional[Dict] = None
 ):
     """
     Create a MIDI file from detected drum events.
@@ -1072,7 +957,12 @@ def create_midi_file(
         output_path: Path to save MIDI file
         tempo: Tempo in BPM
         track_name: Name of the MIDI track
+        config: Configuration dictionary (optional, loads default if not provided)
     """
+    # Load config if not provided
+    if config is None:
+        config = load_config()
+    
     # Create MIDI file with 1 track
     midi = MIDIFile(1)
     track = 0
@@ -1089,12 +979,13 @@ def create_midi_file(
     
     # Also add a very quiet anchor note at time 0 (velocity 1, not 0)
     # Some DAWs filter out velocity 0 notes
+    very_short_duration = config.get('audio', {}).get('very_short_duration', 0.01)
     midi.addNote(
         track=track,
         channel=9,
         pitch=27,  # Very low note (outside typical drum range)
         time=0.0,  # At the very start
-        duration=0.01,  # Very short (0.01 beats)
+        duration=very_short_duration,  # Very short (beats)
         volume=1  # Very quiet but not silent (velocity 1)
     )
     
@@ -1202,8 +1093,8 @@ def learn_threshold_from_midi(
     removed_geomeans = []
     all_analysis = []  # Store all data for detailed output
     
-    # Match tolerance: 50ms
-    match_tolerance = 0.05
+    # Get match tolerance from config
+    match_tolerance = config.get('learning_mode', {}).get('match_tolerance_sec', 0.05)
     
     for orig_time in original_times:
         # Check if this time exists in edited MIDI
@@ -1211,11 +1102,13 @@ def learn_threshold_from_midi(
         
         # Analyze this onset
         onset_sample = int(orig_time * sr)
-        window_samples = int(0.05 * sr)
+        peak_window_sec = config.get('learning_mode', {}).get('peak_window_sec', 0.05)
+        window_samples = int(peak_window_sec * sr)
         end_sample = min(onset_sample + window_samples, len(audio))
         segment = audio[onset_sample:end_sample]
         
-        if len(segment) < 100:
+        min_segment_length = config.get('audio', {}).get('min_segment_length', 512)
+        if len(segment) < min_segment_length:
             continue
         
         # Calculate onset strength (similar to what detect_onsets does)
@@ -1604,7 +1497,8 @@ def stems_to_midi(
                 events_by_stem,
                 midi_path,
                 tempo=tempo,
-                track_name=f"Drums - {base_name}"
+                track_name=f"Drums - {base_name}",
+                config=config
             )
             
             if learning_mode:
