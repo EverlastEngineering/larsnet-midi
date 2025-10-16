@@ -57,6 +57,41 @@ python stems_to_midi.py -i cleaned_stems/ -o midi_output/ --min-vel 80 --max-vel
 
 ---
 
+## Configuration-Driven Processing
+
+The script uses `midiconfig.yaml` for advanced control over detection and filtering. **No command-line editing needed** — just edit the YAML file!
+
+### Key Configuration Sections:
+
+**1. Audio Processing (`audio`):**
+- Silence threshold, segment lengths, envelope detection
+- All hardcoded values now configurable
+
+**2. Per-Stem Settings (`kick`, `snare`, `toms`, `hihat`, `cymbals`):**
+- Custom onset detection thresholds
+- Spectral filtering ranges (frequency analysis)
+- Geomean thresholds for artifact rejection
+
+**3. Learning Mode (`learning_mode`):**
+- Calibrate thresholds from your edited MIDI
+- See `LEARNING_MODE.md` for details
+
+### Architecture: Functional Core, Imperative Shell
+
+The codebase follows a clean architecture pattern:
+
+- **`stems_to_midi_helpers.py`**: Pure, testable functions (86% coverage)
+  - Audio analysis, spectral filtering, sustain detection
+  - Zero side effects, fully deterministic
+  
+- **`stems_to_midi.py`**: Thin coordination layer
+  - Handles I/O, prints, MIDI creation
+  - Orchestrates the functional core
+
+**Benefits:** Easy to test, maintain, and extend. Changes to helpers automatically benefit all functions that use them.
+
+---
+
 ## Prerequisites
 
 The script requires these Python packages:

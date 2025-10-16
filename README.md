@@ -49,6 +49,28 @@ LarsNet can separate five stems from a stereo drum mixture:
 - **Hi-Hat** (Open and Closed Hi-Hat)
 - **Cymbals** (Crash and Ride Cymbals)
 
+### Code Architecture 🏗️
+
+The **stems_to_midi.py** module follows the **Functional Core, Imperative Shell** pattern:
+
+- **Functional Core** (`stems_to_midi_helpers.py`): Pure, testable functions with no side effects
+  - 8 helper functions with 86% test coverage (26 unit tests)
+  - Handles audio analysis, spectral filtering, sustain detection
+  - All logic is deterministic and easily tested
+
+- **Imperative Shell** (`stems_to_midi.py`): Thin orchestration layer
+  - Handles I/O (file operations, printing, MIDI creation)
+  - Coordinates functional core for main processing pipeline
+  - 47 total tests passing (21 integration + 26 unit tests)
+
+This architecture ensures:
+- ✅ **Testability**: Pure functions are easy to test in isolation
+- ✅ **Maintainability**: Changes to helpers automatically benefit all call sites
+- ✅ **Clarity**: Side effects isolated to shell, logic in core
+- ✅ **Reusability**: Functional core can be used in different contexts
+
+See `STEMS_TO_MIDI_GUIDE.md` for detailed usage and `stems_to_midi_helpers.py.plan.md` for the refactoring approach.
+
 ## Pretrained LarsNet Models 📥 
 
 Pretrained LarsNet model checkpoints can be found [here](https://drive.google.com/uc?id=1U8-5924B1ii1cjv9p0MTPzayb00P4qoL&export=download) (562 MB) licensed under CC BY-NC 4.0.
