@@ -59,23 +59,31 @@
 
 ---
 
-### Phase 3: Extract Detection Module ⏳ PENDING
+### Phase 3: Extract Detection Module ✅ COMPLETED
 
-**Status:** 🔄 NOT STARTED
+**Status:** ✅ ALL ITEMS COMPLETE
 
-**Planned Changes:**
-- [ ] Move `detect_onsets()` to detection module
-- [ ] Move `detect_tom_pitch()` to detection module
-- [ ] Move `classify_tom_pitch()` to detection module
-- [ ] Move `detect_hihat_state()` to detection module
-- [ ] Move `estimate_velocity()` to detection module
-- [ ] Update all imports
-- [ ] Run tests
+**Completed Items:**
+- ✅ Moved `detect_onsets()` to detection module (107 lines)
+- ✅ Moved `detect_tom_pitch()` to detection module (78 lines)
+- ✅ Moved `classify_tom_pitch()` to detection module (82 lines)
+- ✅ Moved `detect_hihat_state()` to detection module (95 lines)
+- ✅ Moved `estimate_velocity()` to detection module (16 lines)
+- ✅ Updated imports in stems_to_midi.py
+- ✅ All tests passing
 
 **Success Criteria:**
-- [ ] Detection functions working in new module
-- [ ] All 47 tests passing
-- [ ] No import errors
+- ✅ Detection functions working in new module
+- ✅ All 47 tests passing
+- ✅ No import errors
+
+**Metrics:**
+- Tests: 47/47 passing ✅
+- Lines removed from main: ~380 (largest extraction so far)
+- Main file now: ~1154 lines (from 1534)
+- Detection module: ~280 lines of functional code
+
+**Time Spent:** ~10 minutes
 
 ---
 
