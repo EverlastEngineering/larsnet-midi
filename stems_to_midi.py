@@ -423,43 +423,22 @@ def detect_hihat_state(
                 states.append('closed')
         return states
     
-    # Get audio processing parameters from config
+    # Get audio processing parameters from config (for functional core)
     sustain_window_sec = config.get('audio', {}).get('sustain_window_sec', 0.2)
-    min_segment_length = config.get('audio', {}).get('min_segment_length', 512)
-    smooth_kernel = config.get('audio', {}).get('envelope_smooth_kernel', 51)
     envelope_threshold = config.get('audio', {}).get('envelope_threshold', 0.1)
+    smooth_kernel = config.get('audio', {}).get('envelope_smooth_kernel', 51)
     
-    # Otherwise, calculate sustain duration for each hit
+    # Otherwise, calculate sustain duration for each hit using functional core
     for onset_time in onset_times:
         onset_sample = int(onset_time * sr)
         
-        # Analyze sustain window after onset
-        sustain_window_samples = int(sustain_window_sec * sr)
-        sustain_end = min(onset_sample + sustain_window_samples, len(audio))
-        sustain_segment = audio[onset_sample:sustain_end]
-        
-        if len(sustain_segment) < min_segment_length:
-            states.append('closed')
-            continue
-        
-        # Calculate envelope (absolute value)
-        envelope = np.abs(sustain_segment)
-        
-        # Smooth envelope
-        from scipy.signal import medfilt
-        envelope_smooth = medfilt(envelope, kernel_size=smooth_kernel)
-        
-        # Find where envelope drops below threshold of peak
-        peak_env = np.max(envelope_smooth)
-        threshold_level = peak_env * envelope_threshold
-        
-        # Count samples above threshold
-        above_threshold = envelope_smooth > threshold_level
-        if np.any(above_threshold):
-            sustain_samples = np.sum(above_threshold)
-            sustain_duration_ms = (sustain_samples / sr) * 1000  # Convert to milliseconds
-        else:
-            sustain_duration_ms = 0
+        # Use functional core helper for sustain calculation
+        sustain_duration_ms = calculate_sustain_duration(
+            audio, onset_sample, sr,
+            window_ms=sustain_window_sec * 1000,
+            envelope_threshold=envelope_threshold,
+            smooth_kernel=smooth_kernel
+        )
         
         # Classify based on sustain duration
         if sustain_duration_ms > open_sustain_threshold_ms:
