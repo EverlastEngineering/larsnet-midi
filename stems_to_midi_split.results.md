@@ -113,7 +113,32 @@
 
 ---
 
-### Phase 5: Extract Learning Module ⏳ PENDING
+### Phase 5: Extract Learning Module ✅ COMPLETED
+
+**Status:** ✅ ALL ITEMS COMPLETE
+
+**Completed Items:**
+- ✅ Moved `learn_threshold_from_midi()` to learning module (~256 lines)
+- ✅ Moved `save_calibrated_config()` to learning module (~30 lines)
+- ✅ Updated imports in main file
+- ✅ All tests passing
+
+**Success Criteria:**
+- ✅ Learning functions working in new module
+- ✅ All 47 tests passing
+- ✅ No import errors
+
+**Metrics:**
+- Tests: 47/47 passing ✅
+- Lines removed from main: ~286
+- Main file now: ~766 lines (from 1052)
+- Learning module: ~320 lines total
+
+**Time Spent:** ~10 minutes
+
+---
+
+### Phase 6: Extract Processor Module ⏳ PENDING
 
 **Status:** 🔄 NOT STARTED
 
