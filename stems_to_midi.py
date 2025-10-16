@@ -1098,79 +1098,39 @@ def learn_threshold_from_midi(
         else:
             onset_strength = 0.0
         
-        # Calculate peak amplitude
-        peak_window = int(0.01 * sr)  # 10ms window
-        peak_end = min(onset_sample + peak_window, len(audio))
-        peak_segment = audio[onset_sample:peak_end]
-        peak_amplitude = np.max(np.abs(peak_segment)) if len(peak_segment) > 0 else 0
+        # Calculate peak amplitude using functional core
+        peak_amplitude = calculate_peak_amplitude(audio, onset_sample, sr, window_sec=0.01)
         
-        # FFT analysis
-        fft = np.fft.rfft(segment)
-        freqs = np.fft.rfftfreq(len(segment), 1/sr)
-        magnitude = np.abs(fft)
-        
-        # Get spectral energies based on stem type
-        if stem_type == 'snare':
-            snare_config = config['snare']
-            body_energy = np.sum(magnitude[(freqs >= snare_config['body_freq_min']) & (freqs < snare_config['body_freq_max'])])
-            wire_energy = np.sum(magnitude[(freqs >= snare_config['wire_freq_min']) & (freqs < snare_config['wire_freq_max'])])
-            geomean = np.sqrt(body_energy * wire_energy)
-        elif stem_type == 'kick':
-            kick_config = config['kick']
-            fundamental_energy = np.sum(magnitude[(freqs >= kick_config['fundamental_freq_min']) & (freqs < kick_config['fundamental_freq_max'])])
-            body_energy = np.sum(magnitude[(freqs >= kick_config['body_freq_min']) & (freqs < kick_config['body_freq_max'])])
-            geomean = np.sqrt(fundamental_energy * body_energy)
-        elif stem_type == 'toms':
-            toms_config = config['toms']
-            fundamental_energy = np.sum(magnitude[(freqs >= toms_config['fundamental_freq_min']) & (freqs < toms_config['fundamental_freq_max'])])
-            body_energy = np.sum(magnitude[(freqs >= toms_config['body_freq_min']) & (freqs < toms_config['body_freq_max'])])
-            geomean = np.sqrt(fundamental_energy * body_energy)
-        elif stem_type == 'cymbals':
-            # Cymbals: body/wash (1-4kHz) and brilliance/attack (4-10kHz)
-            body_energy = np.sum(magnitude[(freqs >= 1000) & (freqs < 4000)])
-            brilliance_energy = np.sum(magnitude[(freqs >= 4000) & (freqs < 10000)])
-            geomean = np.sqrt(body_energy * brilliance_energy)
-            
-            # Also calculate sustain duration for cymbals
-            sustain_duration = 0.0
-            sustain_window_samples = int(0.2 * sr)
-            sustain_end = min(onset_sample + sustain_window_samples, len(audio))
-            sustain_segment = audio[onset_sample:sustain_end]
-            
-            if len(sustain_segment) > 100:
-                from scipy.signal import medfilt
-                envelope = np.abs(sustain_segment)
-                envelope_smooth = medfilt(envelope, kernel_size=51)
-                peak_env = np.max(envelope_smooth)
-                threshold_level = peak_env * 0.1
-                above_threshold = envelope_smooth > threshold_level
-                if np.any(above_threshold):
-                    sustain_samples = np.sum(above_threshold)
-                    sustain_duration = (sustain_samples / sr) * 1000  # Convert to milliseconds
-        else:
+        # Get spectral configuration for this stem type using functional core
+        try:
+            spectral_config = get_spectral_config_for_stem(stem_type, config)
+        except ValueError:
             continue  # Skip unsupported stem types
         
-        # Calculate total energy
-        if stem_type == 'cymbals':
-            total_energy = body_energy + brilliance_energy
-            primary_energy = body_energy
-            secondary_energy = brilliance_energy
-        elif stem_type == 'snare':
-            total_energy = body_energy + wire_energy
-            primary_energy = body_energy
-            secondary_energy = wire_energy
-        elif stem_type == 'kick':
-            total_energy = fundamental_energy + body_energy
-            primary_energy = fundamental_energy
-            secondary_energy = body_energy
-        elif stem_type == 'toms':
-            total_energy = fundamental_energy + body_energy
-            primary_energy = fundamental_energy
-            secondary_energy = body_energy
-        elif stem_type == 'hihat':
-            total_energy = body_energy + sizzle_energy
-            primary_energy = body_energy
-            secondary_energy = sizzle_energy
+        # Calculate spectral energies using functional core
+        energies = calculate_spectral_energies(segment, sr, spectral_config['freq_ranges'])
+        primary_energy = energies.get('primary', 0.0)
+        secondary_energy = energies.get('secondary', 0.0)
+        
+        # Calculate geomean using functional core
+        geomean = calculate_geomean(primary_energy, secondary_energy)
+        
+        # Calculate sustain duration for cymbals/hihat using functional core
+        sustain_duration = 0.0
+        if stem_type in ['cymbals', 'hihat']:
+            sustain_window_sec = config.get('audio', {}).get('sustain_window_sec', 0.2)
+            envelope_threshold = config.get('audio', {}).get('envelope_threshold', 0.1)
+            smooth_kernel = config.get('audio', {}).get('envelope_smooth_kernel', 51)
+            
+            sustain_duration = calculate_sustain_duration(
+                audio, onset_sample, sr,
+                window_ms=sustain_window_sec * 1000,
+                envelope_threshold=envelope_threshold,
+                smooth_kernel=smooth_kernel
+            )
+        
+        # Calculate total energy (already have primary and secondary from above)
+        total_energy = primary_energy + secondary_energy
         
         # Store for detailed output with ALL variables
         analysis_data = {
