@@ -48,6 +48,7 @@ class DrumMapping:
     tom_high: int = 50      # D2 - High Tom
     hihat_open: int = 46    # A#1 - Open Hi-Hat
     hihat_closed: int = 42  # F#1 - Closed Hi-Hat
+    handclap: int = 39      # D#1 - Hand Clap (General MIDI)
     crash: int = 49         # C#2 - Crash Cymbal 1
     ride: int = 51          # D#2 - Ride Cymbal 1
 
@@ -341,77 +342,106 @@ def detect_hihat_state(
     audio: np.ndarray,
     sr: int,
     onset_times: np.ndarray,
-    window_ms: float = 150.0,
-    decay_threshold: float = 0.65
+    sustain_durations: List[float] = None,
+    open_sustain_threshold_ms: float = 150.0,
+    spectral_data: List[Dict] = None,
+    config: Dict = None
 ) -> List[str]:
     """
-    Attempt to classify hi-hat hits as open or closed based on decay and sustain.
+    Classify hi-hat hits as open, closed, or handclap based on sustain duration and spectral content.
+    
+    - Handclaps: High energy (body>20, sizzle>100) + very short transient (<50ms)
+    - Open hi-hats: Sustain >150ms
+    - Closed hi-hats: Everything else
     
     Args:
         audio: Audio signal
         sr: Sample rate
         onset_times: Times of detected onsets
-        window_ms: Window length in ms to analyze decay (longer = better detection)
-        decay_threshold: Threshold for open vs closed (higher = fewer open detections)
+        sustain_durations: Pre-calculated sustain durations in ms (if available)
+        open_sustain_threshold_ms: Threshold in ms (longer = open, shorter = closed)
+        spectral_data: List of dicts with 'primary_energy' and 'secondary_energy'
+        config: Configuration dict with handclap detection settings
     
     Returns:
-        List of 'open' or 'closed' for each onset
+        List of 'open', 'closed', or 'handclap' for each onset
     """
     if audio.ndim == 2:
         audio = np.mean(audio, axis=1)
     
     states = []
-    window_samples = int(sr * window_ms / 1000.0)
     
-    for onset_time in onset_times:
-        onset_sample = int(onset_time * sr)
-        end_sample = min(onset_sample + window_samples, len(audio))
-        
-        if end_sample - onset_sample < window_samples // 2:
-            states.append('closed')
-            continue
-        
-        # Analyze decay envelope
-        segment = audio[onset_sample:end_sample]
-        envelope = np.abs(segment)
-        
-        # Calculate multiple metrics for better classification
-        if len(envelope) > 20:
-            # Method 1: Energy ratio (tail vs beginning)
-            first_third = envelope[:len(envelope)//3]
-            last_third = envelope[len(envelope)*2//3:]
+    # Get handclap detection settings from config
+    detect_handclap = False
+    handclap_body_min = 20
+    handclap_sizzle_min = 100
+    handclap_sustain_max = 50
+    
+    if config is not None:
+        hihat_config = config.get('hihat', {})
+        detect_handclap = hihat_config.get('detect_handclap', False)
+        handclap_body_min = hihat_config.get('handclap_body_min', 20)
+        handclap_sizzle_min = hihat_config.get('handclap_sizzle_min', 100)
+        handclap_sustain_max = hihat_config.get('handclap_sustain_max', 50)
+    
+    # If sustain durations and spectral data were already calculated, use them
+    if (sustain_durations is not None and len(sustain_durations) == len(onset_times) and
+        spectral_data is not None and len(spectral_data) == len(onset_times)):
+        for i, sustain_ms in enumerate(sustain_durations):
+            # Check for handclap first (if enabled)
+            if detect_handclap:
+                body_energy = spectral_data[i].get('primary_energy', 0)
+                sizzle_energy = spectral_data[i].get('secondary_energy', 0)
+                
+                # Handclap: high energy + very short transient
+                if (body_energy > handclap_body_min and 
+                    sizzle_energy > handclap_sizzle_min and 
+                    sustain_ms < handclap_sustain_max):
+                    states.append('handclap')
+                    continue
             
-            first_energy = np.sum(first_third**2)
-            last_energy = np.sum(last_third**2)
-            
-            if first_energy > 0:
-                energy_ratio = last_energy / first_energy
-            else:
-                energy_ratio = 0
-            
-            # Method 2: Sustained energy over time
-            # Compute RMS over sliding windows
-            window_size = len(envelope) // 5
-            rms_values = []
-            for i in range(0, len(envelope) - window_size, window_size):
-                window = envelope[i:i+window_size]
-                rms = np.sqrt(np.mean(window**2))
-                rms_values.append(rms)
-            
-            if len(rms_values) > 2:
-                # Open hi-hat maintains more energy over time
-                sustained_ratio = np.mean(rms_values[2:]) / (rms_values[0] + 1e-10)
-            else:
-                sustained_ratio = 0
-            
-            # Combine both metrics (open hi-hat has higher values for both)
-            combined_score = (energy_ratio * 0.6) + (sustained_ratio * 0.4)
-            
-            # Much higher threshold - most hits are closed, only obvious sustains are open
-            if combined_score > decay_threshold:
+            # Otherwise classify as open or closed
+            if sustain_ms > open_sustain_threshold_ms:
                 states.append('open')
             else:
                 states.append('closed')
+        return states
+    
+    # Otherwise, calculate sustain duration for each hit
+    for onset_time in onset_times:
+        onset_sample = int(onset_time * sr)
+        
+        # Analyze up to 200ms after onset
+        sustain_window_samples = int(0.2 * sr)
+        sustain_end = min(onset_sample + sustain_window_samples, len(audio))
+        sustain_segment = audio[onset_sample:sustain_end]
+        
+        if len(sustain_segment) < 100:
+            states.append('closed')
+            continue
+        
+        # Calculate envelope (absolute value)
+        envelope = np.abs(sustain_segment)
+        
+        # Smooth envelope
+        from scipy.signal import medfilt
+        envelope_smooth = medfilt(envelope, kernel_size=51)
+        
+        # Find where envelope drops below 10% of peak
+        peak_env = np.max(envelope_smooth)
+        threshold_level = peak_env * 0.1
+        
+        # Count samples above threshold
+        above_threshold = envelope_smooth > threshold_level
+        if np.any(above_threshold):
+            sustain_samples = np.sum(above_threshold)
+            sustain_duration_ms = (sustain_samples / sr) * 1000  # Convert to milliseconds
+        else:
+            sustain_duration_ms = 0
+        
+        # Classify based on sustain duration
+        if sustain_duration_ms > open_sustain_threshold_ms:
+            states.append('open')
         else:
             states.append('closed')
     
@@ -424,8 +454,8 @@ def process_stem_to_midi(
     drum_mapping: DrumMapping,
     config: Dict,
     onset_threshold: float = 0.3,
-    min_velocity: int = 40,
-    max_velocity: int = 127,
+    min_velocity: int = 80,
+    max_velocity: int = 110,
     detect_hihat_open: bool = True
 ) -> List[Dict]:
     """
@@ -528,8 +558,11 @@ def process_stem_to_midi(
     
     peak_amplitudes = np.array(peak_amplitudes)
     
-    # For snare, kick, toms, and cymbals: filter out artifacts/bleed by checking spectral content
-    if stem_type in ['snare', 'kick', 'toms', 'cymbals'] and len(onset_times) > 0:
+    # Initialize hihat sustain durations (will be populated during filtering if hihat)
+    hihat_sustain_durations = None
+    
+    # For snare, kick, toms, hihat, and cymbals: filter out artifacts/bleed by checking spectral content
+    if stem_type in ['snare', 'kick', 'toms', 'hihat', 'cymbals'] and len(onset_times) > 0:
         original_count = len(onset_times)
         # Store originals for debug output
         onset_times_orig = onset_times.copy()
@@ -540,6 +573,8 @@ def process_stem_to_midi(
         filtered_strengths = []
         filtered_amplitudes = []
         filtered_geomeans = []
+        filtered_sustains = []  # For hihat open/closed detection
+        filtered_spectral = []  # For hihat handclap detection
         ratios_kept = []
         amplitudes_kept = []
         ratios_rejected = []
@@ -593,6 +628,41 @@ def process_stem_to_midi(
                 secondary_energy = np.sum(magnitude[(freqs >= stem_config['body_freq_min']) & (freqs < stem_config['body_freq_max'])])
                 energy_label_1 = 'FundE'  # Fundamental energy
                 energy_label_2 = 'BodyE'  # Body/attack energy
+            elif stem_type == 'hihat':
+                stem_config = config['hihat']
+                # For hi-hat: analyze body (500-2kHz) and sizzle (6-12kHz)
+                # Hi-hats are characterized by high-frequency sizzle
+                low_energy = 0  # Not used for hihat
+                primary_energy = np.sum(magnitude[(freqs >= stem_config['body_freq_min']) & (freqs < stem_config['body_freq_max'])])
+                secondary_energy = np.sum(magnitude[(freqs >= stem_config['sizzle_freq_min']) & (freqs < stem_config['sizzle_freq_max'])])
+                energy_label_1 = 'BodyE'  # Body/attack energy (500-2kHz)
+                energy_label_2 = 'SizzleE'  # Sizzle/shimmer energy (6-12kHz)
+                
+                # Additionally, measure sustain duration for hihats
+                # Real hihat hits sustain longer than transient artifacts like handclaps
+                sustain_duration = 0.0
+                
+                # Analyze up to 200ms after onset to measure sustain
+                sustain_window_samples = int(0.2 * sr)
+                sustain_end = min(onset_sample + sustain_window_samples, len(audio))
+                sustain_segment = audio[onset_sample:sustain_end]
+                
+                if len(sustain_segment) > 100:
+                    # Calculate envelope (absolute value)
+                    envelope = np.abs(sustain_segment)
+                    # Smooth envelope
+                    from scipy.signal import medfilt
+                    envelope_smooth = medfilt(envelope, kernel_size=51)
+                    
+                    # Find where envelope drops below 10% of peak
+                    peak_env = np.max(envelope_smooth)
+                    threshold_level = peak_env * 0.1
+                    
+                    # Count samples above threshold
+                    above_threshold = envelope_smooth > threshold_level
+                    if np.any(above_threshold):
+                        sustain_samples = np.sum(above_threshold)
+                        sustain_duration = (sustain_samples / sr) * 1000  # Convert to milliseconds
             elif stem_type == 'cymbals':
                 stem_config = config.get('cymbals', {})
                 # For cymbals: analyze brilliance/attack (4-8kHz) and body (1-4kHz)
@@ -661,8 +731,8 @@ def process_stem_to_midi(
                 'energy_label_2': energy_label_2
             }
             
-            # Add sustain duration for cymbals
-            if stem_type == 'cymbals':
+            # Add sustain duration for cymbals and hihats
+            if stem_type in ['cymbals', 'hihat']:
                 onset_data['sustain_ms'] = sustain_duration
             
             all_onset_data.append(onset_data)
@@ -671,7 +741,7 @@ def process_stem_to_midi(
             # Use threshold from config (default 100-150, can adjust per file/drum style)
             geomean_threshold = stem_config.get('geomean_threshold')
             
-            # For cymbals, also check minimum sustain duration
+            # For cymbals and hihats, also check minimum sustain duration
             if stem_type == 'cymbals':
                 min_sustain_ms = stem_config.get('min_sustain_ms', 50)
                 sustain_ok = sustain_duration >= min_sustain_ms
@@ -682,6 +752,19 @@ def process_stem_to_midi(
                 else:
                     # Use both geomean and sustain
                     is_real_hit = (body_wire_geomean > geomean_threshold) and sustain_ok
+            elif stem_type == 'hihat':
+                # For hihat: Use SUSTAIN as primary filter (handclaps are short transients)
+                # Real hihats sustain 30-200ms, handclaps are <20ms
+                min_sustain_ms = stem_config.get('min_sustain_ms', 25)
+                sustain_ok = sustain_duration >= min_sustain_ms
+                
+                # Lower the GeoMean threshold OR use sustain only
+                if geomean_threshold is None:
+                    # Only use sustain check
+                    is_real_hit = sustain_ok
+                else:
+                    # Use sustain OR geomean (more permissive than cymbals' AND)
+                    is_real_hit = sustain_ok or (body_wire_geomean > geomean_threshold)
             elif geomean_threshold is None:
                 is_real_hit = True  # Keep all detections
             else:
@@ -693,6 +776,13 @@ def process_stem_to_midi(
                 filtered_strengths.append(strength)
                 filtered_amplitudes.append(peak_amplitude)
                 filtered_geomeans.append(body_wire_geomean)
+                # Store sustain duration and spectral data for hihat classification
+                if stem_type == 'hihat':
+                    filtered_sustains.append(sustain_duration)
+                    filtered_spectral.append({
+                        'primary_energy': primary_energy,
+                        'secondary_energy': secondary_energy
+                    })
                 # Store whether this would normally be kept or rejected
                 ratios_kept.append(spectral_ratio if is_real_hit else -spectral_ratio)  # Negative = would be rejected
                 amplitudes_kept.append(peak_amplitude)
@@ -703,6 +793,8 @@ def process_stem_to_midi(
         onset_strengths = np.array(filtered_strengths)
         peak_amplitudes = np.array(filtered_amplitudes)
         stem_geomeans = np.array(filtered_geomeans)
+        hihat_sustain_durations = filtered_sustains if stem_type == 'hihat' else None
+        hihat_spectral_data = filtered_spectral if stem_type == 'hihat' else None
         
         # Show ALL onset data in chronological order with multiple ratios
         print(f"\n      ALL DETECTED ONSETS - SPECTRAL ANALYSIS:")
@@ -718,14 +810,20 @@ def process_stem_to_midi(
             print(f"      Str=Onset Strength, Amp=Peak Amplitude, FundE=Fundamental Energy (40-80Hz), BodyE=Body Energy (80-150Hz)")
         elif stem_type == 'toms':
             print(f"      Str=Onset Strength, Amp=Peak Amplitude, FundE=Fundamental Energy (60-150Hz), BodyE=Body Energy (150-400Hz)")
+        elif stem_type == 'hihat':
+            print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body Energy (500-2kHz), SizzleE=Sizzle Energy (6-12kHz), SustainMs=Sustain Duration")
+            min_sustain_ms = stem_config.get('min_sustain_ms', 25)
+            print(f"      Minimum sustain duration: {min_sustain_ms}ms (filters out handclap bleed)")
+            open_sustain_ms = stem_config.get('open_sustain_ms', 150)
+            print(f"      Open/Closed threshold: {open_sustain_ms}ms (>={open_sustain_ms}ms = open hihat)")
         elif stem_type == 'cymbals':
             print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body/Wash Energy (1-4kHz), BrillE=Brilliance/Attack Energy (4-10kHz), SustainMs=Sustain Duration")
             min_sustain_ms = stem_config.get('min_sustain_ms', 50)
             print(f"      Minimum sustain duration: {min_sustain_ms}ms")
         print(f"      GeoMean=sqrt({energy_label_1}*{energy_label_2}) - measures combined spectral energy")
         
-        # Header row - add SustainMs for cymbals
-        if stem_type == 'cymbals':
+        # Header row - add SustainMs for cymbals and hihat
+        if stem_type in ['cymbals', 'hihat']:
             print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'SustainMs':>10s} {'Status':>10s}")
         else:
             print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
@@ -740,6 +838,15 @@ def process_stem_to_midi(
                     is_real_hit = sustain_ok
                 else:
                     is_real_hit = (data['body_wire_geomean'] > geomean_threshold) and sustain_ok
+            elif stem_type == 'hihat':
+                min_sustain_ms = stem_config.get('min_sustain_ms', 25)
+                sustain_ok = data.get('sustain_ms', 0) >= min_sustain_ms
+                
+                if geomean_threshold is None:
+                    is_real_hit = sustain_ok
+                else:
+                    # Use sustain OR geomean (more permissive)
+                    is_real_hit = sustain_ok or (data['body_wire_geomean'] > geomean_threshold)
             elif geomean_threshold is not None:
                 is_real_hit = (data['body_wire_geomean'] > geomean_threshold)
             else:
@@ -747,7 +854,7 @@ def process_stem_to_midi(
             
             status = 'KEPT' if is_real_hit else 'REJECTED'
             
-            if stem_type == 'cymbals':
+            if stem_type in ['cymbals', 'hihat']:
                 sustain_str = f"{data.get('sustain_ms', 0):10.1f}"
                 print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
                       f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {sustain_str} {status:>10s}")
@@ -822,9 +929,20 @@ def process_stem_to_midi(
     # Get MIDI note number
     note = getattr(drum_mapping, stem_type)
     
-    # Special handling for hi-hat
+    # Special handling for hi-hat open/closed/handclap detection
     if stem_type == 'hihat' and detect_hihat_open:
-        hihat_states = detect_hihat_state(audio, sr, onset_times)
+        # Get open_sustain_ms threshold from config (used for open/closed classification)
+        hihat_config = config.get('hihat', {})
+        open_sustain_threshold = hihat_config.get('open_sustain_ms', 150)
+        hihat_states = detect_hihat_state(
+            audio, 
+            sr, 
+            onset_times, 
+            sustain_durations=hihat_sustain_durations,
+            open_sustain_threshold_ms=open_sustain_threshold,
+            spectral_data=hihat_spectral_data,
+            config=config
+        )
     else:
         hihat_states = ['closed'] * len(onset_times)
     
@@ -906,8 +1024,10 @@ def process_stem_to_midi(
         else:
             velocity = estimate_velocity(value, min_velocity, max_velocity)
         
-        # Adjust note for open hi-hat or tom classification
-        if stem_type == 'hihat' and hihat_states[i] == 'open':
+        # Adjust note for handclap, open hi-hat, or tom classification
+        if stem_type == 'hihat' and hihat_states[i] == 'handclap':
+            midi_note = drum_mapping.handclap
+        elif stem_type == 'hihat' and hihat_states[i] == 'open':
             midi_note = drum_mapping.hihat_open
         elif stem_type == 'toms' and tom_classifications is not None and i < len(tom_classifications):
             # Use low/mid/high tom note based on pitch classification
@@ -1175,6 +1295,10 @@ def learn_threshold_from_midi(
             total_energy = fundamental_energy + body_energy
             primary_energy = fundamental_energy
             secondary_energy = body_energy
+        elif stem_type == 'hihat':
+            total_energy = body_energy + sizzle_energy
+            primary_energy = body_energy
+            secondary_energy = sizzle_energy
         
         # Store for detailed output with ALL variables
         analysis_data = {
@@ -1239,6 +1363,9 @@ def learn_threshold_from_midi(
             elif stem_type == 'toms':
                 print(f"      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {'FundE':>8s} {'BodyE':>8s} {'Total':>8s} {'GeoMean':>8s} {'User':>8s} {'Current':>8s} {'Suggest':>8s} {'Result':>10s}")
                 print(f"      {'(s)':>8s} {'':>6s} {'':>6s} {'(60-150)':>8s} {'(150-400)':>8s} {'':>8s} {'':>8s} {'Action':>8s} {'Config':>8s} {'Learn':>8s} {'':>10s}")
+            elif stem_type == 'hihat':
+                print(f"      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {'BodyE':>8s} {'SizzleE':>8s} {'Total':>8s} {'GeoMean':>8s} {'User':>8s} {'Current':>8s} {'Suggest':>8s} {'Result':>10s}")
+                print(f"      {'(s)':>8s} {'':>6s} {'':>6s} {'(500-2k)':>8s} {'(6-12k)':>8s} {'':>8s} {'':>8s} {'Action':>8s} {'Config':>8s} {'Learn':>8s} {'':>10s}")
             
             correct_count = 0
             suggest_correct_count = 0
@@ -1358,8 +1485,8 @@ def stems_to_midi(
     stems_dir: Union[str, Path],
     output_dir: Union[str, Path],
     onset_threshold: float = 0.3,
-    min_velocity: int = 40,
-    max_velocity: int = 127,
+    min_velocity: int = 80,
+    max_velocity: int = 110,
     tempo: float = 120.0,
     detect_hihat_open: bool = False,
     stems_to_process: List[str] = None
@@ -1443,6 +1570,12 @@ def stems_to_midi(
                 print(f"  Warning: {stem_type} file not found, skipping...")
                 continue
             
+            # For hihat, check config for detect_open setting (can be overridden by command-line flag)
+            hihat_detect = detect_hihat_open
+            if stem_type == 'hihat' and not detect_hihat_open:
+                # If not set via command-line, check config
+                hihat_detect = config.get('hihat', {}).get('detect_open', False)
+            
             events = process_stem_to_midi(
                 stem_file,
                 stem_type,
@@ -1451,7 +1584,7 @@ def stems_to_midi(
                 onset_threshold=onset_threshold,
                 min_velocity=min_velocity,
                 max_velocity=max_velocity,
-                detect_hihat_open=detect_hihat_open
+                detect_hihat_open=hihat_detect
             )
             
             if events:
