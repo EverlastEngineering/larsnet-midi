@@ -743,46 +743,6 @@ def process_stem_to_midi(
                 print(f"        GeoMean range: {min(all_geomeans):.1f} - {max(all_geomeans):.1f}")
         
         print(f"\n    After spectral filtering: {len(onset_times)} hits (rejected {len(ratios_rejected)} artifacts)")
-        
-        # ALSO show first 20 REJECTED hits to understand what we're filtering out
-        if ratios_rejected and False:  # Disabled for cleaner output
-            print(f"      First 20 REJECTED hits (for comparison):")
-            rejected_count = 0
-            peak_window_sec = config.get('audio', {}).get('peak_window_sec', 0.05)
-            for onset_time, strength, peak_amplitude in zip(onset_times_orig, onset_strengths_orig, peak_amplitudes_orig):
-                onset_sample = int(onset_time * sr)
-                window_samples = int(peak_window_sec * sr)
-                end_sample = min(onset_sample + window_samples, len(audio) if audio.ndim == 1 else len(audio[:, 0]))
-                
-                if audio.ndim == 1:
-                    segment = audio[onset_sample:end_sample]
-                else:
-                    segment = np.mean(audio[onset_sample:end_sample], axis=1)
-                
-                if len(segment) < 100:
-                    continue
-                
-                fft = np.fft.rfft(segment)
-                freqs = np.fft.rfftfreq(len(segment), 1/sr)
-                magnitude = np.abs(fft)
-                
-                low_energy = np.sum(magnitude[(freqs >= 40) & (freqs < 150)])
-                snare_body_energy = np.sum(magnitude[(freqs >= 150) & (freqs < 400)])
-                snare_wire_energy = np.sum(magnitude[(freqs >= 2000) & (freqs < 8000)])
-                total_snare_energy = snare_body_energy + snare_wire_energy
-                
-                if low_energy > 0:
-                    snare_ratio = total_snare_energy / low_energy
-                else:
-                    snare_ratio = 100
-                
-                is_kick_bleed = (snare_ratio < 2.0)
-                
-                if is_kick_bleed:
-                    print(f"        Time: {onset_time:.3f}s, Ratio: {snare_ratio:.2f}, Amp: {peak_amplitude:.3f}, Reason: kick_bleed")
-                    rejected_count += 1
-                    if rejected_count >= 20:
-                        break
     
     if len(onset_times) == 0:
         return []
@@ -874,16 +834,8 @@ def process_stem_to_midi(
     # Create MIDI events
     events = []
     for i, (time, value) in enumerate(zip(onset_times, normalized_values)):
-        # In learning mode, check if this hit would normally be rejected
-        is_rejected_in_learning = False
-        if learning_mode and stem_type == 'snare' and i < len(ratios_kept):
-            is_rejected_in_learning = (ratios_kept[i] < 0)  # Negative ratio = rejected
-        
-        if is_rejected_in_learning:
-            # Mark rejected hits with velocity=1 so user can easily identify them
-            velocity = config['learning_mode']['rejected_velocity']
-        else:
-            velocity = estimate_velocity(value, min_velocity, max_velocity)
+        # Calculate velocity from normalized value
+        velocity = estimate_velocity(value, min_velocity, max_velocity)
         
         # Adjust note for handclap, open hi-hat, or tom classification
         if stem_type == 'hihat' and hihat_states[i] == 'handclap':
