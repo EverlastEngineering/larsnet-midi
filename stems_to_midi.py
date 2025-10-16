@@ -16,9 +16,7 @@ import soundfile as sf
 from midiutil import MIDIFile
 import mido
 import argparse
-import yaml
 from typing import Union, List, Tuple, Dict, Optional
-from dataclasses import dataclass
 
 # Import functional core (pure helper functions)
 from stems_to_midi_helpers import (
@@ -32,41 +30,8 @@ from stems_to_midi_helpers import (
     normalize_values
 )
 
-
-def load_config(config_path: Optional[Path] = None) -> Dict:
-    """Load MIDI conversion configuration from YAML file."""
-    if config_path is None:
-        config_path = Path(__file__).parent / 'midiconfig.yaml'
-    
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-    
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    
-    return config
-
-
-@dataclass
-class DrumMapping:
-    """MIDI note mappings for drums (General MIDI standard)."""
-    kick: int = 36      # C1 - Bass Drum 1
-    snare: int = 38     # D1 - Acoustic Snare
-    toms: int = 45      # A1 - Low Tom (can be split into multiple toms)
-    hihat: int = 42     # F#1 - Closed Hi-Hat
-    cymbals: int = 49   # C#2 - Crash Cymbal 1
-    
-    # Alternative mappings
-    kick_alt: int = 35      # B0 - Bass Drum 2
-    snare_alt: int = 40     # E1 - Electric Snare
-    tom_low: int = 45       # A1 - Low Tom
-    tom_mid: int = 47       # B1 - Mid Tom
-    tom_high: int = 50      # D2 - High Tom
-    hihat_open: int = 46    # A#1 - Open Hi-Hat
-    hihat_closed: int = 42  # F#1 - Closed Hi-Hat
-    handclap: int = 39      # D#1 - Hand Clap (General MIDI)
-    crash: int = 49         # C#2 - Crash Cymbal 1
-    ride: int = 51          # D#2 - Ride Cymbal 1
+# Import configuration module
+from stems_to_midi_config import load_config, DrumMapping
 
 
 def detect_tom_pitch(
