@@ -6,7 +6,7 @@ These functions have no side effects and are easy to test.
 
 import pytest
 import numpy as np
-from stems_to_midi_helpers import (
+from stems_to_midi.helpers import (
     ensure_mono,
     calculate_peak_amplitude,
     calculate_sustain_duration,

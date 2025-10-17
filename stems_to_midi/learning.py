@@ -13,7 +13,7 @@ import yaml
 import copy
 
 # Import functional core helpers
-from stems_to_midi_helpers import (
+from .helpers import (
     ensure_mono,
     calculate_peak_amplitude,
     calculate_spectral_energies,
@@ -29,10 +29,10 @@ from stems_to_midi_helpers import (
 )
 
 # Import MIDI reading
-from stems_to_midi_midi import read_midi_notes
+from .midi import read_midi_notes
 
 # Import data structures
-from stems_to_midi_config import DrumMapping
+from .config import DrumMapping
 
 __all__ = [
     'learn_threshold_from_midi',
@@ -297,7 +297,7 @@ import librosa
 import yaml
 
 # Import functional core helpers
-from stems_to_midi_helpers import (
+from .helpers import (
     calculate_peak_amplitude,
     calculate_sustain_duration,
     calculate_spectral_energies,
@@ -306,8 +306,8 @@ from stems_to_midi_helpers import (
 )
 
 # Import config and detection modules
-from stems_to_midi_config import DrumMapping
-from stems_to_midi_midi import read_midi_notes
+from .config import DrumMapping
+from .midi import read_midi_notes
 
 
 __all__ = ['learn_threshold_from_midi', 'save_calibrated_config']

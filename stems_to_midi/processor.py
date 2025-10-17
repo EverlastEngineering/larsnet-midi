@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Union, List, Dict, Optional
 
 # Import functional core helpers
-from stems_to_midi_helpers import (
+from .helpers import (
     ensure_mono,
     calculate_peak_amplitude,
     calculate_sustain_duration,
@@ -27,7 +27,7 @@ from stems_to_midi_helpers import (
 )
 
 # Import detection functions
-from stems_to_midi_detection import (
+from .detection import (
     detect_onsets,
     detect_tom_pitch,
     classify_tom_pitch,
@@ -36,7 +36,7 @@ from stems_to_midi_detection import (
 )
 
 # Import config structures
-from stems_to_midi_config import DrumMapping
+from .config import DrumMapping
 
 __all__ = [
     'process_stem_to_midi'

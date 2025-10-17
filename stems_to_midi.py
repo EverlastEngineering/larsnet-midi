@@ -18,10 +18,14 @@ import argparse
 from typing import Union, List
 
 # Import modules (thin orchestration layer)
-from stems_to_midi_config import load_config, DrumMapping
-from stems_to_midi_midi import create_midi_file
-from stems_to_midi_learning import learn_threshold_from_midi, save_calibrated_config
-from stems_to_midi_processor import process_stem_to_midi
+from stems_to_midi import (
+    load_config,
+    DrumMapping,
+    create_midi_file,
+    learn_threshold_from_midi,
+    save_calibrated_config,
+    process_stem_to_midi
+)
 
 
 def stems_to_midi(

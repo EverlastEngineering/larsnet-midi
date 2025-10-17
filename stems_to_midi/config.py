@@ -32,7 +32,8 @@ def load_config(config_path: Optional[Path] = None) -> Dict:
         FileNotFoundError: If config file doesn't exist
     """
     if config_path is None:
-        config_path = Path(__file__).parent / 'midiconfig.yaml'
+        # Config files are in the project root, not in the package
+        config_path = Path(__file__).parent.parent / 'midiconfig.yaml'
     
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Union, Optional
 
 # Import helper function for event preparation
-from stems_to_midi_helpers import prepare_midi_events_for_writing
+from .helpers import prepare_midi_events_for_writing
 
 __all__ = [
     'create_midi_file',
@@ -36,7 +36,7 @@ def create_midi_file(
         config: Configuration dictionary (optional, loads default if not provided)
     """
     # Import here to avoid circular dependency
-    from stems_to_midi_config import load_config
+    from .config import load_config
     
     # Load config if not provided
     if config is None:

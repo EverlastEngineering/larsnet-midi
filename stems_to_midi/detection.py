@@ -18,7 +18,7 @@ import librosa
 from scipy.signal import medfilt
 
 # Import functional core helpers
-from stems_to_midi_helpers import (
+from .helpers import (
     ensure_mono,
     calculate_sustain_duration,
     estimate_velocity,
@@ -26,7 +26,7 @@ from stems_to_midi_helpers import (
 )
 
 # Import config
-from stems_to_midi_config import DrumMapping
+from .config import DrumMapping
 
 
 __all__ = [
