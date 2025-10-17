@@ -9,6 +9,9 @@ import mido
 from pathlib import Path
 from typing import Dict, List, Union, Optional
 
+# Import helper function for event preparation
+from stems_to_midi_helpers import prepare_midi_events_for_writing
+
 __all__ = [
     'create_midi_file',
     'read_midi_notes'
@@ -50,7 +53,6 @@ def create_midi_file(
     
     # Add a marker/text event at time 0 to anchor the MIDI file
     # This ensures proper alignment when importing into DAWs
-    beats_per_second = tempo / 60.0
     midi.addText(track, 0.0, "START")
     
     # Also add a very quiet anchor note at time 0 (velocity 1, not 0)
@@ -65,24 +67,21 @@ def create_midi_file(
         volume=1  # Very quiet but not silent (velocity 1)
     )
     
-    # Add all events
-    # Convert seconds to beats: beats = seconds * (tempo / 60)
-    total_events = 0
-    for stem_type, events in events_by_stem.items():
-        for event in events:
-            # Convert time and duration from seconds to beats
-            time_in_beats = event['time'] * beats_per_second
-            duration_in_beats = event['duration'] * beats_per_second
-            
-            midi.addNote(
-                track=track,
-                channel=channel,
-                pitch=event['note'],
-                time=time_in_beats,
-                duration=duration_in_beats,
-                volume=event['velocity']
-            )
-            total_events += 1
+    # Prepare all events (convert times to beats using pure function)
+    prepared_events = prepare_midi_events_for_writing(events_by_stem, tempo)
+    
+    # Add all prepared events to MIDI file
+    for event in prepared_events:
+        midi.addNote(
+            track=track,
+            channel=channel,
+            pitch=event['note'],
+            time=event['time_beats'],
+            duration=event['duration_beats'],
+            volume=event['velocity']
+        )
+    
+    total_events = len(prepared_events)
     
     # Write to file
     with open(output_path, 'wb') as f:
@@ -121,15 +120,4 @@ def read_midi_notes(midi_path: Union[str, Path], target_note: int) -> List[float
                 note_times.append(current_time)
     
     return sorted(note_times)
-
-from pathlib import Path
-from typing import Union, List, Dict, Optional
-from midiutil import MIDIFile
-import mido
-
-# Import config
-from stems_to_midi_config import load_config
-
-
-__all__ = ['create_midi_file', 'read_midi_notes']
 

@@ -227,9 +227,8 @@ def detect_onsets(
     Returns:
         Tuple of (onset_times in seconds, onset_strengths)
     """
-    # Convert to mono if stereo
-    if audio.ndim == 2:
-        audio = np.mean(audio, axis=1)
+    # Convert to mono if stereo (use helper function)
+    audio = ensure_mono(audio)
     
     # Compute onset strength envelope
     onset_env = librosa.onset.onset_strength(
@@ -348,8 +347,8 @@ def detect_hihat_state(
     Returns:
         List of 'open', 'closed', or 'handclap' for each onset
     """
-    if audio.ndim == 2:
-        audio = np.mean(audio, axis=1)
+    # Convert to mono if stereo (use helper function)
+    audio = ensure_mono(audio)
     
     states = []
     

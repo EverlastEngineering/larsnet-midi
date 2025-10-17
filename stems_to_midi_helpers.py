@@ -6,7 +6,7 @@ All audio processing logic extracted here for testability.
 """
 
 import numpy as np
-from typing import Tuple, Dict, Optional
+from typing import Tuple, Dict, Optional, List
 from scipy.signal import medfilt
 
 
@@ -332,3 +332,192 @@ def normalize_values(values: np.ndarray) -> np.ndarray:
         return values / max_val
     else:
         return np.ones_like(values)
+
+
+def time_to_sample(time_sec: float, sr: int) -> int:
+    """
+    Convert time in seconds to sample index.
+    
+    Pure function - no side effects.
+    
+    Args:
+        time_sec: Time in seconds
+        sr: Sample rate
+    
+    Returns:
+        Sample index (integer)
+    """
+    return int(time_sec * sr)
+
+
+def seconds_to_beats(time_sec: float, tempo: float) -> float:
+    """
+    Convert time in seconds to beats based on tempo.
+    
+    Pure function - no side effects.
+    
+    Args:
+        time_sec: Time in seconds
+        tempo: Tempo in BPM (beats per minute)
+    
+    Returns:
+        Time in beats
+    """
+    beats_per_second = tempo / 60.0
+    return time_sec * beats_per_second
+
+
+def prepare_midi_events_for_writing(
+    events_by_stem: Dict[str, List[Dict]],
+    tempo: float
+) -> List[Dict]:
+    """
+    Prepare MIDI events for writing by converting times to beats.
+    
+    Pure function - no side effects.
+    
+    Args:
+        events_by_stem: Dictionary mapping stem names to lists of MIDI events
+        tempo: Tempo in BPM
+    
+    Returns:
+        List of events with times converted to beats, flattened from all stems
+    """
+    prepared_events = []
+    
+    for stem_type, events in events_by_stem.items():
+        for event in events:
+            prepared_event = {
+                'note': event['note'],
+                'velocity': event['velocity'],
+                'time_beats': seconds_to_beats(event['time'], tempo),
+                'duration_beats': seconds_to_beats(event['duration'], tempo),
+                'stem_type': stem_type
+            }
+            prepared_events.append(prepared_event)
+    
+    return prepared_events
+
+
+def extract_audio_segment(
+    audio: np.ndarray,
+    onset_sample: int,
+    window_sec: float,
+    sr: int
+) -> np.ndarray:
+    """
+    Extract audio segment starting at onset for specified duration.
+    
+    Pure function - no side effects.
+    
+    Args:
+        audio: Audio signal
+        onset_sample: Starting sample index
+        window_sec: Window duration in seconds
+        sr: Sample rate
+    
+    Returns:
+        Audio segment (may be shorter than requested if at end of audio)
+    """
+    window_samples = int(window_sec * sr)
+    end_sample = min(onset_sample + window_samples, len(audio))
+    return audio[onset_sample:end_sample]
+
+
+def analyze_onset_spectral(
+    audio: np.ndarray,
+    onset_time: float,
+    sr: int,
+    stem_type: str,
+    config: Dict
+) -> Optional[Dict]:
+    """
+    Perform complete spectral analysis for a single onset.
+    
+    This function encapsulates the common pattern of:
+    1. Extract audio segment
+    2. Calculate spectral energies
+    3. Calculate geomean
+    4. Calculate sustain duration (if needed)
+    
+    Pure function (aside from config reading) - no side effects.
+    
+    Args:
+        audio: Audio signal (mono)
+        onset_time: Onset time in seconds
+        sr: Sample rate
+        stem_type: Type of stem ('kick', 'snare', etc.)
+        config: Configuration dictionary
+    
+    Returns:
+        Dictionary with analysis results, or None if segment too short:
+        {
+            'onset_sample': int,
+            'segment': np.ndarray,
+            'primary_energy': float,
+            'secondary_energy': float,
+            'low_energy': float (if available),
+            'total_energy': float,
+            'geomean': float,
+            'sustain_ms': float (if calculated),
+            'spectral_ratio': float (if low_energy available)
+        }
+    """
+    # Convert time to sample
+    onset_sample = time_to_sample(onset_time, sr)
+    
+    # Extract segment
+    peak_window_sec = config.get('audio', {}).get('peak_window_sec', 0.05)
+    segment = extract_audio_segment(audio, onset_sample, peak_window_sec, sr)
+    
+    # Check minimum length
+    min_segment_length = config.get('audio', {}).get('min_segment_length', 512)
+    if len(segment) < min_segment_length:
+        return None
+    
+    # Get spectral configuration
+    try:
+        spectral_config = get_spectral_config_for_stem(stem_type, config)
+    except ValueError:
+        return None
+    
+    # Calculate spectral energies
+    energies = calculate_spectral_energies(segment, sr, spectral_config['freq_ranges'])
+    primary_energy = energies.get('primary', 0.0)
+    secondary_energy = energies.get('secondary', 0.0)
+    low_energy = energies.get('low', 0.0)
+    
+    # Calculate geomean
+    geomean = calculate_geomean(primary_energy, secondary_energy)
+    
+    # Calculate total energy
+    total_energy = primary_energy + secondary_energy
+    
+    # Calculate spectral ratio if low energy available
+    spectral_ratio = (total_energy / low_energy) if low_energy > 0 else 100.0
+    
+    # Calculate sustain duration if needed
+    sustain_ms = None
+    if stem_type in ['hihat', 'cymbals']:
+        sustain_window_sec = config.get('audio', {}).get('sustain_window_sec', 0.2)
+        envelope_threshold = config.get('audio', {}).get('envelope_threshold', 0.1)
+        smooth_kernel = config.get('audio', {}).get('envelope_smooth_kernel', 51)
+        
+        sustain_ms = calculate_sustain_duration(
+            audio, onset_sample, sr,
+            window_ms=sustain_window_sec * 1000,
+            envelope_threshold=envelope_threshold,
+            smooth_kernel=smooth_kernel
+        )
+    
+    return {
+        'onset_sample': onset_sample,
+        'segment': segment,
+        'primary_energy': primary_energy,
+        'secondary_energy': secondary_energy,
+        'low_energy': low_energy,
+        'total_energy': total_energy,
+        'geomean': geomean,
+        'sustain_ms': sustain_ms,
+        'spectral_ratio': spectral_ratio
+    }

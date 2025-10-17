@@ -17,7 +17,8 @@ from stems_to_midi_helpers import (
     calculate_spectral_energies,
     get_spectral_config_for_stem,
     calculate_geomean,
-    should_keep_onset
+    should_keep_onset,
+    analyze_onset_spectral
 )
 
 # Import detection functions
@@ -166,43 +167,23 @@ def process_stem_to_midi(
         all_onset_data = []
         
         for onset_time, strength, peak_amplitude in zip(onset_times, onset_strengths, peak_amplitudes):
-            onset_sample = int(onset_time * sr)
+            # Use unified spectral analysis helper (functional core)
+            analysis = analyze_onset_spectral(audio, onset_time, sr, stem_type, config)
             
-            # Extract segment for spectral analysis
-            peak_window_sec = config.get('audio', {}).get('peak_window_sec', 0.05)
-            window_samples = int(peak_window_sec * sr)
-            end_sample = min(onset_sample + window_samples, len(audio))
-            segment = audio[onset_sample:end_sample]
-            
-            min_segment_length = config.get('audio', {}).get('min_segment_length', 512)
-            if len(segment) < min_segment_length:
+            if analysis is None:
+                # Segment too short, skip
                 continue
             
-            # Calculate spectral energies (functional core)
-            energies = calculate_spectral_energies(segment, sr, freq_ranges)
-            primary_energy = energies.get('primary', 0.0)
-            secondary_energy = energies.get('secondary', 0.0)
-            low_energy = energies.get('low', 0.0)
-            
-            # Calculate sustain duration if needed for this stem type (functional core)
-            sustain_duration = None
-            if stem_type in ['hihat', 'cymbals']:
-                # Get sustain parameters from config
-                sustain_window_sec = config.get('audio', {}).get('sustain_window_sec', 0.2)
-                envelope_threshold = config.get('audio', {}).get('envelope_threshold', 0.1)
-                smooth_kernel = config.get('audio', {}).get('envelope_smooth_kernel', 51)
-                
-                sustain_duration = calculate_sustain_duration(
-                    audio, onset_sample, sr,
-                    window_ms=sustain_window_sec * 1000,  # Convert to ms
-                    envelope_threshold=envelope_threshold,
-                    smooth_kernel=smooth_kernel
-                )
-            
-            # Calculate combined metrics (functional core)
-            total_energy = primary_energy + secondary_energy
-            spectral_ratio = (total_energy / low_energy) if low_energy > 0 else 100.0
-            body_wire_geomean = calculate_geomean(primary_energy, secondary_energy)
+            # Extract results from analysis
+            onset_sample = analysis['onset_sample']
+            segment = analysis['segment']
+            primary_energy = analysis['primary_energy']
+            secondary_energy = analysis['secondary_energy']
+            low_energy = analysis['low_energy']
+            total_energy = analysis['total_energy']
+            body_wire_geomean = analysis['geomean']
+            sustain_duration = analysis['sustain_ms']
+            spectral_ratio = analysis['spectral_ratio']
             
             # Store all data for this onset (for debug output)
             onset_data = {

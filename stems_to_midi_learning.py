@@ -14,11 +14,14 @@ import copy
 
 # Import functional core helpers
 from stems_to_midi_helpers import (
+    ensure_mono,
     calculate_peak_amplitude,
     calculate_spectral_energies,
     get_spectral_config_for_stem,
     calculate_geomean,
-    calculate_sustain_duration
+    calculate_sustain_duration,
+    analyze_onset_spectral,
+    time_to_sample
 )
 
 # Import MIDI reading
@@ -72,7 +75,7 @@ def learn_threshold_from_midi(
     audio, sr = sf.read(str(audio_path))
     
     if config['audio']['force_mono'] and audio.ndim == 2:
-        audio = np.mean(audio, axis=1)
+        audio = ensure_mono(audio)
     
     # Analyze spectral properties of kept vs removed hits
     kept_geomeans = []
@@ -86,16 +89,20 @@ def learn_threshold_from_midi(
         # Check if this time exists in edited MIDI
         is_kept = any(abs(orig_time - edit_time) < match_tolerance for edit_time in edited_times)
         
-        # Analyze this onset
-        onset_sample = int(orig_time * sr)
-        peak_window_sec = config.get('learning_mode', {}).get('peak_window_sec', 0.05)
-        window_samples = int(peak_window_sec * sr)
-        end_sample = min(onset_sample + window_samples, len(audio))
-        segment = audio[onset_sample:end_sample]
+        # Use unified spectral analysis helper (functional core)
+        analysis = analyze_onset_spectral(audio, orig_time, sr, stem_type, config)
         
-        min_segment_length = config.get('audio', {}).get('min_segment_length', 512)
-        if len(segment) < min_segment_length:
+        if analysis is None:
+            # Segment too short or invalid stem type, skip
             continue
+        
+        # Extract results from analysis
+        onset_sample = analysis['onset_sample']
+        primary_energy = analysis['primary_energy']
+        secondary_energy = analysis['secondary_energy']
+        total_energy = analysis['total_energy']
+        geomean = analysis['geomean']
+        sustain_duration = analysis['sustain_ms'] or 0.0
         
         # Calculate onset strength (similar to what detect_onsets does)
         onset_env = librosa.onset.onset_strength(y=audio, sr=sr, hop_length=512, aggregate=np.median)
@@ -107,37 +114,6 @@ def learn_threshold_from_midi(
         
         # Calculate peak amplitude using functional core
         peak_amplitude = calculate_peak_amplitude(audio, onset_sample, sr, window_sec=0.01)
-        
-        # Get spectral configuration for this stem type using functional core
-        try:
-            spectral_config = get_spectral_config_for_stem(stem_type, config)
-        except ValueError:
-            continue  # Skip unsupported stem types
-        
-        # Calculate spectral energies using functional core
-        energies = calculate_spectral_energies(segment, sr, spectral_config['freq_ranges'])
-        primary_energy = energies.get('primary', 0.0)
-        secondary_energy = energies.get('secondary', 0.0)
-        
-        # Calculate geomean using functional core
-        geomean = calculate_geomean(primary_energy, secondary_energy)
-        
-        # Calculate sustain duration for cymbals/hihat using functional core
-        sustain_duration = 0.0
-        if stem_type in ['cymbals', 'hihat']:
-            sustain_window_sec = config.get('audio', {}).get('sustain_window_sec', 0.2)
-            envelope_threshold = config.get('audio', {}).get('envelope_threshold', 0.1)
-            smooth_kernel = config.get('audio', {}).get('envelope_smooth_kernel', 51)
-            
-            sustain_duration = calculate_sustain_duration(
-                audio, onset_sample, sr,
-                window_ms=sustain_window_sec * 1000,
-                envelope_threshold=envelope_threshold,
-                smooth_kernel=smooth_kernel
-            )
-        
-        # Calculate total energy (already have primary and secondary from above)
-        total_energy = primary_energy + secondary_energy
         
         # Store for detailed output with ALL variables
         analysis_data = {
