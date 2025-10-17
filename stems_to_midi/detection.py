@@ -293,9 +293,15 @@ def detect_hihat_state(
         return states
     
     # Get audio processing parameters from config (for functional core)
-    sustain_window_sec = config.get('audio', {}).get('sustain_window_sec', 0.2)
-    envelope_threshold = config.get('audio', {}).get('envelope_threshold', 0.1)
-    smooth_kernel = config.get('audio', {}).get('envelope_smooth_kernel', 51)
+    if config is not None:
+        sustain_window_sec = config.get('audio', {}).get('sustain_window_sec', 0.2)
+        envelope_threshold = config.get('audio', {}).get('envelope_threshold', 0.1)
+        smooth_kernel = config.get('audio', {}).get('envelope_smooth_kernel', 51)
+    else:
+        # Default values when no config provided
+        sustain_window_sec = 0.2
+        envelope_threshold = 0.1
+        smooth_kernel = 51
     
     # Otherwise, calculate sustain duration for each hit using functional core
     for onset_time in onset_times:
