@@ -149,6 +149,14 @@ def detect_onsets(
     """
     # Convert to mono if stereo (use helper function)
     audio = ensure_mono(audio)
+
+    # Ensure delta, wait, and threshold are not None (librosa expects numbers)
+    if delta is None:
+        delta = 0.01
+    if wait is None:
+        wait = 5
+    if threshold is None:
+        threshold = 0.3
     
     # Compute onset strength envelope
     onset_env = librosa.onset.onset_strength(
