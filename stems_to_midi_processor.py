@@ -18,7 +18,9 @@ from stems_to_midi_helpers import (
     get_spectral_config_for_stem,
     calculate_geomean,
     should_keep_onset,
-    analyze_onset_spectral
+    analyze_onset_spectral,
+    filter_onsets_by_spectral,
+    calculate_velocities_from_features
 )
 
 # Import detection functions
@@ -140,178 +142,120 @@ def process_stem_to_midi(
         for onset_time in onset_times
     ])
     
-    # Initialize hihat data (will be populated during filtering if hihat)
-    hihat_sustain_durations = None
-    hihat_spectral_data = None
-    
     # For snare, kick, toms, hihat, and cymbals: filter out artifacts/bleed by checking spectral content
     # This uses the functional core for all calculations
     if stem_type in ['snare', 'kick', 'toms', 'hihat', 'cymbals'] and len(onset_times) > 0:
-        # Get spectral configuration for this stem type (functional core)
-        spectral_config = get_spectral_config_for_stem(stem_type, config)
-        freq_ranges = spectral_config['freq_ranges']
-        energy_labels = spectral_config['energy_labels']
-        geomean_threshold = spectral_config['geomean_threshold']
-        min_sustain_ms = spectral_config['min_sustain_ms']
+        # Use functional core helper for filtering
+        filter_result = filter_onsets_by_spectral(
+            onset_times,
+            onset_strengths,
+            peak_amplitudes,
+            audio,
+            sr,
+            stem_type,
+            config,
+            learning_mode=learning_mode
+        )
         
-        # Storage for filtered results
-        filtered_times = []
-        filtered_strengths = []
-        filtered_amplitudes = []
-        filtered_geomeans = []
-        filtered_sustains = []  # For hihat open/closed detection
-        filtered_spectral = []  # For hihat handclap detection
-        ratios_rejected = []
-        
-        # Store raw spectral data for ALL onsets (for debug output)
+        # Extract filtered results
+        onset_times = filter_result['filtered_times']
+        onset_strengths = filter_result['filtered_strengths']
+        peak_amplitudes = filter_result['filtered_amplitudes']
+        stem_geomeans = filter_result['filtered_geomeans']
+        hihat_sustain_durations = filter_result['filtered_sustains'] if stem_type == 'hihat' else None
+        hihat_spectral_data = filter_result['filtered_spectral'] if stem_type == 'hihat' else None
+        all_onset_data = filter_result['all_onset_data']
+        spectral_config = filter_result['spectral_config']
+    else:
+        # No filtering for this stem type
+        stem_geomeans = None
+        hihat_sustain_durations = None
+        hihat_spectral_data = None
         all_onset_data = []
-        
-        for onset_time, strength, peak_amplitude in zip(onset_times, onset_strengths, peak_amplitudes):
-            # Use unified spectral analysis helper (functional core)
-            analysis = analyze_onset_spectral(audio, onset_time, sr, stem_type, config)
-            
-            if analysis is None:
-                # Segment too short, skip
-                continue
-            
-            # Extract results from analysis
-            onset_sample = analysis['onset_sample']
-            segment = analysis['segment']
-            primary_energy = analysis['primary_energy']
-            secondary_energy = analysis['secondary_energy']
-            low_energy = analysis['low_energy']
-            total_energy = analysis['total_energy']
-            body_wire_geomean = analysis['geomean']
-            sustain_duration = analysis['sustain_ms']
-            spectral_ratio = analysis['spectral_ratio']
-            
-            # Store all data for this onset (for debug output)
-            onset_data = {
-                'time': onset_time,
-                'strength': strength,
-                'amplitude': peak_amplitude,
-                'low_energy': low_energy,
-                'primary_energy': primary_energy,
-                'secondary_energy': secondary_energy,
-                'ratio': spectral_ratio,
-                'total_energy': total_energy,
-                'body_wire_geomean': body_wire_geomean,
-                'energy_label_1': energy_labels['primary'],
-                'energy_label_2': energy_labels['secondary']
-            }
-            if sustain_duration is not None:
-                onset_data['sustain_ms'] = sustain_duration
-            
-            all_onset_data.append(onset_data)
-            
-            # Determine if this onset should be kept (functional core)
-            is_real_hit = should_keep_onset(
-                geomean=body_wire_geomean,
-                sustain_ms=sustain_duration,
-                geomean_threshold=geomean_threshold,
-                min_sustain_ms=min_sustain_ms,
-                stem_type=stem_type
-            )
-            
-            # In learning mode, keep ALL detections but mark them
-            if learning_mode or is_real_hit:
-                filtered_times.append(onset_time)
-                filtered_strengths.append(strength)
-                filtered_amplitudes.append(peak_amplitude)
-                filtered_geomeans.append(body_wire_geomean)
-                # Store sustain duration and spectral data for hihat classification
-                if stem_type == 'hihat' and sustain_duration is not None:
-                    filtered_sustains.append(sustain_duration)
-                    filtered_spectral.append({
-                        'primary_energy': primary_energy,
-                        'secondary_energy': secondary_energy
-                    })
-            elif not learning_mode:
-                ratios_rejected.append(spectral_ratio)
-        
-        onset_times = np.array(filtered_times)
-        onset_strengths = np.array(filtered_strengths)
-        peak_amplitudes = np.array(filtered_amplitudes)
-        stem_geomeans = np.array(filtered_geomeans)
-        hihat_sustain_durations = filtered_sustains if stem_type == 'hihat' else None
-        hihat_spectral_data = filtered_spectral if stem_type == 'hihat' else None
+        spectral_config = None
         
         # Show ALL onset data in chronological order with multiple ratios
-        print(f"\n      ALL DETECTED ONSETS - SPECTRAL ANALYSIS:")
-        if geomean_threshold is not None:
-            print(f"      Using GeoMean threshold: {geomean_threshold}")
-        else:
-            print(f"      No threshold filtering (showing all detections)")
-        
-        # Configure labels based on stem type
-        if stem_type == 'snare':
-            print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body Energy (150-400Hz), WireE=Wire Energy (2-8kHz)")
-        elif stem_type == 'kick':
-            print(f"      Str=Onset Strength, Amp=Peak Amplitude, FundE=Fundamental Energy (40-80Hz), BodyE=Body Energy (80-150Hz)")
-        elif stem_type == 'toms':
-            print(f"      Str=Onset Strength, Amp=Peak Amplitude, FundE=Fundamental Energy (60-150Hz), BodyE=Body Energy (150-400Hz)")
-        elif stem_type == 'hihat':
-            print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body Energy (500-2kHz), SizzleE=Sizzle Energy (6-12kHz), SustainMs=Sustain Duration")
-            min_sustain_ms = stem_config.get('min_sustain_ms', 25)
-            print(f"      Minimum sustain duration: {min_sustain_ms}ms (filters out handclap bleed)")
-            open_sustain_ms = stem_config.get('open_sustain_ms', 150)
-            print(f"      Open/Closed threshold: {open_sustain_ms}ms (>={open_sustain_ms}ms = open hihat)")
-        elif stem_type == 'cymbals':
-            print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body/Wash Energy (1-4kHz), BrillE=Brilliance/Attack Energy (4-10kHz), SustainMs=Sustain Duration")
-            min_sustain_ms = stem_config.get('min_sustain_ms', 50)
-            print(f"      Minimum sustain duration: {min_sustain_ms}ms")
-        
-        energy_label_1 = energy_labels['primary']
-        energy_label_2 = energy_labels['secondary']
-        print(f"      GeoMean=sqrt({energy_label_1}*{energy_label_2}) - measures combined spectral energy")
-        
-        # Header row - add SustainMs for cymbals and hihat
-        if stem_type in ['cymbals', 'hihat']:
-            print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'SustainMs':>10s} {'Status':>10s}")
-        else:
-            print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
-        
-        for idx, data in enumerate(all_onset_data):
-            # Re-calculate filtering decision for display using functional core
-            is_real_hit = should_keep_onset(
-                geomean=data['body_wire_geomean'],
-                sustain_ms=data.get('sustain_ms'),
-                geomean_threshold=geomean_threshold,
-                min_sustain_ms=spectral_config.get('min_sustain_ms'),
-                stem_type=stem_type
-            )
+        if spectral_config is not None and all_onset_data:
+            geomean_threshold = spectral_config['geomean_threshold']
+            energy_labels = spectral_config['energy_labels']
+            stem_config = config.get(stem_type, {})
             
-            status = 'KEPT' if is_real_hit else 'REJECTED'
-            
-            if stem_type in ['cymbals', 'hihat']:
-                sustain_str = f"{data.get('sustain_ms', 0):10.1f}"
-                print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
-                      f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {sustain_str} {status:>10s}")
+            print(f"\n      ALL DETECTED ONSETS - SPECTRAL ANALYSIS:")
+            if geomean_threshold is not None:
+                print(f"      Using GeoMean threshold: {geomean_threshold}")
             else:
-                print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
-                      f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")
-        
-        # Show summary statistics
-        print(f"\n      FILTERING SUMMARY:")
-        if geomean_threshold is not None:
-            kept_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] > geomean_threshold]
-            rejected_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] <= geomean_threshold]
-            print(f"        GeoMean threshold: {geomean_threshold} (adjustable in midiconfig.yaml)")
-            print(f"        Total onsets detected: {len(all_onset_data)}")
-            print(f"        Kept (GeoMean > {geomean_threshold}): {len(kept_geomeans)}")
-            print(f"        Rejected (GeoMean <= {geomean_threshold}): {len(rejected_geomeans)}")
-            if kept_geomeans:
-                print(f"        Kept GeoMean range: {min(kept_geomeans):.1f} - {max(kept_geomeans):.1f}")
-            if rejected_geomeans:
-                print(f"        Rejected GeoMean range: {min(rejected_geomeans):.1f} - {max(rejected_geomeans):.1f}")
-        else:
-            print(f"        No threshold filtering enabled")
-            print(f"        Total onsets detected: {len(all_onset_data)} (all kept)")
-            all_geomeans = [d['body_wire_geomean'] for d in all_onset_data]
-            if all_geomeans:
-                print(f"        GeoMean range: {min(all_geomeans):.1f} - {max(all_geomeans):.1f}")
-        
-        print(f"\n    After spectral filtering: {len(onset_times)} hits (rejected {len(ratios_rejected)} artifacts)")
+                print(f"      No threshold filtering (showing all detections)")
+            
+            # Configure labels based on stem type
+            if stem_type == 'snare':
+                print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body Energy (150-400Hz), WireE=Wire Energy (2-8kHz)")
+            elif stem_type == 'kick':
+                print(f"      Str=Onset Strength, Amp=Peak Amplitude, FundE=Fundamental Energy (40-80Hz), BodyE=Body Energy (80-150Hz)")
+            elif stem_type == 'toms':
+                print(f"      Str=Onset Strength, Amp=Peak Amplitude, FundE=Fundamental Energy (60-150Hz), BodyE=Body Energy (150-400Hz)")
+            elif stem_type == 'hihat':
+                print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body Energy (500-2kHz), SizzleE=Sizzle Energy (6-12kHz), SustainMs=Sustain Duration")
+                min_sustain_ms = stem_config.get('min_sustain_ms', 25)
+                print(f"      Minimum sustain duration: {min_sustain_ms}ms (filters out handclap bleed)")
+                open_sustain_ms = stem_config.get('open_sustain_ms', 150)
+                print(f"      Open/Closed threshold: {open_sustain_ms}ms (>={open_sustain_ms}ms = open hihat)")
+            elif stem_type == 'cymbals':
+                print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body/Wash Energy (1-4kHz), BrillE=Brilliance/Attack Energy (4-10kHz), SustainMs=Sustain Duration")
+                min_sustain_ms = stem_config.get('min_sustain_ms', 50)
+                print(f"      Minimum sustain duration: {min_sustain_ms}ms")
+            
+            energy_label_1 = energy_labels['primary']
+            energy_label_2 = energy_labels['secondary']
+            print(f"      GeoMean=sqrt({energy_label_1}*{energy_label_2}) - measures combined spectral energy")
+            
+            # Header row - add SustainMs for cymbals and hihat
+            if stem_type in ['cymbals', 'hihat']:
+                print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'SustainMs':>10s} {'Status':>10s}")
+            else:
+                print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
+            
+            for idx, data in enumerate(all_onset_data):
+                # Re-calculate filtering decision for display using functional core
+                is_real_hit = should_keep_onset(
+                    geomean=data['body_wire_geomean'],
+                    sustain_ms=data.get('sustain_ms'),
+                    geomean_threshold=geomean_threshold,
+                    min_sustain_ms=spectral_config.get('min_sustain_ms'),
+                    stem_type=stem_type
+                )
+                
+                status = 'KEPT' if is_real_hit else 'REJECTED'
+                
+                if stem_type in ['cymbals', 'hihat']:
+                    sustain_str = f"{data.get('sustain_ms', 0):10.1f}"
+                    print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
+                          f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {sustain_str} {status:>10s}")
+                else:
+                    print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
+                          f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")
+            
+            # Show summary statistics
+            print(f"\n      FILTERING SUMMARY:")
+            if geomean_threshold is not None:
+                kept_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] > geomean_threshold]
+                rejected_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] <= geomean_threshold]
+                print(f"        GeoMean threshold: {geomean_threshold} (adjustable in midiconfig.yaml)")
+                print(f"        Total onsets detected: {len(all_onset_data)}")
+                print(f"        Kept (GeoMean > {geomean_threshold}): {len(kept_geomeans)}")
+                print(f"        Rejected (GeoMean <= {geomean_threshold}): {len(rejected_geomeans)}")
+                if kept_geomeans:
+                    print(f"        Kept GeoMean range: {min(kept_geomeans):.1f} - {max(kept_geomeans):.1f}")
+                if rejected_geomeans:
+                    print(f"        Rejected GeoMean range: {min(rejected_geomeans):.1f} - {max(rejected_geomeans):.1f}")
+            else:
+                print(f"        No threshold filtering enabled")
+                print(f"        Total onsets detected: {len(all_onset_data)} (all kept)")
+                all_geomeans = [d['body_wire_geomean'] for d in all_onset_data]
+                if all_geomeans:
+                    print(f"        GeoMean range: {min(all_geomeans):.1f} - {max(all_geomeans):.1f}")
+            
+            num_rejected = len(all_onset_data) - len(onset_times)
+            print(f"\n    After spectral filtering: {len(onset_times)} hits (rejected {num_rejected} artifacts)")
     
     if len(onset_times) == 0:
         return []

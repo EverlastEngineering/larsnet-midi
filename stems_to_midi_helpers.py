@@ -442,6 +442,176 @@ def classify_tom_pitch(pitches: np.ndarray) -> np.ndarray:
 
 
 # ============================================================================
+# ONSET FILTERING AND ANALYSIS (Pure Functions)
+# ============================================================================
+
+def filter_onsets_by_spectral(
+    onset_times: np.ndarray,
+    onset_strengths: np.ndarray,
+    peak_amplitudes: np.ndarray,
+    audio: np.ndarray,
+    sr: int,
+    stem_type: str,
+    config: Dict,
+    learning_mode: bool = False
+) -> Dict:
+    """
+    Filter onsets by spectral content and analyze each onset.
+    
+    Pure function - no side effects, no I/O.
+    
+    Args:
+        onset_times: Array of onset times in seconds
+        onset_strengths: Array of onset strengths (0-1)
+        peak_amplitudes: Array of peak amplitudes
+        audio: Audio signal (mono)
+        sr: Sample rate
+        stem_type: Type of stem ('kick', 'snare', etc.)
+        config: Configuration dictionary
+        learning_mode: If True, keep all onsets (don't filter)
+    
+    Returns:
+        Dictionary with:
+        - filtered_times: np.ndarray
+        - filtered_strengths: np.ndarray
+        - filtered_amplitudes: np.ndarray
+        - filtered_geomeans: np.ndarray
+        - filtered_sustains: List (for hihat only)
+        - filtered_spectral: List (for hihat only)
+        - all_onset_data: List[Dict] (analysis for all onsets, for debugging)
+        - spectral_config: Dict (configuration used)
+    """
+    if len(onset_times) == 0:
+        return {
+            'filtered_times': np.array([]),
+            'filtered_strengths': np.array([]),
+            'filtered_amplitudes': np.array([]),
+            'filtered_geomeans': np.array([]),
+            'filtered_sustains': [],
+            'filtered_spectral': [],
+            'all_onset_data': [],
+            'spectral_config': None
+        }
+    
+    # Get spectral configuration for this stem type
+    spectral_config = get_spectral_config_for_stem(stem_type, config)
+    geomean_threshold = spectral_config['geomean_threshold']
+    min_sustain_ms = spectral_config['min_sustain_ms']
+    energy_labels = spectral_config['energy_labels']
+    
+    # Storage for filtered results
+    filtered_times = []
+    filtered_strengths = []
+    filtered_amplitudes = []
+    filtered_geomeans = []
+    filtered_sustains = []  # For hihat open/closed detection
+    filtered_spectral = []  # For hihat handclap detection
+    
+    # Store raw spectral data for ALL onsets (for debug output)
+    all_onset_data = []
+    
+    for onset_time, strength, peak_amplitude in zip(onset_times, onset_strengths, peak_amplitudes):
+        # Use unified spectral analysis helper
+        analysis = analyze_onset_spectral(audio, onset_time, sr, stem_type, config)
+        
+        if analysis is None:
+            # Segment too short, skip
+            continue
+        
+        # Extract results from analysis
+        primary_energy = analysis['primary_energy']
+        secondary_energy = analysis['secondary_energy']
+        low_energy = analysis['low_energy']
+        total_energy = analysis['total_energy']
+        body_wire_geomean = analysis['geomean']
+        sustain_duration = analysis['sustain_ms']
+        spectral_ratio = analysis['spectral_ratio']
+        
+        # Store all data for this onset (for debug output)
+        onset_data = {
+            'time': onset_time,
+            'strength': strength,
+            'amplitude': peak_amplitude,
+            'low_energy': low_energy,
+            'primary_energy': primary_energy,
+            'secondary_energy': secondary_energy,
+            'ratio': spectral_ratio,
+            'total_energy': total_energy,
+            'body_wire_geomean': body_wire_geomean,
+            'energy_label_1': energy_labels['primary'],
+            'energy_label_2': energy_labels['secondary']
+        }
+        if sustain_duration is not None:
+            onset_data['sustain_ms'] = sustain_duration
+        
+        all_onset_data.append(onset_data)
+        
+        # Determine if this onset should be kept
+        is_real_hit = should_keep_onset(
+            geomean=body_wire_geomean,
+            sustain_ms=sustain_duration,
+            geomean_threshold=geomean_threshold,
+            min_sustain_ms=min_sustain_ms,
+            stem_type=stem_type
+        )
+        
+        # In learning mode, keep ALL detections
+        if learning_mode or is_real_hit:
+            filtered_times.append(onset_time)
+            filtered_strengths.append(strength)
+            filtered_amplitudes.append(peak_amplitude)
+            filtered_geomeans.append(body_wire_geomean)
+            # Store sustain duration and spectral data for hihat classification
+            if stem_type == 'hihat' and sustain_duration is not None:
+                filtered_sustains.append(sustain_duration)
+                filtered_spectral.append({
+                    'primary_energy': primary_energy,
+                    'secondary_energy': secondary_energy
+                })
+    
+    return {
+        'filtered_times': np.array(filtered_times),
+        'filtered_strengths': np.array(filtered_strengths),
+        'filtered_amplitudes': np.array(filtered_amplitudes),
+        'filtered_geomeans': np.array(filtered_geomeans),
+        'filtered_sustains': filtered_sustains,
+        'filtered_spectral': filtered_spectral,
+        'all_onset_data': all_onset_data,
+        'spectral_config': spectral_config
+    }
+
+
+def calculate_velocities_from_features(
+    feature_values: np.ndarray,
+    min_velocity: int,
+    max_velocity: int
+) -> np.ndarray:
+    """
+    Calculate MIDI velocities from normalized feature values.
+    
+    Pure function - no side effects.
+    
+    Args:
+        feature_values: Normalized feature values (0-1 range, can be any feature like geomean or amplitude)
+        min_velocity: Minimum MIDI velocity
+        max_velocity: Maximum MIDI velocity
+    
+    Returns:
+        Array of MIDI velocities (1-127)
+    """
+    if len(feature_values) == 0:
+        return np.array([], dtype=int)
+    
+    # Calculate velocities using estimate_velocity for each value
+    velocities = np.array([
+        estimate_velocity(value, min_velocity, max_velocity)
+        for value in feature_values
+    ])
+    
+    return velocities
+
+
+# ============================================================================
 # TIME AND SAMPLE CONVERSION (Pure Functions)
 # ============================================================================
 
