@@ -317,28 +317,29 @@ def process_stem_to_midi(
     # Step 2: Configure and detect onsets
     onset_params = _configure_onset_detection(config, stem_type)
     learning_mode = onset_params['learning_mode']
-    
+
+    # Always override threshold with CLI value unless in learning mode
+    threshold_to_use = onset_threshold if not learning_mode else onset_params['threshold']
+
     onset_times, onset_strengths = detect_onsets(
         audio,
         sr,
         hop_length=onset_params['hop_length'],
-        threshold=onset_params['threshold'],
+        threshold=threshold_to_use,
         delta=onset_params['delta'],
         wait=onset_params['wait']
     )
-    
+
     # Log detection mode
     if learning_mode:
         print(f"    Learning mode: Ultra-sensitive detection (threshold={onset_params['threshold']})")
     else:
         stem_config = config.get(stem_type, {})
-        if (stem_config.get('onset_threshold') is not None or 
-            stem_config.get('onset_delta') is not None or 
-            stem_config.get('onset_wait') is not None):
-            print(f"    {stem_type.capitalize()}-specific onset detection: threshold={onset_params['threshold']}, delta={onset_params['delta']}, wait={onset_params['wait']} (~{onset_params['wait']*11:.0f}ms min spacing)")
-    
+    wait_val = onset_params['wait'] if onset_params['wait'] is not None else 5
+    print(f"    CLI onset detection: threshold={threshold_to_use}, delta={onset_params['delta']}, wait={wait_val} (~{wait_val*11:.0f}ms min spacing)")
+
     print(f"    Found {len(onset_times)} hits (before filtering) -> MIDI note {getattr(drum_mapping, stem_type)}")
-    
+
     if len(onset_times) == 0:
         return []
     
