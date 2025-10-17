@@ -1,45 +1,25 @@
 """
 Convert separated drum stems to MIDI tracks.
 
-Analyzes each drum stem to detect onsets (hits) and converts them to MIDI notes
-with velocity based on the hit intensity.
+Main entry point and command-line interface for the stems-to-MIDI conversion system.
 
-Architecture: Functional Core, Imperative Shell
-- Pure functions in stems_to_midi_helpers.py (testable, no side effects)
-- I/O and orchestration in this file (thin imperative shell)
+Architecture: Modular Design (Functional Core, Imperative Shell)
+- stems_to_midi_config.py: Configuration loading and drum mapping
+- stems_to_midi_detection.py: Onset detection and drum classification
+- stems_to_midi_helpers.py: Pure helper functions (testable, no side effects)
+- stems_to_midi_midi.py: MIDI file creation
+- stems_to_midi_learning.py: Threshold learning and calibration
+- stems_to_midi_processor.py: Main audio processing pipeline
+- stems_to_midi.py (this file): CLI orchestration (thin imperative shell)
 """
 
 from pathlib import Path
-import numpy as np
-import librosa
-import soundfile as sf
-from midiutil import MIDIFile
-import mido
 import argparse
-from typing import Union, List, Tuple, Dict, Optional
+from typing import Union, List
 
-# Import functional core (pure helper functions)
-from stems_to_midi_helpers import (
-    ensure_mono,
-    calculate_peak_amplitude,
-    calculate_sustain_duration,
-    calculate_spectral_energies,
-    get_spectral_config_for_stem,
-    calculate_geomean,
-    should_keep_onset,
-    normalize_values
-)
-
-# Import configuration module
+# Import modules (thin orchestration layer)
 from stems_to_midi_config import load_config, DrumMapping
-from stems_to_midi_detection import (
-    detect_onsets,
-    detect_tom_pitch,
-    classify_tom_pitch,
-    detect_hihat_state,
-    estimate_velocity
-)
-from stems_to_midi_midi import create_midi_file, read_midi_notes
+from stems_to_midi_midi import create_midi_file
 from stems_to_midi_learning import learn_threshold_from_midi, save_calibrated_config
 from stems_to_midi_processor import process_stem_to_midi
 
@@ -173,7 +153,7 @@ def stems_to_midi(
             
             if learning_mode:
                 print(f"  Saved LEARNING MIDI: {midi_path}")
-                print(f"  ** Load in DAW, delete false positives (velocity=1 hits), save as: {audio_file.stem}_edited.mid **\n")
+                print(f"  ** Load in DAW, delete false positives (velocity=1 hits), save as: {base_name}_edited.mid **\n")
             else:
                 print(f"  Saved: {midi_path}\n")
         else:

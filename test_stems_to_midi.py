@@ -10,18 +10,16 @@ import yaml
 from pathlib import Path
 import tempfile
 import soundfile as sf
-from stems_to_midi import (
-    load_config,
-    DrumMapping,
+from stems_to_midi_config import load_config, DrumMapping
+from stems_to_midi_detection import (
     detect_onsets,
     estimate_velocity,
     detect_tom_pitch,
     classify_tom_pitch,
-    detect_hihat_state,
-    process_stem_to_midi,
-    create_midi_file,
-    read_midi_notes
+    detect_hihat_state
 )
+from stems_to_midi_processor import process_stem_to_midi
+from stems_to_midi_midi import create_midi_file, read_midi_notes
 
 
 # ============================================================================
