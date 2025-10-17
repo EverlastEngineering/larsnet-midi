@@ -334,6 +334,117 @@ def normalize_values(values: np.ndarray) -> np.ndarray:
         return np.ones_like(values)
 
 
+# ============================================================================
+# CLASSIFICATION AND MIDI CONVERSION (Pure Functions)
+# ============================================================================
+
+def estimate_velocity(strength: float, min_vel: int = 40, max_vel: int = 127) -> int:
+    """
+    Convert onset strength to MIDI velocity.
+    
+    Pure function - no side effects.
+    
+    Args:
+        strength: Onset strength (0-1)
+        min_vel: Minimum MIDI velocity
+        max_vel: Maximum MIDI velocity
+    
+    Returns:
+        MIDI velocity (1-127)
+    """
+    velocity = int(min_vel + strength * (max_vel - min_vel))
+    return np.clip(velocity, 1, 127)
+
+
+def classify_tom_pitch(pitches: np.ndarray) -> np.ndarray:
+    """
+    Classify tom pitches into low/mid/high groups using clustering.
+    
+    Pure function - no side effects.
+    
+    Args:
+        pitches: Array of detected pitches in Hz
+    
+    Returns:
+        Array of classifications: 0=low, 1=mid, 2=high
+    """
+    if len(pitches) == 0:
+        return np.array([])
+    
+    # Filter out failed detections (0 Hz)
+    valid_pitches = pitches[pitches > 0]
+    
+    if len(valid_pitches) == 0:
+        # If no valid pitches, default to mid tom
+        return np.ones(len(pitches), dtype=int)
+    
+    # If only 1-2 unique pitches, simple grouping
+    unique_pitches = np.unique(valid_pitches)
+    
+    if len(unique_pitches) == 1:
+        # All same pitch - classify as mid
+        return np.ones(len(pitches), dtype=int)
+    elif len(unique_pitches) == 2:
+        # Two toms - split into low and high
+        threshold = np.mean(unique_pitches)
+        classifications = np.where(pitches < threshold, 0, 2)
+        classifications[pitches == 0] = 1  # Failed detections go to mid
+        return classifications
+    else:
+        # 3+ unique pitches - use k-means clustering with k=3
+        try:
+            from sklearn.cluster import KMeans
+        except ImportError:
+            # Fallback: use percentiles to split into 3 groups
+            p33 = np.percentile(valid_pitches, 33)
+            p66 = np.percentile(valid_pitches, 66)
+            
+            classifications = np.ones(len(pitches), dtype=int)  # Default to mid
+            for i, pitch in enumerate(pitches):
+                if pitch > 0:
+                    if pitch < p33:
+                        classifications[i] = 0  # Low
+                    elif pitch > p66:
+                        classifications[i] = 2  # High
+                    else:
+                        classifications[i] = 1  # Mid
+            return classifications
+        
+        # Reshape for sklearn
+        valid_pitches_2d = valid_pitches.reshape(-1, 1)
+        
+        # Cluster into 3 groups
+        n_clusters = min(3, len(unique_pitches))
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        kmeans.fit(valid_pitches_2d)
+        
+        # Sort cluster centers to get low/mid/high order
+        cluster_centers = kmeans.cluster_centers_.flatten()
+        sorted_indices = np.argsort(cluster_centers)
+        
+        # Create mapping from cluster label to tom classification
+        cluster_to_tom = {sorted_indices[i]: i for i in range(n_clusters)}
+        
+        # If only 2 clusters, use 0 (low) and 2 (high), skip mid
+        if n_clusters == 2:
+            cluster_to_tom = {sorted_indices[0]: 0, sorted_indices[1]: 2}
+        
+        # Classify all pitches
+        classifications = np.ones(len(pitches), dtype=int)  # Default to mid
+        
+        for i, pitch in enumerate(pitches):
+            if pitch > 0:
+                # Find which cluster this pitch belongs to
+                cluster = kmeans.predict([[pitch]])[0]
+                classifications[i] = cluster_to_tom[cluster]
+        
+        return classifications
+
+
+# ============================================================================
+# TIME AND SAMPLE CONVERSION (Pure Functions)
+# ============================================================================
+
 def time_to_sample(time_sec: float, sr: int) -> int:
     """
     Convert time in seconds to sample index.

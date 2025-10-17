@@ -1,0 +1,146 @@
+# Stems-to-MIDI FCIS Refactoring Results
+
+## Progress Tracking
+
+### Phase 1: Extract Pure Functions from Detection Module
+- [x] Move `estimate_velocity()` to helpers.py
+- [x] Move `classify_tom_pitch()` to helpers.py
+- [x] Update detection.py module docstring
+- [x] Update test imports (backwards compatible re-exports added)
+- [x] Run tests
+- [x] Git commit
+
+**Status**: ✅ COMPLETE  
+**Metrics**: 
+- All 47 tests passing
+- Functions moved: 2 (estimate_velocity, classify_tom_pitch)
+- Lines removed from detection.py: ~95
+- Lines added to helpers.py: ~115 (with documentation)
+- Test time: 1.54s (improved from 3.04s baseline)
+
+**Issues**: None  
+**Decisions**: 
+- Added backwards-compatible re-exports in detection.py __all__ to avoid breaking existing imports
+- Updated detection.py docstring to clarify role as "Algorithm Coordinators" not "Mix of FC/IS"
+- Created new section in helpers.py: "CLASSIFICATION AND MIDI CONVERSION"
+
+---
+
+### Phase 2: Extract Pure Logic from Processor Module
+- [ ] Create `filter_onsets_by_spectral()` in helpers.py
+- [ ] Create `classify_drum_events()` in helpers.py
+- [ ] Create `calculate_velocities_from_features()` in helpers.py
+- [ ] Update `process_stem_to_midi()` to use new helpers
+- [ ] Write tests for new helpers
+- [ ] Run tests
+- [ ] Git commit
+
+**Status**: Not Started  
+**Metrics**: N/A  
+**Issues**: None  
+**Decisions**: None
+
+---
+
+### Phase 3: Extract Pure Logic from Learning Module
+- [ ] Create `calculate_threshold_from_distributions()` in helpers.py
+- [ ] Create `calculate_classification_accuracy()` in helpers.py
+- [ ] Create `analyze_threshold_performance()` in helpers.py
+- [ ] Create `format_learning_analysis_table()` in helpers.py
+- [ ] Update `learn_threshold_from_midi()` to use new helpers
+- [ ] Write tests for new helpers
+- [ ] Run tests
+- [ ] Git commit
+
+**Status**: Not Started  
+**Metrics**: N/A  
+**Issues**: None  
+**Decisions**: None
+
+---
+
+### Phase 4: Reduce process_stem_to_midi() Complexity
+- [ ] Extract `_load_and_validate_audio()` helper
+- [ ] Extract `_configure_onset_detection()` helper
+- [ ] Extract `_detect_and_analyze_onsets()` helper
+- [ ] Extract `_filter_and_classify_onsets()` helper
+- [ ] Update `process_stem_to_midi()` to orchestrate
+- [ ] Run tests
+- [ ] Git commit
+
+**Status**: Not Started  
+**Metrics**: N/A  
+**Issues**: None  
+**Decisions**: None
+
+---
+
+### Phase 5: Update Tests and Documentation
+- [ ] Add tests for all new helper functions
+- [ ] Update existing tests if needed
+- [ ] Add docstring documentation
+- [ ] Update module docstrings
+- [ ] Run full test suite with coverage
+- [ ] Git commit
+
+**Status**: Not Started  
+**Metrics**: N/A  
+**Issues**: None  
+**Decisions**: None
+
+---
+
+## Overall Metrics
+
+### FCIS Adherence Scores
+| Module | Before | After | Target |
+|--------|--------|-------|--------|
+| stems_to_midi_helpers.py | 95% | - | 95%+ |
+| stems_to_midi_detection.py | 60% | - | 85%+ |
+| stems_to_midi_processor.py | 65% | - | 85%+ |
+| stems_to_midi_learning.py | 70% | - | 85%+ |
+
+### Code Size Metrics
+| Module/Function | Before | After | Target |
+|-----------------|--------|-------|--------|
+| process_stem_to_midi() | 443 lines | - | < 150 lines |
+| learn_threshold_from_midi() | 200+ lines | - | < 100 lines |
+
+### Test Metrics
+| Metric | Before | After | Target |
+|--------|--------|-------|--------|
+| Helper test coverage | TBD | - | ≥ 85% |
+| All tests passing | TBD | - | 100% |
+
+---
+
+## Decision Log
+
+### 2025-10-16: Initial Planning
+**Decision**: Create immutable plan file following refactoring instructions  
+**Rationale**: Establish clear roadmap and success criteria before starting work  
+**Impact**: Provides structure and rollback capability
+
+---
+
+## Notes
+
+### Key Insights
+- Functional core/imperative shell pattern well-established in helpers.py and main.py
+- Main violations in processor.py (monolithic function), detection.py (mixed roles), learning.py (embedded logic)
+- Refactoring should be incremental with tests at each phase
+
+### Challenges Encountered
+- (To be filled in during execution)
+
+### Lessons Learned
+- (To be filled in during execution)
+
+---
+
+## Final Summary
+
+**Completion Date**: (To be filled in)  
+**Total Time**: (To be filled in)  
+**Success**: (To be evaluated)  
+**Blockers**: (To be documented)

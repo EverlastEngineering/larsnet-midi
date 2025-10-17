@@ -1,25 +1,28 @@
 """
 Audio analysis and detection algorithms for stems-to-MIDI conversion.
 
-This module provides functions for detecting drum hits, analyzing pitch,
-classifying drum types, and estimating velocity from audio signals.
+This module provides algorithm coordinators for detecting drum hits and analyzing audio.
+These functions orchestrate complex multi-step algorithms using librosa and other libraries.
 
-Architecture: Mix of Functional Core and Imperative Shell
-- Onset detection, pitch detection: coordinated algorithms
-- Velocity estimation: pure function
-- Uses helpers from stems_to_midi_helpers for pure logic
+Architecture: Imperative Shell (Algorithm Coordinators)
+- Coordinates external library calls (librosa, sklearn)
+- Uses functional core helpers for pure logic
+- Delegates pure transformations to stems_to_midi_helpers
+
+Note: This module contains coordinators, not pure functions. Pure functions are in helpers.
 """
 
 from typing import Tuple, List, Dict, Optional
 import numpy as np
 import librosa
-from sklearn.cluster import KMeans
 from scipy.signal import medfilt
 
 # Import functional core helpers
 from stems_to_midi_helpers import (
     ensure_mono,
-    calculate_sustain_duration
+    calculate_sustain_duration,
+    estimate_velocity,
+    classify_tom_pitch
 )
 
 # Import config
@@ -29,9 +32,10 @@ from stems_to_midi_config import DrumMapping
 __all__ = [
     'detect_onsets',
     'detect_tom_pitch',
-    'classify_tom_pitch',
     'detect_hihat_state',
-    'estimate_velocity'
+    # Re-export pure functions from helpers for backwards compatibility
+    'estimate_velocity',
+    'classify_tom_pitch'
 ]
 
 
@@ -111,90 +115,6 @@ def detect_tom_pitch(
             return float(peak_freq)
         else:
             return 0.0
-
-
-def classify_tom_pitch(pitches: np.ndarray) -> np.ndarray:
-    """
-    Classify tom pitches into low/mid/high groups using clustering.
-    
-    Args:
-        pitches: Array of detected pitches in Hz
-    
-    Returns:
-        Array of classifications: 0=low, 1=mid, 2=high
-    """
-    if len(pitches) == 0:
-        return np.array([])
-    
-    # Filter out failed detections (0 Hz)
-    valid_pitches = pitches[pitches > 0]
-    
-    if len(valid_pitches) == 0:
-        # If no valid pitches, default to mid tom
-        return np.ones(len(pitches), dtype=int)
-    
-    # If only 1-2 unique pitches, simple grouping
-    unique_pitches = np.unique(valid_pitches)
-    
-    if len(unique_pitches) == 1:
-        # All same pitch - classify as mid
-        return np.ones(len(pitches), dtype=int)
-    elif len(unique_pitches) == 2:
-        # Two toms - split into low and high
-        threshold = np.mean(unique_pitches)
-        classifications = np.where(pitches < threshold, 0, 2)
-        classifications[pitches == 0] = 1  # Failed detections go to mid
-        return classifications
-    else:
-        # 3+ unique pitches - use k-means clustering with k=3
-        try:
-            from sklearn.cluster import KMeans
-        except ImportError:
-            print("Warning: scikit-learn not installed. Using simple pitch-based classification.")
-            # Fallback: use percentiles to split into 3 groups
-            p33 = np.percentile(valid_pitches, 33)
-            p66 = np.percentile(valid_pitches, 66)
-            
-            classifications = np.ones(len(pitches), dtype=int)  # Default to mid
-            for i, pitch in enumerate(pitches):
-                if pitch > 0:
-                    if pitch < p33:
-                        classifications[i] = 0  # Low
-                    elif pitch > p66:
-                        classifications[i] = 2  # High
-                    else:
-                        classifications[i] = 1  # Mid
-            return classifications
-        
-        # Reshape for sklearn
-        valid_pitches_2d = valid_pitches.reshape(-1, 1)
-        
-        # Cluster into 3 groups
-        n_clusters = min(3, len(unique_pitches))
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-        kmeans.fit(valid_pitches_2d)
-        
-        # Sort cluster centers to get low/mid/high order
-        cluster_centers = kmeans.cluster_centers_.flatten()
-        sorted_indices = np.argsort(cluster_centers)
-        
-        # Create mapping from cluster label to tom classification
-        cluster_to_tom = {sorted_indices[i]: i for i in range(n_clusters)}
-        
-        # If only 2 clusters, use 0 (low) and 2 (high), skip mid
-        if n_clusters == 2:
-            cluster_to_tom = {sorted_indices[0]: 0, sorted_indices[1]: 2}
-        
-        # Classify all pitches
-        classifications = np.ones(len(pitches), dtype=int)  # Default to mid
-        
-        for i, pitch in enumerate(pitches):
-            if pitch > 0:
-                # Find which cluster this pitch belongs to
-                cluster = kmeans.predict([[pitch]])[0]
-                classifications[i] = cluster_to_tom[cluster]
-        
-        return classifications
 
 
 def detect_onsets(
@@ -301,22 +221,6 @@ def detect_onsets(
         onset_strengths = onset_strengths[mask]
     
     return onset_times, onset_strengths
-
-
-def estimate_velocity(strength: float, min_vel: int = 40, max_vel: int = 127) -> int:
-    """
-    Convert onset strength to MIDI velocity.
-    
-    Args:
-        strength: Onset strength (0-1)
-        min_vel: Minimum MIDI velocity
-        max_vel: Maximum MIDI velocity
-    
-    Returns:
-        MIDI velocity (1-127)
-    """
-    velocity = int(min_vel + strength * (max_vel - min_vel))
-    return np.clip(velocity, 1, 127)
 
 
 def detect_hihat_state(
