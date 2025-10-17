@@ -417,11 +417,21 @@ class TestProcessStemToMidi:
         test_config = sample_config.copy()
         test_config['kick']['geomean_threshold'] = None
         
+        # Extract onset detection parameters from config
+        onset_threshold = test_config['onset_detection']['threshold']
+        onset_delta = test_config['onset_detection']['delta']
+        onset_wait = test_config['onset_detection']['wait']
+        hop_length = test_config['onset_detection']['hop_length']
+        
         events = process_stem_to_midi(
             temp_path,
             'kick',
             drum_mapping,
             test_config,
+            onset_threshold=onset_threshold,
+            onset_delta=onset_delta,
+            onset_wait=onset_wait,
+            hop_length=hop_length,
             detect_hihat_open=False
         )
         
@@ -448,11 +458,21 @@ class TestProcessStemToMidi:
             sf.write(temp_path, audio, sr)
         
         try:
+            # Extract onset detection parameters from config
+            onset_threshold = sample_config['onset_detection']['threshold']
+            onset_delta = sample_config['onset_detection']['delta']
+            onset_wait = sample_config['onset_detection']['wait']
+            hop_length = sample_config['onset_detection']['hop_length']
+            
             events = process_stem_to_midi(
                 temp_path,
                 'kick',
                 drum_mapping,
-                sample_config
+                sample_config,
+                onset_threshold=onset_threshold,
+                onset_delta=onset_delta,
+                onset_wait=onset_wait,
+                hop_length=hop_length
             )
             
             # Silent audio should produce no events
