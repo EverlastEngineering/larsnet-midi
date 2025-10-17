@@ -221,12 +221,17 @@ class TestDetectOnsets:
         duration = 1.0
         t = np.linspace(0, duration, int(sr * duration))
         
-        # Create stereo audio (2 channels)
+        # Create stereo audio (2 channels) with a longer onset for librosa's n_fft
         mono = np.zeros_like(t)
-        mono[int(0.5 * sr):int(0.5 * sr) + 100] = np.random.randn(100) * 0.5
+        # Make the onset longer (2500 samples > n_fft default of 2048)
+        mono[int(0.5 * sr):int(0.5 * sr) + 2500] = np.random.randn(2500) * 0.5
         stereo = np.vstack([mono, mono])  # Duplicate to make stereo
         
-        onset_times, onset_strengths = detect_onsets(stereo, sr)
+        # Suppress librosa's warning about FFT size (expected with test data)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="n_fft=.*is too large")
+            onset_times, onset_strengths = detect_onsets(stereo, sr)
         
         # Should handle stereo and detect onsets
         assert len(onset_times) >= 0
