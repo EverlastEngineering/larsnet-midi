@@ -117,7 +117,7 @@ def learn_threshold_from_midi(
             onset_strength = 0.0
         
         # Calculate peak amplitude using functional core
-        peak_amplitude = calculate_peak_amplitude(audio, onset_sample, sr, window_sec=0.01)
+        peak_amplitude = calculate_peak_amplitude(audio, onset_sample, sr, window_ms=10.0)
         
         # Store for detailed output with ALL variables
         analysis_data = {
@@ -288,36 +288,3 @@ def save_calibrated_config(config: Dict, learned_thresholds: Dict[str, Dict], ou
     
     print(f"\n  Saved calibrated config to: {output_path}")
     print(f"  You can now use this config for production MIDI conversion!")
-
-from pathlib import Path
-from typing import Union, Dict
-import numpy as np
-import soundfile as sf
-import librosa
-import yaml
-
-# Import functional core helpers
-from .helpers import (
-    calculate_peak_amplitude,
-    calculate_sustain_duration,
-    calculate_spectral_energies,
-    get_spectral_config_for_stem,
-    calculate_geomean
-)
-
-# Import config and detection modules
-from .config import DrumMapping
-from .midi import read_midi_notes
-
-
-__all__ = ['learn_threshold_from_midi', 'save_calibrated_config']
-
-
-# Placeholder functions - will be moved from stems_to_midi.py in Phase 5
-def learn_threshold_from_midi(*args, **kwargs):
-    """Placeholder - will be moved in Phase 5."""
-    pass
-
-def save_calibrated_config(*args, **kwargs):
-    """Placeholder - will be moved in Phase 5."""
-    pass
