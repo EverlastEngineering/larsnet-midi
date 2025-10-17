@@ -186,11 +186,13 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
         return {
             'freq_ranges': {
                 'primary': (stem_config['fundamental_freq_min'], stem_config['fundamental_freq_max']),
-                'secondary': (stem_config['body_freq_min'], stem_config['body_freq_max'])
+                'secondary': (stem_config['body_freq_min'], stem_config['body_freq_max']),
+                'tertiary': (stem_config['attack_freq_min'], stem_config['attack_freq_max'])
             },
             'energy_labels': {
                 'primary': 'FundE',
-                'secondary': 'BodyE'
+                'secondary': 'BodyE',
+                'tertiary': 'AttackE'
             },
             'geomean_threshold': stem_config.get('geomean_threshold'),
             'min_sustain_ms': None
@@ -243,20 +245,26 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
         raise ValueError(f"Unknown stem type: {stem_type}")
 
 
-def calculate_geomean(primary_energy: float, secondary_energy: float) -> float:
+def calculate_geomean(primary_energy: float, secondary_energy: float, tertiary_energy: Optional[float] = None) -> float:
     """
-    Calculate geometric mean of two energy values.
+    Calculate geometric mean of energy values.
     
     Pure function - no side effects.
     
     Args:
         primary_energy: First energy value
         secondary_energy: Second energy value
+        tertiary_energy: Optional third energy value (for 3-way geomean)
     
     Returns:
-        Geometric mean (sqrt of product)
+        Geometric mean (sqrt of product for 2 values, cube root for 3 values)
     """
-    return float(np.sqrt(primary_energy * secondary_energy))
+    if tertiary_energy is not None and tertiary_energy > 0:
+        # 3-way geometric mean: cube root of product
+        return float(np.cbrt(primary_energy * secondary_energy * tertiary_energy))
+    else:
+        # 2-way geometric mean: square root of product
+        return float(np.sqrt(primary_energy * secondary_energy))
 
 
 def should_keep_onset(
@@ -521,6 +529,7 @@ def filter_onsets_by_spectral(
         # Extract results from analysis
         primary_energy = analysis['primary_energy']
         secondary_energy = analysis['secondary_energy']
+        tertiary_energy = analysis.get('tertiary_energy')  # Only for kick
         low_energy = analysis['low_energy']
         total_energy = analysis['total_energy']
         body_wire_geomean = analysis['geomean']
@@ -541,6 +550,12 @@ def filter_onsets_by_spectral(
             'energy_label_1': energy_labels['primary'],
             'energy_label_2': energy_labels['secondary']
         }
+        
+        # Add tertiary energy if present (kick attack range)
+        if tertiary_energy is not None:
+            onset_data['tertiary_energy'] = tertiary_energy
+            onset_data['energy_label_3'] = energy_labels.get('tertiary', 'Tertiary')
+        
         if sustain_duration is not None:
             onset_data['sustain_ms'] = sustain_duration
         
@@ -925,13 +940,17 @@ def analyze_onset_spectral(
     energies = calculate_spectral_energies(segment, sr, spectral_config['freq_ranges'])
     primary_energy = energies.get('primary', 0.0)
     secondary_energy = energies.get('secondary', 0.0)
+    tertiary_energy = energies.get('tertiary', None)  # Only for kick (attack range)
     low_energy = energies.get('low', 0.0)
     
-    # Calculate geomean
-    geomean = calculate_geomean(primary_energy, secondary_energy)
+    # Calculate geomean (2-way for most drums, 3-way for kick with attack)
+    geomean = calculate_geomean(primary_energy, secondary_energy, tertiary_energy)
     
-    # Calculate total energy
-    total_energy = primary_energy + secondary_energy
+    # Calculate total energy (include tertiary if present)
+    if tertiary_energy is not None:
+        total_energy = primary_energy + secondary_energy + tertiary_energy
+    else:
+        total_energy = primary_energy + secondary_energy
     
     # Calculate spectral ratio if low energy available
     spectral_ratio = (total_energy / low_energy) if low_energy > 0 else 100.0
@@ -950,7 +969,7 @@ def analyze_onset_spectral(
             smooth_kernel=smooth_kernel
         )
     
-    return {
+    result = {
         'onset_sample': onset_sample,
         'segment': segment,
         'primary_energy': primary_energy,
@@ -961,3 +980,9 @@ def analyze_onset_spectral(
         'sustain_ms': sustain_ms,
         'spectral_ratio': spectral_ratio
     }
+    
+    # Add tertiary energy if present (kick attack range)
+    if tertiary_energy is not None:
+        result['tertiary_energy'] = tertiary_energy
+    
+    return result

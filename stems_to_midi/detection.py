@@ -161,7 +161,7 @@ def detect_onsets(
         y=audio,
         sr=sr,
         hop_length=hop_length,
-        aggregate=np.median
+        # aggregate=np.median
     )
     
     # Detect onset frames WITHOUT backtracking first to get strengths

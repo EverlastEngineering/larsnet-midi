@@ -152,13 +152,15 @@ class TestGetSpectralConfigForStem:
     """Test spectral configuration extraction."""
     
     def test_kick_config(self):
-        """Test kick configuration extraction."""
+        """Test kick configuration extraction with 3 frequency ranges."""
         config = {
             'kick': {
                 'fundamental_freq_min': 40,
                 'fundamental_freq_max': 80,
                 'body_freq_min': 80,
                 'body_freq_max': 150,
+                'attack_freq_min': 2000,
+                'attack_freq_max': 6000,
                 'geomean_threshold': 150.0
             }
         }
@@ -168,10 +170,14 @@ class TestGetSpectralConfigForStem:
         assert 'freq_ranges' in result
         assert 'primary' in result['freq_ranges']
         assert 'secondary' in result['freq_ranges']
+        assert 'tertiary' in result['freq_ranges']
         assert result['freq_ranges']['primary'] == (40, 80)
         assert result['freq_ranges']['secondary'] == (80, 150)
+        assert result['freq_ranges']['tertiary'] == (2000, 6000)
         assert result['geomean_threshold'] == 150.0
         assert result['energy_labels']['primary'] == 'FundE'
+        assert result['energy_labels']['secondary'] == 'BodyE'
+        assert result['energy_labels']['tertiary'] == 'AttackE'
     
     def test_snare_config(self):
         """Test snare configuration extraction."""
@@ -275,6 +281,31 @@ class TestCalculateGeomean:
         """Test geomean of equal values."""
         result = calculate_geomean(5.0, 5.0)
         assert result == 5.0
+    
+    def test_three_way_geomean(self):
+        """Test 3-way geometric mean (cube root)."""
+        result = calculate_geomean(8.0, 27.0, 64.0)
+        expected = np.cbrt(8.0 * 27.0 * 64.0)
+        assert abs(result - expected) < 0.001
+    
+    def test_three_way_equal_values(self):
+        """Test 3-way geomean of equal values."""
+        result = calculate_geomean(5.0, 5.0, 5.0)
+        assert abs(result - 5.0) < 0.001
+    
+    def test_three_way_with_zero(self):
+        """Test 3-way geomean with zero value - falls back to 2-way."""
+        # When tertiary_energy is 0, the function treats it as None
+        # and falls back to 2-way geomean: sqrt(100 * 200) = 141.42...
+        result = calculate_geomean(100.0, 200.0, 0.0)
+        expected = np.sqrt(100.0 * 200.0)
+        assert abs(result - expected) < 0.01
+    
+    def test_backwards_compatible_two_way(self):
+        """Test that 2-way geomean still works (backwards compatibility)."""
+        result = calculate_geomean(16.0, 64.0)
+        expected = np.sqrt(16.0 * 64.0)
+        assert abs(result - expected) < 0.001
 
 
 class TestShouldKeepOnset:
@@ -919,6 +950,8 @@ class TestAnalyzeOnsetSpectral:
                 'fundamental_freq_max': 80,
                 'body_freq_min': 80,
                 'body_freq_max': 150,
+                'attack_freq_min': 2000,
+                'attack_freq_max': 6000,
                 'geomean_threshold': 150.0
             },
             'audio': {
@@ -946,7 +979,9 @@ class TestAnalyzeOnsetSpectral:
                 'fundamental_freq_min': 40,
                 'fundamental_freq_max': 80,
                 'body_freq_min': 80,
-                'body_freq_max': 150
+                'body_freq_max': 150,
+                'attack_freq_min': 2000,
+                'attack_freq_max': 6000
             },
             'audio': {
                 'peak_window_sec': 0.05,
@@ -1030,6 +1065,8 @@ class TestFilterOnsetsBySpectral:
                 'fundamental_freq_max': 80,
                 'body_freq_min': 80,
                 'body_freq_max': 150,
+                'attack_freq_min': 2000,
+                'attack_freq_max': 6000,
                 'geomean_threshold': 1000.0  # Very high threshold that would normally filter all
             },
             'audio': {
@@ -1068,6 +1105,8 @@ class TestFilterOnsetsBySpectral:
                 'fundamental_freq_max': 80,
                 'body_freq_min': 80,
                 'body_freq_max': 150,
+                'attack_freq_min': 2000,
+                'attack_freq_max': 6000,
                 'geomean_threshold': 10000000.0  # Extremely high threshold
             },
             'audio': {
@@ -1151,6 +1190,8 @@ class TestFilterOnsetsBySpectral:
                 'fundamental_freq_max': 80,
                 'body_freq_min': 80,
                 'body_freq_max': 150,
+                'attack_freq_min': 2000,
+                'attack_freq_max': 6000,
                 'geomean_threshold': 150.0
             },
             'audio': {

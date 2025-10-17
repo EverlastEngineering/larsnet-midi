@@ -432,11 +432,20 @@ def process_stem_to_midi(
 
             energy_label_1 = energy_labels['primary']
             energy_label_2 = energy_labels['secondary']
-            print(f"      GeoMean=sqrt({energy_label_1}*{energy_label_2}) - measures combined spectral energy")
+            energy_label_3 = energy_labels.get('tertiary')  # Only for kick
+            
+            # Display GeoMean formula (2-way or 3-way)
+            if energy_label_3:
+                print(f"      GeoMean=cbrt({energy_label_1}*{energy_label_2}*{energy_label_3}) - measures combined spectral energy")
+            else:
+                print(f"      GeoMean=sqrt({energy_label_1}*{energy_label_2}) - measures combined spectral energy")
 
-            # Header row - add SustainMs for cymbals and hihat
+            # Header row - different formats for different stem types
             if stem_type in ['cymbals', 'hihat']:
                 print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'SustainMs':>10s} {'Status':>10s}")
+            elif stem_type == 'kick' and energy_label_3:
+                # Kick with 3 frequency ranges
+                print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {energy_label_3:>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
             else:
                 print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
 
@@ -449,10 +458,16 @@ def process_stem_to_midi(
                     stem_type=stem_type
                 )
                 status = 'KEPT' if is_real_hit else 'REJECTED'
+                
+                # Format output based on stem type
                 if stem_type in ['cymbals', 'hihat']:
                     sustain_str = f"{data.get('sustain_ms', 0):10.1f}"
                     print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
                           f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {sustain_str} {status:>10s}")
+                elif stem_type == 'kick' and 'tertiary_energy' in data:
+                    # Kick with 3 frequency ranges
+                    print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} {data['tertiary_energy']:8.1f} "
+                          f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")
                 else:
                     print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
                           f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")

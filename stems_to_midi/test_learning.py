@@ -48,6 +48,8 @@ def sample_config():
             'fundamental_freq_max': 80,
             'body_freq_min': 80,
             'body_freq_max': 150,
+            'attack_freq_min': 2000,
+            'attack_freq_max': 6000,
             'geomean_threshold': 500.0
         },
         'toms': {

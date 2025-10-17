@@ -24,8 +24,8 @@ audio:
 onset_detection:
   threshold: 0.01      # Onset strength threshold (0-1). Lower = more sensitive, catches quieter hits
   delta: 0.005         # Peak picking sensitivity. Lower = more sensitive
-  wait: 4              # Minimum frames between peaks. 1 = ~11ms, allows fast repeated hits
-  hop_length: 64      # Samples between frames. Affects time resolution
+  wait: 3              # Minimum frames between peaks. 1 = ~11ms, allows fast repeated hits
+  hop_length: 512      # Samples between frames. Affects time resolution
 
 # Per-Stem Filtering Settings
 # Each stem can have custom spectral filtering to reject artifacts and bleed
@@ -37,16 +37,16 @@ kick:
   # Onset detection (overrides global onset_detection settings for kick)
   onset_threshold: null      # Use global setting (0.01) - kicks are loud and easy to detect
   onset_delta: null          # Use global setting (0.005)
-  onset_wait: null           # Use global setting (1 frame ~11ms)
+  onset_wait: 5           # Use global setting (1 frame ~11ms)
   
   # Spectral filtering uses FFT analysis to distinguish real kicks from artifacts
-  # Real kick has energy in both fundamental (40-80Hz) and body/attack (80-150Hz)
-  # Artifacts (snare bleed, clicks) have low energy in fundamental range
+  # Real kick has energy in fundamental (40-80Hz), body (80-150Hz), and attack (2-6kHz)
+  # Artifacts (snare bleed, clicks) have low energy in one or more ranges
   
-  geomean_threshold: 50.0   # Geometric mean of fundamental+body energy
-                              # Real kicks: 200-800, Artifacts: 20-150
-                              # Set to 150 to be conservative
-                              # Increase to 200-250 for stricter filtering
+  geomean_threshold: 70.0   # Geometric mean of fundamental+body+attack energy (3-way: cube root)
+                              # Real kicks: 100-400, Artifacts: 10-80
+                              # Set to 70 to be conservative
+                              # Increase to 100-150 for stricter filtering
   
   # Spectral ranges for analysis (Hz)
   fundamental_freq_min: 40   # Start of fundamental range (deep bass)

@@ -34,9 +34,10 @@ Each drum has a unique spectral signature. We analyze the frequency content of e
 #### Kick Drum  
 - **Fundamental energy** (40-80 Hz): The deep bass thump
 - **Body energy** (80-150 Hz): The beater attack and shell resonance
-- **GeoMean** = √(Fundamental × Body): Combined discriminator
-- **Real kicks**: High fundamental AND high body (GeoMean 200-800)
-- **Artifacts**: May have some energy but not both (GeoMean 20-150)
+- **Attack energy** (2-6 kHz): The high-frequency beater click/snap
+- **GeoMean** = ∛(Fundamental × Body × Attack): Combined discriminator (3-way)
+- **Real kicks**: High fundamental AND high body AND high attack (GeoMean 100-400)
+- **Artifacts**: May have some energy but not all three (GeoMean 10-80)
 
 ### Why Geometric Mean?
 
