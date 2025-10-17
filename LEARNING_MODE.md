@@ -65,6 +65,9 @@ python stems_to_midi.py -i cleaned_stems/ -o midi_learning/ --learn --stems kick
 
 # Or process multiple stems
 python stems_to_midi.py -i cleaned_stems/ -o midi_learning/ --learn --stems snare kick
+
+# For long tracks (10+ minutes), use --maxtime to analyze only first N seconds
+python stems_to_midi.py -i cleaned_stems/ -o midi_learning/ --learn --stems snare --maxtime 50
 ```
 
 This will:
@@ -73,6 +76,8 @@ This will:
 - Mark rejected hits (based on current threshold) with velocity=1
 - Real hits have normal velocity (40-127)
 - Show spectral analysis for each onset in the console
+
+**Tip**: The `--maxtime` option (in seconds) makes learning much faster for long tracks. Usually 30-60 seconds is enough to get representative samples of your drum hits.
 
 ### Step 2: Edit in DAW
 
@@ -90,11 +95,19 @@ This will:
 Analyze the differences between original and edited MIDI:
 
 ```bash
-python stems_to_midi.py --learn-from-midi \\
-    cleaned_stems/snare/drums.wav \\
-    midi_learning/drums_learning.mid \\
-    midi_learning/drums_edited.mid \\
+python stems_to_midi.py --learn-from-midi \
+    cleaned_stems/snare/drums.wav \
+    midi_learning/drums_learning.mid \
+    midi_learning/drums_edited.mid \
     --learn-stem snare
+
+# For long tracks, use --maxtime to analyze only the same portion you used in Step 1
+python stems_to_midi.py --learn-from-midi \
+    cleaned_stems/snare/drums.wav \
+    midi_learning/drums_learning.mid \
+    midi_learning/drums_edited.mid \
+    --learn-stem snare \
+    --maxtime 50
 ```
 
 This will:
@@ -102,6 +115,8 @@ This will:
 - Analyze spectral characteristics of each group
 - Suggest an optimal `geomean_threshold`
 - Save a calibrated config to `midiconfig_calibrated.yaml`
+
+**Important**: If you used `--maxtime` in Step 1, use the same value in Step 3 to analyze the same audio segment.
 
 ### Step 4: Use Calibrated Config
 

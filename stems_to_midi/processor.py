@@ -46,7 +46,8 @@ __all__ = [
 def _load_and_validate_audio(
     audio_path: Union[str, Path],
     config: Dict,
-    stem_type: str
+    stem_type: str,
+    max_duration: Optional[float] = None
 ) -> tuple[Optional[np.ndarray], Optional[int]]:
     """
     Load audio file and validate it's usable.
@@ -57,6 +58,7 @@ def _load_and_validate_audio(
         audio_path: Path to audio file
         config: Configuration dictionary
         stem_type: Type of stem (for logging)
+        max_duration: Maximum duration in seconds to load (None = load all)
     
     Returns:
         Tuple of (audio, sample_rate) or (None, None) if invalid
@@ -65,6 +67,13 @@ def _load_and_validate_audio(
     
     # Load audio (I/O)
     audio, sr = sf.read(str(audio_path))
+    
+    # Truncate to max_duration if specified
+    if max_duration is not None and max_duration > 0:
+        max_samples = int(max_duration * sr)
+        if len(audio) > max_samples:
+            audio = audio[:max_samples]
+            print(f"    Truncated to {max_duration:.1f} seconds for faster processing")
 
     # Debug: Print audio shape and sample rate
     print(f"    Audio shape: {audio.shape}, Sample rate: {sr}")
@@ -300,7 +309,8 @@ def process_stem_to_midi(
     hop_length: int,
     min_velocity: int = 80,
     max_velocity: int = 110,
-    detect_hihat_open: bool = True
+    detect_hihat_open: bool = True,
+    max_duration: Optional[float] = None
 ) -> List[Dict]:
     """
     Process a drum stem and extract MIDI events.
@@ -320,12 +330,13 @@ def process_stem_to_midi(
         min_velocity: Minimum MIDI velocity
         max_velocity: Maximum MIDI velocity
         detect_hihat_open: Try to detect open hi-hat
+        max_duration: Maximum duration in seconds to analyze (None = all)
     
     Returns:
         List of MIDI events: [{'time': float, 'note': int, 'velocity': int, 'duration': float}, ...]
     """
     # Step 1: Load and validate audio
-    audio, sr = _load_and_validate_audio(audio_path, config, stem_type)
+    audio, sr = _load_and_validate_audio(audio_path, config, stem_type, max_duration)
     if audio is None:
         return []
     

@@ -8,7 +8,7 @@ import numpy as np
 import librosa
 import soundfile as sf
 from pathlib import Path
-from typing import Dict, Union, List
+from typing import Dict, Union, List, Optional
 import yaml
 import copy
 
@@ -46,7 +46,8 @@ def learn_threshold_from_midi(
     edited_midi_path: Union[str, Path],
     stem_type: str,
     config: Dict,
-    drum_mapping: DrumMapping
+    drum_mapping: DrumMapping,
+    max_duration: Optional[float] = None
 ) -> Dict[str, float]:
     """
     Learn optimal threshold by comparing original (all detections) with user-edited MIDI.
@@ -58,6 +59,7 @@ def learn_threshold_from_midi(
         stem_type: Type of stem ('snare', etc.)
         config: Configuration dict
         drum_mapping: MIDI note mapping
+        max_duration: Maximum duration in seconds to analyze (None = all)
     
     Returns:
         Dictionary with suggested thresholds
@@ -77,6 +79,13 @@ def learn_threshold_from_midi(
     
     # Load audio and re-analyze all original detections
     audio, sr = sf.read(str(audio_path))
+    
+    # Truncate to max_duration if specified
+    if max_duration is not None and max_duration > 0:
+        max_samples = int(max_duration * sr)
+        if len(audio) > max_samples:
+            audio = audio[:max_samples]
+            print(f"    Truncated to {max_duration:.1f} seconds for faster processing")
     
     if config['audio']['force_mono'] and audio.ndim == 2:
         audio = ensure_mono(audio)

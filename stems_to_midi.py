@@ -35,7 +35,8 @@ def stems_to_midi(
     max_velocity: int = 110,
     tempo: float = 120.0,
     detect_hihat_open: bool = False,
-    stems_to_process: List[str] = None
+    stems_to_process: List[str] = None,
+    max_duration: float = None
 ):
     """
     Convert separated drum stems to MIDI files.
@@ -49,6 +50,7 @@ def stems_to_midi(
         tempo: Tempo in BPM (for MIDI timing)
         detect_hihat_open: Try to detect open hi-hat hits
         stems_to_process: List of stem types to process (default: all)
+        max_duration: Maximum duration in seconds to analyze (for faster learning)
     """
     stems_dir = Path(stems_dir)
     output_dir = Path(output_dir)
@@ -112,6 +114,8 @@ def stems_to_midi(
     print(f"  Velocity range: {min_velocity}-{max_velocity}")
     print(f"  Tempo: {tempo} BPM")
     print(f"  Detect open hi-hat: {detect_hihat_open}")
+    if max_duration is not None:
+        print(f"  Max duration: {max_duration} seconds (fast learning mode)")
     print()
     
     for audio_dir in audio_files_to_process:
@@ -145,7 +149,8 @@ def stems_to_midi(
                 hop_length=hop_length,
                 min_velocity=min_velocity,
                 max_velocity=max_velocity,
-                detect_hihat_open=hihat_detect
+                detect_hihat_open=hihat_detect,
+                max_duration=max_duration
             )
             
             if events:
@@ -200,6 +205,9 @@ Examples:
   
   # Specific tempo
   python stems_to_midi.py -i cleaned_stems/ -o midi_output/ --tempo 140
+  
+  # Learning mode with 50 seconds limit (faster for long tracks)
+  python stems_to_midi.py -i cleaned_stems/ -o midi_output/ --learn --maxtime 50
 
 MIDI Note Mapping (General MIDI):
   Kick:    36 (C1)  - Bass Drum 1
@@ -244,6 +252,8 @@ MIDI Note Mapping (General MIDI):
     learning_group.add_argument('--learn-stem', type=str, default='snare',
                                choices=['kick', 'snare', 'toms', 'hihat', 'cymbals'],
                                help="Stem type for learning (default: snare).")
+    learning_group.add_argument('--maxtime', type=float, default=None,
+                               help="Maximum duration in seconds to analyze (for faster learning on long tracks).")
     
     args = parser.parse_args()
     
@@ -300,7 +310,8 @@ MIDI Note Mapping (General MIDI):
             edited_midi,
             args.learn_stem,
             config,
-            drum_mapping
+            drum_mapping,
+            max_duration=args.maxtime
         )
         if learned:
             output_config = Path(config['learning_mode']['calibrated_config_output'])
@@ -329,7 +340,8 @@ MIDI Note Mapping (General MIDI):
                 max_velocity=args.max_vel,
                 tempo=args.tempo,
                 detect_hihat_open=args.detect_hihat_open,
-                stems_to_process=args.stems
+                stems_to_process=args.stems,
+                max_duration=args.maxtime
             )
         finally:
             Path(temp_config).unlink()
@@ -345,5 +357,6 @@ MIDI Note Mapping (General MIDI):
             max_velocity=args.max_vel,
             tempo=args.tempo,
             detect_hihat_open=args.detect_hihat_open,
-            stems_to_process=args.stems
+            stems_to_process=args.stems,
+            max_duration=args.maxtime
         )
