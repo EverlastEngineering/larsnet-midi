@@ -21,7 +21,11 @@ from stems_to_midi_helpers import (
     calculate_geomean,
     calculate_sustain_duration,
     analyze_onset_spectral,
-    time_to_sample
+    time_to_sample,
+    calculate_threshold_from_distributions,
+    calculate_classification_accuracy,
+    predict_classification,
+    analyze_threshold_performance
 )
 
 # Import MIDI reading
@@ -144,18 +148,20 @@ def learn_threshold_from_midi(
         kept_sustains = [d['sustain_ms'] for d in all_analysis if d['is_kept']]
         removed_sustains = [d['sustain_ms'] for d in all_analysis if not d['is_kept']]
         
-        if kept_sustains and removed_sustains:
-            min_kept_sustain = min(kept_sustains)
-            max_removed_sustain = max(removed_sustains)
-            suggested_sustain_threshold = (max_removed_sustain + min_kept_sustain) / 2.0
+        # Use functional core helper for threshold calculation
+        suggested_sustain_threshold = calculate_threshold_from_distributions(
+            kept_sustains, removed_sustains
+        )
+    
+    # Calculate suggested threshold using functional core helper
+    suggested_threshold = calculate_threshold_from_distributions(
+        kept_geomeans, removed_geomeans
+    )
     
     # Calculate suggested threshold first (so we can show predictions)
-    if kept_geomeans and removed_geomeans:
+    if suggested_threshold is not None:
         min_kept = min(kept_geomeans)
         max_removed = max(removed_geomeans)
-        
-        # Suggest threshold halfway between max removed and min kept
-        suggested_threshold = (max_removed + min_kept) / 2.0
         
         # Show detailed analysis of all hits with predictions
         if all_analysis:
@@ -182,36 +188,24 @@ def learn_threshold_from_midi(
                 print(f"      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {'BodyE':>8s} {'SizzleE':>8s} {'Total':>8s} {'GeoMean':>8s} {'User':>8s} {'Current':>8s} {'Suggest':>8s} {'Result':>10s}")
                 print(f"      {'(s)':>8s} {'':>6s} {'':>6s} {'(500-2k)':>8s} {'(6-12k)':>8s} {'':>8s} {'':>8s} {'Action':>8s} {'Config':>8s} {'Learn':>8s} {'':>10s}")
             
-            correct_count = 0
-            suggest_correct_count = 0
-            for data in all_analysis:
-                user_action = 'KEPT' if data['is_kept'] else 'REMOVED'
+            # Use functional core helpers for accuracy analysis
+            current_performance = analyze_threshold_performance(
+                all_analysis, current_geomean_threshold, current_sustain_threshold, stem_type
+            )
+            suggest_performance = analyze_threshold_performance(
+                all_analysis, suggested_threshold, suggested_sustain_threshold, stem_type
+            )
+            
+            # Display detailed table
+            for idx, data in enumerate(all_analysis):
+                user_action = current_performance['user_actions'][idx]
+                current_would_be = current_performance['predictions'][idx]
+                suggest_would_be = suggest_performance['predictions'][idx]
                 
-                # Check against CURRENT config thresholds
-                if stem_type == 'cymbals' and current_sustain_threshold is not None:
-                    current_would_be = 'KEPT' if (data['geomean'] > current_geomean_threshold and 
-                                                   data.get('sustain_ms', 0) > current_sustain_threshold) else 'REMOVED'
-                else:
-                    current_would_be = 'KEPT' if data['geomean'] > current_geomean_threshold else 'REMOVED'
-                
-                # Check against SUGGESTED thresholds (from learning)
-                if stem_type == 'cymbals' and suggested_sustain_threshold is not None:
-                    suggest_would_be = 'KEPT' if (data['geomean'] > suggested_threshold and 
-                                                   data.get('sustain_ms', 0) > suggested_sustain_threshold) else 'REMOVED'
-                else:
-                    suggest_would_be = 'KEPT' if data['geomean'] > suggested_threshold else 'REMOVED'
-                
-                # Check if current config classifies correctly
+                # Determine result string
                 is_correct = (user_action == current_would_be)
-                if is_correct:
-                    correct_count += 1
-                
-                # Check if suggested thresholds would classify correctly
                 is_suggest_correct = (user_action == suggest_would_be)
-                if is_suggest_correct:
-                    suggest_correct_count += 1
                 
-                # Show result based on suggested vs current
                 if is_correct and is_suggest_correct:
                     result = '✓ Both OK'
                 elif is_correct and not is_suggest_correct:
@@ -229,10 +223,11 @@ def learn_threshold_from_midi(
                     print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
                           f"{data['total_energy']:8.1f} {data['geomean']:8.1f} {user_action:>8s} {current_would_be:>8s} {suggest_would_be:>8s} {result:>10s}")
             
-            current_accuracy = (correct_count / len(all_analysis)) * 100
-            suggest_accuracy = (suggest_correct_count / len(all_analysis)) * 100
-            print(f"\n      Current config accuracy: {correct_count}/{len(all_analysis)} ({current_accuracy:.1f}%)")
-            print(f"      Suggested threshold accuracy: {suggest_correct_count}/{len(all_analysis)} ({suggest_accuracy:.1f}%)")
+            # Display accuracy results
+            current_acc = current_performance['accuracy']
+            suggest_acc = suggest_performance['accuracy']
+            print(f"\n      Current config accuracy: {current_acc['correct_count']}/{current_acc['total_count']} ({current_acc['accuracy']:.1f}%)")
+            print(f"      Suggested threshold accuracy: {suggest_acc['correct_count']}/{suggest_acc['total_count']} ({suggest_acc['accuracy']:.1f}%)")
         
         print(f"\n    Analysis:")
         print(f"      Kept hits - GeoMean range: {min_kept:.1f} - {max(kept_geomeans):.1f}")

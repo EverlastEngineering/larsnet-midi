@@ -612,6 +612,165 @@ def calculate_velocities_from_features(
 
 
 # ============================================================================
+# THRESHOLD LEARNING AND ANALYSIS (Pure Functions)
+# ============================================================================
+
+def calculate_threshold_from_distributions(
+    kept_values: List[float],
+    removed_values: List[float]
+) -> Optional[float]:
+    """
+    Calculate optimal threshold as midpoint between max removed and min kept.
+    
+    Pure function - no side effects.
+    
+    Args:
+        kept_values: List of values that should be kept (true positives)
+        removed_values: List of values that should be removed (false positives)
+    
+    Returns:
+        Suggested threshold (midpoint), or None if insufficient data
+    """
+    if not kept_values or not removed_values:
+        return None
+    
+    min_kept = min(kept_values)
+    max_removed = max(removed_values)
+    
+    # Threshold is midpoint between max removed and min kept
+    suggested_threshold = (max_removed + min_kept) / 2.0
+    
+    return suggested_threshold
+
+
+def calculate_classification_accuracy(
+    user_actions: List[str],
+    predictions: List[str]
+) -> Dict[str, float]:
+    """
+    Calculate classification accuracy between user actions and predictions.
+    
+    Pure function - no side effects.
+    
+    Args:
+        user_actions: List of 'KEPT' or 'REMOVED' (ground truth)
+        predictions: List of 'KEPT' or 'REMOVED' (predicted by threshold)
+    
+    Returns:
+        Dict with:
+        - correct_count: Number of correct predictions
+        - total_count: Total number of predictions
+        - accuracy: Accuracy percentage (0-100)
+    """
+    if len(user_actions) != len(predictions) or len(user_actions) == 0:
+        return {
+            'correct_count': 0,
+            'total_count': 0,
+            'accuracy': 0.0
+        }
+    
+    correct_count = sum(1 for user, pred in zip(user_actions, predictions) if user == pred)
+    total_count = len(user_actions)
+    accuracy = (correct_count / total_count) * 100.0
+    
+    return {
+        'correct_count': correct_count,
+        'total_count': total_count,
+        'accuracy': accuracy
+    }
+
+
+def predict_classification(
+    geomean: float,
+    geomean_threshold: float,
+    sustain_ms: Optional[float] = None,
+    sustain_threshold: Optional[float] = None,
+    stem_type: str = 'snare'
+) -> str:
+    """
+    Predict classification (KEPT/REMOVED) based on thresholds.
+    
+    Pure function - no side effects.
+    
+    Args:
+        geomean: Geometric mean value
+        geomean_threshold: Threshold for geomean
+        sustain_ms: Sustain duration in milliseconds (optional)
+        sustain_threshold: Threshold for sustain (optional)
+        stem_type: Type of stem (affects logic for cymbals)
+    
+    Returns:
+        'KEPT' or 'REMOVED'
+    """
+    # For cymbals, require both geomean AND sustain if both thresholds provided
+    if stem_type == 'cymbals' and sustain_threshold is not None and sustain_ms is not None:
+        geomean_ok = geomean > geomean_threshold
+        sustain_ok = sustain_ms > sustain_threshold
+        return 'KEPT' if (geomean_ok and sustain_ok) else 'REMOVED'
+    else:
+        # For other stems, just check geomean
+        return 'KEPT' if geomean > geomean_threshold else 'REMOVED'
+
+
+def analyze_threshold_performance(
+    analysis_data: List[Dict],
+    geomean_threshold: float,
+    sustain_threshold: Optional[float] = None,
+    stem_type: str = 'snare'
+) -> Dict:
+    """
+    Analyze threshold performance on a dataset.
+    
+    Pure function - no side effects.
+    
+    Args:
+        analysis_data: List of dicts with 'is_kept', 'geomean', 'sustain_ms' (optional)
+        geomean_threshold: Threshold to test
+        sustain_threshold: Sustain threshold (optional)
+        stem_type: Type of stem
+    
+    Returns:
+        Dict with:
+        - user_actions: List[str] ('KEPT' or 'REMOVED')
+        - predictions: List[str] ('KEPT' or 'REMOVED')
+        - results: List[str] (comparison results like '✓ Both OK')
+        - accuracy: Dict from calculate_classification_accuracy
+    """
+    user_actions = []
+    predictions = []
+    results = []
+    
+    for data in analysis_data:
+        user_action = 'KEPT' if data['is_kept'] else 'REMOVED'
+        
+        prediction = predict_classification(
+            data['geomean'],
+            geomean_threshold,
+            data.get('sustain_ms'),
+            sustain_threshold,
+            stem_type
+        )
+        
+        user_actions.append(user_action)
+        predictions.append(prediction)
+        
+        # Determine result string
+        if user_action == prediction:
+            results.append('✓ Correct')
+        else:
+            results.append('✗ Wrong')
+    
+    accuracy = calculate_classification_accuracy(user_actions, predictions)
+    
+    return {
+        'user_actions': user_actions,
+        'predictions': predictions,
+        'results': results,
+        'accuracy': accuracy
+    }
+
+
+# ============================================================================
 # TIME AND SAMPLE CONVERSION (Pure Functions)
 # ============================================================================
 
