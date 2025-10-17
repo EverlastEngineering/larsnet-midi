@@ -24,8 +24,8 @@ audio:
 onset_detection:
   threshold: 0.01      # Onset strength threshold (0-1). Lower = more sensitive, catches quieter hits
   delta: 0.005         # Peak picking sensitivity. Lower = more sensitive
-  wait: 1              # Minimum frames between peaks. 1 = ~11ms, allows fast repeated hits
-  hop_length: 512      # Samples between frames. Affects time resolution
+  wait: 4              # Minimum frames between peaks. 1 = ~11ms, allows fast repeated hits
+  hop_length: 64      # Samples between frames. Affects time resolution
 
 # Per-Stem Filtering Settings
 # Each stem can have custom spectral filtering to reject artifacts and bleed
@@ -43,7 +43,7 @@ kick:
   # Real kick has energy in both fundamental (40-80Hz) and body/attack (80-150Hz)
   # Artifacts (snare bleed, clicks) have low energy in fundamental range
   
-  geomean_threshold: 150.0   # Geometric mean of fundamental+body energy
+  geomean_threshold: 50.0   # Geometric mean of fundamental+body energy
                               # Real kicks: 200-800, Artifacts: 20-150
                               # Set to 150 to be conservative
                               # Increase to 200-250 for stricter filtering
@@ -120,7 +120,7 @@ hihat:
   # Hi-hats can have very fast repeated hits, similar to cymbals but shorter sustain
   onset_threshold: 0.05      # Moderate sensitivity (between global 0.01 and cymbals 0.15)
   onset_delta: 0.01          # Moderate peak picking
-  onset_wait: 3              # 3 frames = ~35ms min spacing (allows 16th notes at fast tempos)
+  onset_wait: 5              # 3 frames = ~35ms min spacing (allows 16th notes at fast tempos)
   
   # Open/Closed detection
   detect_open: true          # Enable open vs closed hi-hat detection
@@ -153,7 +153,7 @@ cymbals:
   # Cymbals need special handling due to long decay - prevent retriggering on sustain
   onset_threshold: 0.15      # Less sensitive than global (0.01) to avoid retriggering on decay
   onset_delta: 0.02          # Less sensitive peak picking (global: 0.005)
-  onset_wait: 10             # Longer wait between peaks: 10 frames = ~115ms (global: 1 frame = ~11ms)
+  onset_wait: 20             # Longer wait between peaks: 10 frames = ~115ms (global: 1 frame = ~11ms)
   
   # Spectral filtering
   geomean_threshold: 10      # Geometric mean of body (1-4kHz) + brilliance (4-10kHz) energy
@@ -183,15 +183,9 @@ learning_mode:
   kept_velocity_normal: true         # Use normal velocity calculation for kept hits
   
   # In learning mode, use very sensitive detection to catch everything
-  learning_onset_threshold: 0.05    # Very low threshold to catch all possible hits
+  learning_onset_threshold: 0.0001    # Very low threshold to catch all possible hits
   learning_delta: 0.002              # Very sensitive peak picking
   learning_wait: 1                   # Allow very close hits
-  
-  # MIDI matching tolerance for learning from reference MIDI
-  match_tolerance_sec: 0.05         # Time tolerance for matching onsets to MIDI notes (seconds)
-  
-  # Audio analysis settings for learning mode
-  peak_window_sec: 0.05             # Window size for peak detection during learning (seconds)
   
   # Output locations for learning workflow
   learning_midi_suffix: "_learning"  # Suffix for learning MIDI files

@@ -65,21 +65,27 @@ def _load_and_validate_audio(
     
     # Load audio (I/O)
     audio, sr = sf.read(str(audio_path))
-    
+
+    # Debug: Print audio shape and sample rate
+    print(f"    Audio shape: {audio.shape}, Sample rate: {sr}")
+    print(f"    Audio min: {audio.min():.6f}, max: {audio.max():.6f}, mean: {audio.mean():.6f}")
+    if audio.shape[0] > sr:
+        print(f"    First second min: {audio[:sr].min():.6f}, max: {audio[:sr].max():.6f}, mean: {audio[:sr].mean():.6f}")
+
     # Convert to mono if configured
     if config['audio']['force_mono'] and audio.ndim == 2:
         audio = ensure_mono(audio)
         print(f"    Converted stereo to mono")
-    
+
     # Check if audio is essentially silent
     max_amplitude = np.max(np.abs(audio))
     print(f"    Max amplitude: {max_amplitude:.6f}")
-    
+
     silence_threshold = config.get('audio', {}).get('silence_threshold', 0.001)
     if max_amplitude < silence_threshold:
         print(f"    Audio is silent, skipping...")
         return None, None
-    
+
     return audio, sr
 
 
@@ -114,11 +120,17 @@ def _configure_onset_detection(
             'learning_mode': True
         }
     else:
-        # Normal detection - use stem-specific settings if provided
-        threshold = stem_config.get('onset_threshold', onset_config['threshold'])
-        delta = stem_config.get('onset_delta', onset_config['delta'])
-        wait = stem_config.get('onset_wait', onset_config['wait'])
-        
+        # Normal detection - use stem-specific settings if provided, fallback to global if None
+        threshold = stem_config.get('onset_threshold')
+        if threshold is None:
+            threshold = onset_config['threshold']
+        delta = stem_config.get('onset_delta')
+        if delta is None:
+            delta = onset_config['delta']
+        wait = stem_config.get('onset_wait')
+        if wait is None:
+            wait = onset_config['wait']
+
         return {
             'hop_length': onset_config['hop_length'],
             'threshold': threshold,
@@ -282,7 +294,10 @@ def process_stem_to_midi(
     stem_type: str,
     drum_mapping: DrumMapping,
     config: Dict,
-    onset_threshold: float = 0.3,
+    onset_threshold: float,
+    onset_delta: float,
+    onset_wait: int,
+    hop_length: int,
     min_velocity: int = 80,
     max_velocity: int = 110,
     detect_hihat_open: bool = True
@@ -318,28 +333,36 @@ def process_stem_to_midi(
     onset_params = _configure_onset_detection(config, stem_type)
     learning_mode = onset_params['learning_mode']
 
-    # Always override threshold with CLI value unless in learning mode
-    threshold_to_use = onset_threshold if not learning_mode else onset_params['threshold']
+    # Use detection params passed in from CLI/main
+    onset_params['threshold'] = onset_threshold
+    onset_params['delta'] = onset_delta
+    onset_params['wait'] = onset_wait
+    onset_params['hop_length'] = hop_length
 
     onset_times, onset_strengths = detect_onsets(
         audio,
         sr,
         hop_length=onset_params['hop_length'],
-        threshold=threshold_to_use,
+        threshold=onset_params['threshold'],
         delta=onset_params['delta'],
         wait=onset_params['wait']
     )
+
+    # Debug: Print all raw detected onset times before filtering
+    print(f"    Raw detected onset times (s): {onset_times}")
 
     # Log detection mode
     if learning_mode:
         print(f"    Learning mode: Ultra-sensitive detection (threshold={onset_params['threshold']})")
     else:
         stem_config = config.get(stem_type, {})
-    wait_val = onset_params['wait'] if onset_params['wait'] is not None else 5
-    print(f"    CLI onset detection: threshold={threshold_to_use}, delta={onset_params['delta']}, wait={wait_val} (~{wait_val*11:.0f}ms min spacing)")
+        if (stem_config.get('onset_threshold') is not None or 
+            stem_config.get('onset_delta') is not None or 
+            stem_config.get('onset_wait') is not None):
+            print(f"    {stem_type.capitalize()}-specific onset detection: threshold={onset_params['threshold']}, delta={onset_params['delta']}, wait={onset_params['wait']} (~{onset_params['wait']*11:.0f}ms min spacing)")
 
     print(f"    Found {len(onset_times)} hits (before filtering) -> MIDI note {getattr(drum_mapping, stem_type)}")
-
+    
     if len(onset_times) == 0:
         return []
     
@@ -351,6 +374,9 @@ def process_stem_to_midi(
     
     # For snare, kick, toms, hihat, and cymbals: filter out artifacts/bleed by checking spectral content
     # This uses the functional core for all calculations
+    show_all_onsets = config.get('debug', {}).get('show_all_onsets', False)
+    show_spectral_data = config.get('debug', {}).get('show_spectral_data', False)
+
     if stem_type in ['snare', 'kick', 'toms', 'hihat', 'cymbals'] and len(onset_times) > 0:
         # Use functional core helper for filtering
         filter_result = filter_onsets_by_spectral(
@@ -363,7 +389,7 @@ def process_stem_to_midi(
             config,
             learning_mode=learning_mode
         )
-        
+
         # Extract filtered results
         onset_times = filter_result['filtered_times']
         onset_strengths = filter_result['filtered_strengths']
@@ -373,26 +399,19 @@ def process_stem_to_midi(
         hihat_spectral_data = filter_result['filtered_spectral'] if stem_type == 'hihat' else None
         all_onset_data = filter_result['all_onset_data']
         spectral_config = filter_result['spectral_config']
-    else:
-        # No filtering for this stem type
-        stem_geomeans = None
-        hihat_sustain_durations = None
-        hihat_spectral_data = None
-        all_onset_data = []
-        spectral_config = None
-        
-        # Show ALL onset data in chronological order with multiple ratios
-        if spectral_config is not None and all_onset_data:
-            geomean_threshold = spectral_config['geomean_threshold']
-            energy_labels = spectral_config['energy_labels']
+
+        # Show ALL onset data and spectral chart if debug flags are enabled
+        if show_all_onsets or show_spectral_data:
+            geomean_threshold = spectral_config['geomean_threshold'] if spectral_config else None
+            energy_labels = spectral_config['energy_labels'] if spectral_config else {'primary': 'BodyE', 'secondary': 'WireE'}
             stem_config = config.get(stem_type, {})
-            
+
             print(f"\n      ALL DETECTED ONSETS - SPECTRAL ANALYSIS:")
             if geomean_threshold is not None:
                 print(f"      Using GeoMean threshold: {geomean_threshold}")
             else:
                 print(f"      No threshold filtering (showing all detections)")
-            
+
             # Configure labels based on stem type
             if stem_type == 'snare':
                 print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body Energy (150-400Hz), WireE=Wire Energy (2-8kHz)")
@@ -410,29 +429,26 @@ def process_stem_to_midi(
                 print(f"      Str=Onset Strength, Amp=Peak Amplitude, BodyE=Body/Wash Energy (1-4kHz), BrillE=Brilliance/Attack Energy (4-10kHz), SustainMs=Sustain Duration")
                 min_sustain_ms = stem_config.get('min_sustain_ms', 50)
                 print(f"      Minimum sustain duration: {min_sustain_ms}ms")
-            
+
             energy_label_1 = energy_labels['primary']
             energy_label_2 = energy_labels['secondary']
             print(f"      GeoMean=sqrt({energy_label_1}*{energy_label_2}) - measures combined spectral energy")
-            
+
             # Header row - add SustainMs for cymbals and hihat
             if stem_type in ['cymbals', 'hihat']:
                 print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'SustainMs':>10s} {'Status':>10s}")
             else:
                 print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
-            
+
             for idx, data in enumerate(all_onset_data):
-                # Re-calculate filtering decision for display using functional core
                 is_real_hit = should_keep_onset(
                     geomean=data['body_wire_geomean'],
                     sustain_ms=data.get('sustain_ms'),
                     geomean_threshold=geomean_threshold,
-                    min_sustain_ms=spectral_config.get('min_sustain_ms'),
+                    min_sustain_ms=spectral_config.get('min_sustain_ms') if spectral_config else None,
                     stem_type=stem_type
                 )
-                
                 status = 'KEPT' if is_real_hit else 'REJECTED'
-                
                 if stem_type in ['cymbals', 'hihat']:
                     sustain_str = f"{data.get('sustain_ms', 0):10.1f}"
                     print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
@@ -440,7 +456,7 @@ def process_stem_to_midi(
                 else:
                     print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
                           f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")
-            
+
             # Show summary statistics
             print(f"\n      FILTERING SUMMARY:")
             if geomean_threshold is not None:
@@ -460,7 +476,7 @@ def process_stem_to_midi(
                 all_geomeans = [d['body_wire_geomean'] for d in all_onset_data]
                 if all_geomeans:
                     print(f"        GeoMean range: {min(all_geomeans):.1f} - {max(all_geomeans):.1f}")
-            
+
             num_rejected = len(all_onset_data) - len(onset_times)
             print(f"\n    After spectral filtering: {len(onset_times)} hits (rejected {num_rejected} artifacts)")
     

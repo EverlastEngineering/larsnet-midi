@@ -18,20 +18,19 @@ import argparse
 from typing import Union, List
 
 # Import modules (thin orchestration layer)
-from stems_to_midi import (
-    load_config,
-    DrumMapping,
-    create_midi_file,
-    learn_threshold_from_midi,
-    save_calibrated_config,
-    process_stem_to_midi
-)
+from stems_to_midi.config import load_config, DrumMapping
+from stems_to_midi.midi import create_midi_file
+from stems_to_midi.learning import learn_threshold_from_midi, save_calibrated_config
+from stems_to_midi.processor import process_stem_to_midi
 
 
 def stems_to_midi(
     stems_dir: Union[str, Path],
     output_dir: Union[str, Path],
-    onset_threshold: float = 0.3,
+    onset_threshold: float,
+    onset_delta: float,
+    onset_wait: int,
+    hop_length: int,
     min_velocity: int = 80,
     max_velocity: int = 110,
     tempo: float = 120.0,
@@ -95,9 +94,21 @@ def stems_to_midi(
     if not audio_files_to_process:
         raise RuntimeError(f"No valid stem directories found in {stems_dir} with expected naming pattern (e.g., name/name-kick.wav)")
     
+    # Set onset detection params from config if not provided
+    if onset_threshold is None:
+        onset_threshold = config['onset_detection']['threshold']
+    if onset_delta is None:
+        onset_delta = config['onset_detection']['delta']
+    if onset_wait is None:
+        onset_wait = config['onset_detection']['wait']
+    if hop_length is None:
+        hop_length = config['onset_detection']['hop_length']
     print(f"Processing {len(audio_files_to_process)} file(s)...")
     print(f"Settings:")
     print(f"  Onset threshold: {onset_threshold}")
+    print(f"  Onset delta: {onset_delta}")
+    print(f"  Onset wait: {onset_wait}")
+    print(f"  Hop length: {hop_length}")
     print(f"  Velocity range: {min_velocity}-{max_velocity}")
     print(f"  Tempo: {tempo} BPM")
     print(f"  Detect open hi-hat: {detect_hihat_open}")
@@ -129,6 +140,9 @@ def stems_to_midi(
                 drum_mapping,
                 config,
                 onset_threshold=onset_threshold,
+                onset_delta=onset_delta,
+                onset_wait=onset_wait,
+                hop_length=hop_length,
                 min_velocity=min_velocity,
                 max_velocity=max_velocity,
                 detect_hihat_open=hihat_detect
@@ -157,7 +171,7 @@ def stems_to_midi(
             
             if learning_mode:
                 print(f"  Saved LEARNING MIDI: {midi_path}")
-                print(f"  ** Load in DAW, delete false positives (velocity=1 hits), save as: {base_name}_edited.mid **\n")
+                print(f"  ** Load in DAW, delete false positives (velocity=1 hits), save as: {audio_file.stem}_edited.mid **\n")
             else:
                 print(f"  Saved: {midi_path}\n")
         else:
@@ -201,8 +215,14 @@ MIDI Note Mapping (General MIDI):
                         help="Directory containing separated stems (must have kick/, snare/, etc. subdirectories).")
     parser.add_argument('-o', '--output_dir', type=str, default='midi_output',
                         help="Directory to save MIDI files (default: midi_output).")
-    parser.add_argument('-t', '--threshold', type=float, default=0.3,
-                        help="Onset detection threshold (0-1). Lower = more sensitive (default: 0.3).")
+    parser.add_argument('-t', '--threshold', type=float, default=None,
+                        help="Onset detection threshold (0-1, lower = more sensitive). If not specified, uses value from midiconfig.yaml.")
+    parser.add_argument('--delta', type=float, default=None,
+                        help="Peak picking sensitivity for onset detection (lower = more sensitive). If not specified, uses value from midiconfig.yaml.")
+    parser.add_argument('--wait', type=int, default=None,
+                        help="Minimum frames between detected peaks (controls minimum spacing, 1 ≈ 11ms). If not specified, uses value from midiconfig.yaml.")
+    parser.add_argument('--hop-length', type=int, default=None,
+                        help="Number of samples between frames for onset detection (affects time resolution). If not specified, uses value from midiconfig.yaml.")
     parser.add_argument('--min-vel', type=int, default=40,
                         help="Minimum MIDI velocity (1-127, default: 40).")
     parser.add_argument('--max-vel', type=int, default=127,
@@ -238,7 +258,7 @@ MIDI Note Mapping (General MIDI):
         print(f"Using tempo from config: {args.tempo} BPM\n")
     
     # Validate
-    if not (0.0 <= args.threshold <= 1.0):
+    if args.threshold is not None and not (0.0 <= args.threshold <= 1.0):
         parser.error("--threshold must be between 0.0 and 1.0")
     if not (1 <= args.min_vel <= 127):
         parser.error("--min-vel must be between 1 and 127")
@@ -246,28 +266,34 @@ MIDI Note Mapping (General MIDI):
         parser.error("--max-vel must be between 1 and 127")
     if args.min_vel > args.max_vel:
         parser.error("--min-vel cannot be greater than --max-vel")
-    
-    # Handle learning mode workflows
+        parser.add_argument('--delta', type=float, default=None,
+                            help="Onset peak picking sensitivity (default: from config). Lower = more sensitive.")
+        parser.add_argument('--wait', type=int, default=None,
+                            help="Minimum frames between peaks (default: from config). 1 = ~11ms.")
+        parser.add_argument('--hop-length', type=int, default=None,
+                            help="Samples between frames (default: from config). Affects time resolution.")
+        parser.add_argument('-t', '--threshold', type=float, default=None,
+                            help="Samples between frames (default: from config). Affects time resolution.")
+    # Set detection params from args or config for all entry points
+    config = load_config()
+    onset_threshold = args.threshold if args.threshold is not None else config['onset_detection']['threshold']
+    onset_delta = args.delta if args.delta is not None else config['onset_detection']['delta']
+    onset_wait = args.wait if args.wait is not None else config['onset_detection']['wait']
+    hop_length = args.hop_length if args.hop_length is not None else config['onset_detection']['hop_length']
+
     if args.learn_from_midi:
         # Learn thresholds from edited MIDI
         from pathlib import Path
-        
         audio_file = Path(args.learn_from_midi[0])
         orig_midi = Path(args.learn_from_midi[1])
         edited_midi = Path(args.learn_from_midi[2])
-        
         if not audio_file.exists():
             parser.error(f"Audio file not found: {audio_file}")
         if not orig_midi.exists():
             parser.error(f"Original MIDI not found: {orig_midi}")
         if not edited_midi.exists():
             parser.error(f"Edited MIDI not found: {edited_midi}")
-        
-        # Load config
-        config = load_config()
         drum_mapping = DrumMapping()
-        
-        # Learn thresholds
         learned = learn_threshold_from_midi(
             audio_file,
             orig_midi,
@@ -276,37 +302,29 @@ MIDI Note Mapping (General MIDI):
             config,
             drum_mapping
         )
-        
         if learned:
-            # Save calibrated config
             output_config = Path(config['learning_mode']['calibrated_config_output'])
             save_calibrated_config(config, {args.learn_stem: learned}, output_config)
-    
     elif args.learn:
-        # Enable learning mode in config temporarily
         import tempfile
         import shutil
-        
-        # Load and modify config
-        config = load_config()
         config['learning_mode']['enabled'] = True
-        
-        # Save to temp file
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            import yaml
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
             temp_config = f.name
-        
         try:
-            # Run conversion with learning mode
             print("=== LEARNING MODE ENABLED ===")
             print("All detections will be exported. Rejected hits have velocity=1.")
             print("Load MIDI in DAW, delete false positives, save as *_edited.mid")
             print("Then run: python stems_to_midi.py --learn-from-midi <audio> <original_midi> <edited_midi>\n")
-            
             stems_to_midi(
                 stems_dir=args.input_dir,
                 output_dir=args.output_dir,
-                onset_threshold=args.threshold,
+                onset_threshold=onset_threshold,
+                onset_delta=onset_delta,
+                onset_wait=onset_wait,
+                hop_length=hop_length,
                 min_velocity=args.min_vel,
                 max_velocity=args.max_vel,
                 tempo=args.tempo,
@@ -314,15 +332,15 @@ MIDI Note Mapping (General MIDI):
                 stems_to_process=args.stems
             )
         finally:
-            # Clean up temp config
             Path(temp_config).unlink()
-    
     else:
-        # Normal mode
         stems_to_midi(
             stems_dir=args.input_dir,
             output_dir=args.output_dir,
-            onset_threshold=args.threshold,
+            onset_threshold=onset_threshold,
+            onset_delta=onset_delta,
+            onset_wait=onset_wait,
+            hop_length=hop_length,
             min_velocity=args.min_vel,
             max_velocity=args.max_vel,
             tempo=args.tempo,
