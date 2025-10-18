@@ -40,9 +40,6 @@ test_*/
 *.mp3
 *.flac
 
-# Pretrained model files (large binary files)
-pretrained_larsnet_models/
-
 # Logs
 *.log
 
