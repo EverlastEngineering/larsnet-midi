@@ -78,9 +78,9 @@ snare:
   midi_note: 38
   
   # Onset detection (overrides global onset_detection settings for snare)
-  onset_threshold: null      # Use global setting (0.01) - snares are loud and transient
-  onset_delta: null          # Use global setting (0.005)
-  onset_wait: null           # Use global setting (1 frame ~11ms)
+  onset_threshold: 0.2          # Use global setting (0.01) - snares are loud and transient
+  onset_delta: null             # Use global setting (0.005)
+  onset_wait: 2                 # Use global setting (1 frame ~11ms)
   timing_offset: -0.007         # Timing offset in seconds (0 = no offset)
   
   # Spectral filtering uses FFT analysis to distinguish real snare hits from artifacts
