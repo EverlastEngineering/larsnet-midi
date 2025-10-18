@@ -39,6 +39,9 @@ test_*/
 *.wav
 *.mp3
 *.flac
+*.mp4
+*.avi
+*.mov
 
 # Logs
 *.log
