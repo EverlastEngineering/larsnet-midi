@@ -236,7 +236,8 @@ def _create_midi_events(
     hihat_states: List[str],
     tom_classifications: Optional[np.ndarray],
     drum_mapping: DrumMapping,
-    config: Dict
+    config: Dict,
+    sustain_durations: Optional[List[float]] = None
 ) -> List[Dict]:
     """
     Create MIDI events from onset data.
@@ -254,6 +255,7 @@ def _create_midi_events(
         tom_classifications: Tom classifications (low/mid/high)
         drum_mapping: MIDI note mapping
         config: Configuration dictionary
+        sustain_durations: Optional list of sustain durations in milliseconds (for cymbals)
     
     Returns:
         List of MIDI event dictionaries
@@ -284,15 +286,22 @@ def _create_midi_events(
         else:
             midi_note = note
         
-        # Duration: until next hit or default
-        if i < len(onset_times) - 1:
+        # Duration: use sustain duration for cymbals, otherwise time until next hit
+        if stem_type == 'cymbals' and sustain_durations is not None and i < len(sustain_durations):
+            # Use actual sustain duration from envelope analysis (in milliseconds)
+            duration = sustain_durations[i] / 1000.0  # Convert ms to seconds
+            # Apply a more generous max for cymbals
+            cymbal_max = config.get(stem_type, {}).get('max_note_duration', 2.0)
+            duration = min(duration, cymbal_max)
+        elif i < len(onset_times) - 1:
+            # Standard duration: until next hit
             duration = onset_times[i + 1] - time
+            max_duration = config.get('midi', {}).get('max_note_duration', 0.5)
+            duration = min(duration, max_duration)
         else:
+            # Last note: use default duration
             default_duration = config.get('audio', {}).get('default_note_duration', 0.1)
             duration = default_duration
-        
-        max_duration = config.get('midi', {}).get('max_note_duration', 0.5)
-        duration = min(duration, max_duration)
         
         # Apply timing offset to MIDI event (compensates for onset detection timing)
         midi_time = float(time) + timing_offset
@@ -423,6 +432,7 @@ def process_stem_to_midi(
         stem_geomeans = filter_result['filtered_geomeans']
         hihat_sustain_durations = filter_result['filtered_sustains'] if stem_type == 'hihat' else None
         hihat_spectral_data = filter_result['filtered_spectral'] if stem_type == 'hihat' else None
+        cymbal_sustain_durations = filter_result['filtered_sustains'] if stem_type == 'cymbals' else None
         all_onset_data = filter_result['all_onset_data']
         spectral_config = filter_result['spectral_config']
 
@@ -600,7 +610,8 @@ def process_stem_to_midi(
         hihat_states,
         tom_classifications,
         drum_mapping,
-        config
+        config,
+        sustain_durations=cymbal_sustain_durations if stem_type == 'cymbals' else None
     )
     
     return events

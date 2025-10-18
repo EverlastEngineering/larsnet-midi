@@ -167,21 +167,33 @@ hihat:
   
 cymbals:
   # Crash/ride cymbal settings
-  midi_note: 49
+  midi_note: 57              # GM: 49=Crash 1 (left), 57=Crash 2 (right)
   
   # Onset detection (overrides global onset_detection settings for cymbals)
-  # Cymbals need special handling due to long decay - prevent retriggering on sustain
-  onset_threshold: 0.15      # Less sensitive than global (0.01) to avoid retriggering on decay
-  onset_delta: 0.02          # Less sensitive peak picking (global: 0.005)
-  onset_wait: 20             # Longer wait between peaks: 10 frames = ~115ms (global: 1 frame = ~11ms)
+  # Strategy: Low sensitivity to detect only strong initial hits, then use spectral
+  # decay analysis to filter retriggering artifacts
+  onset_threshold: 0.35      # High threshold - only detect strong crashes (reduced false positives)
+  onset_delta: 0.1           # Higher delta for stricter peak picking
+  onset_wait: 10             # 10 frames = ~115ms min spacing (allows rapid crashes)
   timing_offset: 0.0         # Timing offset in seconds (0 = no offset)
   
+  # Sustain analysis and decay pattern detection
+  sustain_window_sec: 2.0    # Window size for sustain analysis AND decay pattern analysis (seconds)
+                              # Cymbals need longer window than default (0.2s) to measure full decay
+                              # Used to analyze spectral energy decay pattern: onsets within this window
+                              # are filtered if they occur during exponential decay (not independent hits)
+  
   # Spectral filtering
-  geomean_threshold: 10      # Geometric mean of body (1-4kHz) + brilliance (4-10kHz) energy
+  geomean_threshold: 100      # Geometric mean of body (1-4kHz) + brilliance (4-10kHz) energy
                               # Real cymbals: 50-500, Artifacts: 5-20
   min_sustain_ms: 150        # Minimum sustain duration in milliseconds
                               # Real cymbal hits sustain longer than clicks/artifacts
                               # Typical values: 100-200ms
+  
+  # MIDI note duration
+  max_note_duration: 2.0     # Maximum MIDI note duration in seconds
+                              # Uses actual sustain duration from envelope analysis
+                              # Allows long cymbal crashes to ring out naturally
 
 # MIDI Output Settings
 midi:

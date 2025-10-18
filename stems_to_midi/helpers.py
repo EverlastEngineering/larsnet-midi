@@ -148,6 +148,99 @@ def calculate_spectral_energies(
     return energies
 
 
+def analyze_cymbal_decay_pattern(
+    audio: np.ndarray,
+    onset_sample: int,
+    sr: int,
+    window_sec: float = 2.0,
+    num_windows: int = 8
+) -> Dict[str, any]:
+    """
+    Analyze the spectral energy decay pattern after a cymbal hit.
+    
+    Divides the analysis window into smaller chunks and measures spectral
+    energy in each to detect exponential decay characteristic of a single
+    cymbal fading out vs multiple independent hits.
+    
+    Pure function - no side effects.
+    
+    Args:
+        audio: Audio signal (mono)
+        onset_sample: Sample index of onset
+        sr: Sample rate
+        window_sec: Total analysis window duration in seconds
+        num_windows: Number of sub-windows to analyze
+    
+    Returns:
+        Dict with:
+        - decay_energies: List of spectral energies over time
+        - is_decaying: Boolean indicating if pattern looks like decay
+        - decay_rate: Estimated decay rate (negative = decaying)
+    """
+    window_samples = int(window_sec * sr)
+    end_sample = min(onset_sample + window_samples, len(audio))
+    total_segment = audio[onset_sample:end_sample]
+    
+    if len(total_segment) < num_windows * 100:
+        return {
+            'decay_energies': [],
+            'is_decaying': False,
+            'decay_rate': 0.0
+        }
+    
+    # Define cymbal frequency range (brilliance/high frequencies)
+    freq_ranges = {'cymbal': (4000.0, 20000.0)}
+    
+    # Measure energy in each sub-window
+    chunk_size = len(total_segment) // num_windows
+    decay_energies = []
+    
+    for i in range(num_windows):
+        start_idx = i * chunk_size
+        end_idx = start_idx + chunk_size
+        chunk = total_segment[start_idx:end_idx]
+        
+        if len(chunk) < 100:
+            break
+        
+        energies = calculate_spectral_energies(chunk, sr, freq_ranges)
+        decay_energies.append(energies['cymbal'])
+    
+    if len(decay_energies) < 3:
+        return {
+            'decay_energies': decay_energies,
+            'is_decaying': False,
+            'decay_rate': 0.0
+        }
+    
+    # Analyze decay pattern
+    # A true decay should show monotonic decrease or occasional plateaus
+    # NOT increases (which would indicate new hits)
+    
+    # Calculate relative changes between consecutive windows
+    changes = []
+    for i in range(1, len(decay_energies)):
+        if decay_energies[i-1] > 0:
+            change = (decay_energies[i] - decay_energies[i-1]) / decay_energies[i-1]
+            changes.append(change)
+    
+    # Count increases vs decreases
+    increases = sum(1 for c in changes if c > 0.1)  # 10% threshold for significant increase
+    decreases = sum(1 for c in changes if c < -0.1)
+    
+    # Pattern is decaying if we see mostly decreases and few increases
+    is_decaying = decreases >= increases
+    
+    # Calculate average decay rate (negative = decaying)
+    decay_rate = float(np.mean(changes)) if changes else 0.0
+    
+    return {
+        'decay_energies': decay_energies,
+        'is_decaying': is_decaying,
+        'decay_rate': decay_rate
+    }
+
+
 def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
     """
     Get spectral configuration for a specific stem type.
@@ -580,7 +673,7 @@ def filter_onsets_by_spectral(
         - filtered_strengths: np.ndarray
         - filtered_amplitudes: np.ndarray
         - filtered_geomeans: np.ndarray
-        - filtered_sustains: List (for hihat only)
+        - filtered_sustains: List (for hihat and cymbals)
         - filtered_spectral: List (for hihat only)
         - all_onset_data: List[Dict] (analysis for all onsets, for debugging)
         - spectral_config: Dict (configuration used)
@@ -672,15 +765,82 @@ def filter_onsets_by_spectral(
             filtered_strengths.append(strength)
             filtered_amplitudes.append(peak_amplitude)
             filtered_geomeans.append(body_wire_geomean)
-            # Store sustain duration and spectral data for hihat classification
-            if stem_type == 'hihat' and sustain_duration is not None:
+            # Store sustain duration and spectral data for hihat/cymbal classification
+            if stem_type in ['hihat', 'cymbals'] and sustain_duration is not None:
                 filtered_sustains.append(sustain_duration)
-                filtered_spectral.append({
-                    'primary_energy': primary_energy,
-                    'secondary_energy': secondary_energy
-                })
+                if stem_type == 'hihat':
+                    filtered_spectral.append({
+                        'primary_energy': primary_energy,
+                        'secondary_energy': secondary_energy
+                    })
     
-    # SECOND PASS: Statistical outlier detection (kick only, if enabled)
+    # SECOND PASS: Remove cymbal retriggering using decay pattern analysis
+    # Cymbals can have energy modulation during sustain that looks like new onsets
+    # Analyze spectral decay pattern to distinguish true hits from decay artifacts
+    if stem_type == 'cymbals' and not learning_mode and len(filtered_times) > 1:
+        # Get sustain window for cymbals
+        cymbal_config = config.get('cymbals', {})
+        sustain_window_sec = cymbal_config.get('sustain_window_sec', 2.0)
+        
+        # Build list of times to keep
+        final_times = []
+        final_strengths = []
+        final_amplitudes = []
+        final_geomeans = []
+        final_sustains = []
+        
+        # Track active decay zones (onset_time -> decay pattern)
+        active_decays = {}
+        
+        for i in range(len(filtered_times)):
+            current_time = filtered_times[i]
+            current_sample = int(current_time * sr)
+            
+            # Check if this onset falls within any active decay zone
+            is_retrigger = False
+            for prev_time, decay_info in active_decays.items():
+                time_diff = current_time - prev_time
+                
+                # If within decay window
+                if 0 < time_diff < sustain_window_sec:
+                    # Check if we're in a decaying region
+                    if decay_info['is_decaying']:
+                        is_retrigger = True
+                        break
+            
+            if not is_retrigger:
+                # This is a legitimate hit - keep it
+                final_times.append(filtered_times[i])
+                final_strengths.append(filtered_strengths[i])
+                final_amplitudes.append(filtered_amplitudes[i])
+                final_geomeans.append(filtered_geomeans[i])
+                if i < len(filtered_sustains):
+                    final_sustains.append(filtered_sustains[i])
+                
+                # Analyze decay pattern starting from this onset
+                decay_pattern = analyze_cymbal_decay_pattern(
+                    audio, current_sample, sr, 
+                    window_sec=sustain_window_sec,
+                    num_windows=8
+                )
+                
+                # Store for checking subsequent onsets
+                active_decays[current_time] = decay_pattern
+                
+                # Clean up old decays outside the window
+                active_decays = {
+                    t: info for t, info in active_decays.items()
+                    if current_time - t < sustain_window_sec
+                }
+        
+        # Update filtered arrays
+        filtered_times = final_times
+        filtered_strengths = final_strengths
+        filtered_amplitudes = final_amplitudes
+        filtered_geomeans = final_geomeans
+        filtered_sustains = final_sustains
+    
+    # THIRD PASS: Statistical outlier detection (kick only, if enabled)
     # This catches snare bleed that passes geomean threshold but has abnormal FundE/BodyE ratio
     
     if stem_type == 'kick' and not learning_mode:
@@ -1111,7 +1271,12 @@ def analyze_onset_spectral(
     # Calculate sustain duration if needed
     sustain_ms = None
     if stem_type in ['hihat', 'cymbals']:
-        sustain_window_sec = config.get('audio', {}).get('sustain_window_sec', 0.2)
+        # Get stem-specific sustain window, fallback to global
+        stem_config = config.get(stem_type, {})
+        sustain_window_sec = stem_config.get('sustain_window_sec')
+        if sustain_window_sec is None:
+            sustain_window_sec = config.get('audio', {}).get('sustain_window_sec', 0.2)
+        
         envelope_threshold = config.get('audio', {}).get('envelope_threshold', 0.1)
         smooth_kernel = config.get('audio', {}).get('envelope_smooth_kernel', 51)
         

@@ -70,8 +70,8 @@ def stems_to_midi(
     if stems_to_process is None:
         stems_to_process = ['kick', 'snare', 'toms', 'hihat', 'cymbals']
     
-    # Initialize drum mapping
-    drum_mapping = DrumMapping()
+    # Initialize drum mapping from config
+    drum_mapping = DrumMapping.from_config(config)
     
     # Find all audio file directories (new structure: stems_dir/input_name/)
     # Each subdirectory should contain files like input_name-kick.wav, input_name-snare.wav, etc.
@@ -303,7 +303,7 @@ MIDI Note Mapping (General MIDI):
             parser.error(f"Original MIDI not found: {orig_midi}")
         if not edited_midi.exists():
             parser.error(f"Edited MIDI not found: {edited_midi}")
-        drum_mapping = DrumMapping()
+        drum_mapping = DrumMapping.from_config(config)
         learned = learn_threshold_from_midi(
             audio_file,
             orig_midi,

@@ -57,6 +57,29 @@ class DrumMapping:
     crash: int = 49         # C#2 - Crash Cymbal 1
     ride: int = 51          # D#2 - Ride Cymbal 1
     
+    @classmethod
+    def from_config(cls, config: Dict) -> 'DrumMapping':
+        """
+        Create DrumMapping from configuration dictionary.
+        
+        Args:
+            config: Configuration dictionary with stem settings
+        
+        Returns:
+            DrumMapping instance with values from config
+        """
+        return cls(
+            kick=config.get('kick', {}).get('midi_note', 36),
+            snare=config.get('snare', {}).get('midi_note', 38),
+            tom_low=config.get('toms', {}).get('midi_note_low', 45),
+            tom_mid=config.get('toms', {}).get('midi_note_mid', 47),
+            tom_high=config.get('toms', {}).get('midi_note_high', 50),
+            hihat_closed=config.get('hihat', {}).get('midi_note_closed', 42),
+            hihat_open=config.get('hihat', {}).get('midi_note_open', 46),
+            crash=config.get('cymbals', {}).get('midi_note', 49),
+            ride=config.get('cymbals', {}).get('midi_note', 51)  # Future support for ride
+        )
+    
     # Aliases for convenience
     @property
     def hihat(self) -> int:
