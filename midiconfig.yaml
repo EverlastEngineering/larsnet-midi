@@ -137,7 +137,7 @@ hihat:
   
   # Onset detection (overrides global onset_detection settings for hihat)
   # Hi-hats can have very fast repeated hits, similar to cymbals but shorter sustain
-  onset_threshold: 0.05      # Moderate sensitivity (between global 0.01 and cymbals 0.15)
+  onset_threshold: 0.1      # Moderate sensitivity (between global 0.01 and cymbals 0.15)
   onset_delta: 0.01          # Moderate peak picking
   onset_wait: 5              # 3 frames = ~35ms min spacing (allows 16th notes at fast tempos)
   timing_offset: 0.0         # Timing offset in seconds (0 = no offset)
@@ -145,14 +145,14 @@ hihat:
   # Open/Closed detection
   detect_open: true          # Enable open vs closed hi-hat detection
   decay_threshold: 0.65      # Threshold for open detection (higher = fewer open detections)
-  open_sustain_ms: 150       # Open hi-hat threshold (ms): >150ms = open, <150ms = closed
+  open_sustain_ms: 90       # Open hi-hat threshold (ms): >150ms = open, <150ms = closed
   min_sustain_ms: 25         # Minimum sustain for artifact filtering (handclaps ~20ms, real hihats >25ms)
   
   # Handclap detection (from hihat stem bleed)
   detect_handclap: true      # Enable handclap detection (high energy + short transient)
-  handclap_body_min: 20      # Minimum body energy (500-2kHz) for handclap
+  handclap_body_min: 400      # Minimum body energy (500-2kHz) for handclap
   handclap_sizzle_min: 100   # Minimum sizzle energy (6-12kHz) for handclap
-  handclap_sustain_max: 50   # Maximum sustain (ms) - handclaps are very short transients
+  handclap_sustain_max: 75   # Maximum sustain (ms) - handclaps are very short transients
   
   # Spectral filtering
   geomean_threshold: 50.0    # Geometric mean of body (500-2kHz) + sizzle (6-12kHz) energy

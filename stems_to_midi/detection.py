@@ -22,7 +22,8 @@ from .helpers import (
     ensure_mono,
     calculate_sustain_duration,
     estimate_velocity,
-    classify_tom_pitch
+    classify_tom_pitch,
+    calculate_peak_amplitude,
 )
 
 # Import config
@@ -283,11 +284,16 @@ def detect_hihat_state(
     if (sustain_durations is not None and len(sustain_durations) == len(onset_times) and
         spectral_data is not None and len(spectral_data) == len(onset_times)):
         for i, sustain_ms in enumerate(sustain_durations):
+            # Get spectral energies for this onset
+            body_energy = spectral_data[i].get('primary_energy', 0)
+            sizzle_energy = spectral_data[i].get('secondary_energy', 0)
+            
+            # Calculate peak amplitude for this onset
+            onset_sample = int(onset_times[i] * sr)
+            peak_amplitude = calculate_peak_amplitude(audio, onset_sample, sr, window_ms=10.0)
+            
             # Check for handclap first (if enabled)
             if detect_handclap:
-                body_energy = spectral_data[i].get('primary_energy', 0)
-                sizzle_energy = spectral_data[i].get('secondary_energy', 0)
-                
                 # Handclap: high energy + very short transient
                 if (body_energy > handclap_body_min and 
                     sizzle_energy > handclap_sizzle_min and 
@@ -295,8 +301,10 @@ def detect_hihat_state(
                     states.append('handclap')
                     continue
             
-            # Otherwise classify as open or closed
-            if sustain_ms > open_sustain_threshold_ms:
+            # Otherwise classify as open or closed based on sustain, energy, and amplitude
+            if (sustain_ms > open_sustain_threshold_ms 
+                and body_energy > 200 
+                and peak_amplitude < 0.15):  # Peak amplitude is 0.0-1.0 range
                 states.append('open')
             else:
                 states.append('closed')
@@ -325,8 +333,11 @@ def detect_hihat_state(
             smooth_kernel=smooth_kernel
         )
         
-        # Classify based on sustain duration
-        if sustain_duration_ms > open_sustain_threshold_ms:
+        # Calculate peak amplitude for this onset
+        peak_amplitude = calculate_peak_amplitude(audio, onset_sample, sr, window_ms=10.0)
+        
+        # Classify based on sustain duration and peak amplitude (fallback when no spectral data)
+        if sustain_duration_ms > open_sustain_threshold_ms and peak_amplitude < 0.15:
             states.append('open')
         else:
             states.append('closed')

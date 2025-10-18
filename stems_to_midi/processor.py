@@ -353,10 +353,16 @@ def process_stem_to_midi(
     onset_params = _configure_onset_detection(config, stem_type)
     learning_mode = onset_params['learning_mode']
 
-    # Use detection params passed in from CLI/main
-    onset_params['threshold'] = onset_threshold
-    onset_params['delta'] = onset_delta
-    onset_params['wait'] = onset_wait
+    # CLI params are used as fallbacks - per-stem config takes precedence
+    # Only override if the stem config didn't specify a value (was None)
+    stem_config = config.get(stem_type, {})
+    if stem_config.get('onset_threshold') is None:
+        onset_params['threshold'] = onset_threshold
+    if stem_config.get('onset_delta') is None:
+        onset_params['delta'] = onset_delta
+    if stem_config.get('onset_wait') is None:
+        onset_params['wait'] = onset_wait
+    # hop_length always comes from global config (not per-stem)
     onset_params['hop_length'] = hop_length
 
     onset_times, onset_strengths = detect_onsets(
