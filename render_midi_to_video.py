@@ -30,18 +30,18 @@ class DrumNote:
 
 # Standard GM Drum Map - adjust based on your MIDI files
 DRUM_MAP = {
-    36: {"name": "Kick", "lane": 0, "color": (0, 255, 255)},      # Yellow
-    38: {"name": "Snare", "lane": 1, "color": (0, 0, 255)},       # Red
-    40: {"name": "Snare Rim", "lane": 1, "color": (0, 0, 200)},   # Dark Red
-    42: {"name": "Hi-Hat Closed", "lane": 2, "color": (255, 255, 0)},  # Cyan
-    44: {"name": "Hi-Hat Pedal", "lane": 2, "color": (200, 200, 0)},   # Dark Cyan
-    46: {"name": "Hi-Hat Open", "lane": 3, "color": (255, 200, 0)},    # Light Blue
-    47: {"name": "Tom 1", "lane": 4, "color": (0, 255, 0)},       # Green
-    48: {"name": "Tom 2", "lane": 4, "color": (0, 200, 0)},       # Dark Green
-    50: {"name": "Tom 3", "lane": 5, "color": (255, 0, 255)},     # Magenta
-    49: {"name": "Crash", "lane": 6, "color": (255, 100, 0)},     # Orange
-    51: {"name": "Ride", "lane": 7, "color": (255, 150, 100)},    # Light Orange
-    55: {"name": "Splash", "lane": 6, "color": (255, 80, 0)},     # Dark Orange
+    42: {"name": "Hi-Hat Closed", "lane": 0, "color": (255, 255, 0)},  # Cyan
+    44: {"name": "Hi-Hat Pedal", "lane": 1, "color": (200, 200, 0)},   # Dark Cyan
+    46: {"name": "Hi-Hat Open", "lane": 2, "color": (255, 200, 0)},    # Light Blue
+    38: {"name": "Snare", "lane": 3, "color": (0, 0, 255)},       # Red
+    40: {"name": "Snare Rim", "lane": 4, "color": (0, 0, 200)},   # Dark Red
+    36: {"name": "Kick", "lane": 5, "color": (0, 255, 255)},      # Yellow
+    47: {"name": "Tom 1", "lane": 6, "color": (0, 255, 0)},       # Green
+    48: {"name": "Tom 2", "lane": 7, "color": (0, 200, 0)},       # Dark Green
+    50: {"name": "Tom 3", "lane": 8, "color": (255, 0, 255)},     # Magenta
+    49: {"name": "Left Cymbal", "lane": 9, "color": (255, 80, 0)},     # Dark Orange
+    57: {"name": "Right Cymbal", "lane": 10, "color": (255, 100, 0)},     # Orange
+    54: {"name": "Ride", "lane": 11, "color": (255, 150, 100)},    # Light Orange
 }
 
 
@@ -52,10 +52,11 @@ class MidiVideoRenderer:
         self.width = width
         self.height = height
         self.fps = fps
-        self.note_width = width // 10  # Width of each lane
+        self.num_lanes = len(set(info["lane"] for info in DRUM_MAP.values()))  
+        self.note_width = width // self.num_lanes
         self.strike_line_y = int(height * 0.85)  # Where notes are "hit"
         self.note_height = 30  # Height of each note rectangle
-        self.pixels_per_second = height * 0.7  # How fast notes fall
+        self.pixels_per_second = height * 0.5  # How fast notes fall
         
     def parse_midi(self, midi_path: str) -> Tuple[List[DrumNote], float]:
         """Parse MIDI file and extract drum notes with timing"""
@@ -110,7 +111,7 @@ class MidiVideoRenderer:
                  (255, 255, 255), 4)
         
         # Draw lane markers at strike line
-        for lane in range(8):
+        for lane in range(self.num_lanes):
             x = lane * self.note_width + self.note_width // 2
             cv2.circle(frame, (x, self.strike_line_y), 20, (200, 200, 200), 2)
     
@@ -209,7 +210,7 @@ class MidiVideoRenderer:
             frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
             
             # Draw lanes
-            for lane in range(8):
+            for lane in range(self.num_lanes):
                 self.draw_lane(frame, lane)
             
             # Draw strike line
