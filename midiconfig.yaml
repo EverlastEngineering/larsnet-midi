@@ -9,7 +9,7 @@ audio:
   min_segment_length: 512    # Minimum audio segment length for analysis (samples)
   
   # Peak amplitude detection
-  peak_window_sec: 0.05      # Window size for peak detection (seconds)
+  peak_window_sec: 0.10      # Window size for peak detection (seconds)
   
   # Sustain detection (envelope analysis)
   sustain_window_sec: 0.2    # Window size for sustain analysis (seconds)
@@ -22,8 +22,8 @@ audio:
 
 # Onset Detection Parameters (applies to all stems)
 onset_detection:
-  threshold: 0.01      # Onset strength threshold (0-1). Lower = more sensitive, catches quieter hits
-  delta: 0.005         # Peak picking sensitivity. Lower = more sensitive
+  threshold: 0.3       # Onset strength threshold (0-1). Lower = more sensitive, catches quieter hits
+  delta: 0.01           # Peak picking sensitivity. Lower = more sensitive
   wait: 3              # Minimum frames between peaks. 1 = ~11ms, allows fast repeated hits
   hop_length: 512      # Samples between frames. Affects time resolution
 
@@ -35,9 +35,9 @@ kick:
   midi_note: 36
   
   # Onset detection (overrides global onset_detection settings for kick)
-  onset_threshold: null      # Use global setting (0.01) - kicks are loud and easy to detect
-  onset_delta: null          # Use global setting (0.005)
-  onset_wait: 5           # Use global setting (1 frame ~11ms)
+  onset_threshold: 0.1      # Use global setting (0.01) - kicks are loud and easy to detect
+  onset_delta: 0.1          # Use global setting (0.005)
+  onset_wait: 2           # Use global setting (1 frame ~11ms)
   
   # Spectral filtering uses FFT analysis to distinguish real kicks from artifacts
   # Real kick has energy in fundamental (40-80Hz), body (80-150Hz), and attack (2-6kHz)
@@ -52,9 +52,9 @@ kick:
   fundamental_freq_min: 40   # Start of fundamental range (deep bass)
   fundamental_freq_max: 80   # End of fundamental range
   body_freq_min: 80          # Start of body/attack range
-  body_freq_max: 150         # End of body/attack range
-  attack_freq_min: 2000      # Start of beater attack range
-  attack_freq_max: 6000      # End of beater attack range
+  body_freq_max: 250         # End of body/attack range
+  attack_freq_min: 1500      # Start of beater attack range
+  attack_freq_max: 5000      # End of beater attack range
   
 snare:
   # Snare drum settings

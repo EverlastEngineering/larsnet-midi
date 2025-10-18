@@ -1,13 +1,24 @@
 audio:
   force_mono: true
+  silence_threshold: 0.001
+  min_segment_length: 512
+  peak_window_sec: 0.05
+  sustain_window_sec: 0.2
+  envelope_threshold: 0.1
+  envelope_smooth_kernel: 51
+  default_note_duration: 0.1
+  very_short_duration: 0.01
 onset_detection:
   threshold: 0.01
   delta: 0.005
-  wait: 1
+  wait: 3
   hop_length: 512
 kick:
   midi_note: 36
-  geomean_threshold: 150.0
+  onset_threshold: null
+  onset_delta: null
+  onset_wait: 5
+  geomean_threshold: 252.87207908893873
   fundamental_freq_min: 40
   fundamental_freq_max: 80
   body_freq_min: 80
@@ -16,7 +27,10 @@ kick:
   attack_freq_max: 6000
 snare:
   midi_note: 38
-  geomean_threshold: 100.0
+  onset_threshold: null
+  onset_delta: null
+  onset_wait: null
+  geomean_threshold: 40.0
   low_freq_min: 40
   low_freq_max: 150
   body_freq_min: 150
@@ -24,37 +38,51 @@ snare:
   wire_freq_min: 2000
   wire_freq_max: 8000
 toms:
-  midi_note: 45
-  geomean_threshold: null
+  midi_note_low: 45
+  midi_note_mid: 47
+  midi_note_high: 50
+  onset_threshold: null
+  onset_delta: null
+  onset_wait: null
+  enable_pitch_detection: true
+  pitch_method: yin
+  min_pitch_hz: 60
+  max_pitch_hz: 250
+  geomean_threshold: 80.0
+  fundamental_freq_min: 60
+  fundamental_freq_max: 150
+  body_freq_min: 150
+  body_freq_max: 400
 hihat:
-  midi_note: 42
+  midi_note_closed: 42
   midi_note_open: 46
-  geomean_threshold: null
+  midi_note: 42
+  onset_threshold: 0.05
+  onset_delta: 0.01
+  onset_wait: 5
   detect_open: true
   decay_threshold: 0.65
+  open_sustain_ms: 150
+  min_sustain_ms: 25
+  detect_handclap: true
+  handclap_body_min: 20
+  handclap_sizzle_min: 100
+  handclap_sustain_max: 50
+  geomean_threshold: 50.0
+  body_freq_min: 500
+  body_freq_max: 2000
+  sizzle_freq_min: 6000
+  sizzle_freq_max: 12000
 cymbals:
   midi_note: 49
-  geomean_threshold: !!python/object/apply:numpy._core.multiarray.scalar
-  - !!python/object/apply:numpy.dtype
-    args:
-    - f8
-    - false
-    - true
-    state: !!python/tuple
-    - 3
-    - <
-    - null
-    - null
-    - null
-    - -1
-    - -1
-    - 0
-  - !!binary |
-    Z1dul9dzQkA=
+  onset_threshold: 0.15
+  onset_delta: 0.02
+  onset_wait: 20
+  geomean_threshold: 10
   min_sustain_ms: 150
 midi:
-  min_velocity: 40
-  max_velocity: 127
+  min_velocity: 80
+  max_velocity: 110
   default_tempo: 124.0
   max_note_duration: 0.5
 debug:
@@ -65,7 +93,7 @@ learning_mode:
   export_all_detections: true
   rejected_velocity: 1
   kept_velocity_normal: true
-  learning_onset_threshold: 0.05
+  learning_onset_threshold: 0.0001
   learning_delta: 0.002
   learning_wait: 1
   learning_midi_suffix: _learning
