@@ -35,11 +35,13 @@ cleaned_stems/
 midi_output*/
 test_*/
 
-# Data files (but keep pretrained models)
+# Data files
 *.wav
 *.mp3
 *.flac
-!pretrained_larsnet_models/**/*.wav
+
+# Pretrained model files (large binary files)
+pretrained_larsnet_models/
 
 # Logs
 *.log
