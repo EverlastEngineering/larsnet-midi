@@ -62,22 +62,24 @@ class MidiVideoRenderer:
         """Parse MIDI file and extract drum notes with timing"""
         midi_file = mido.MidiFile(midi_path)
         notes = []
-        current_time = 0.0
         total_duration = 0.0
         
-        # Get tempo (default to 120 BPM if not specified)
-        tempo = 500000  # microseconds per beat
+        # Default tempo (120 BPM = 500000 microseconds per beat)
+        current_tempo = 500000
         
         for track in midi_file.tracks:
             current_time = 0.0
+            track_tempo = current_tempo  # Each track starts with default tempo
+            
             for msg in track:
                 current_time += msg.time
                 
                 if msg.type == 'set_tempo':
-                    tempo = msg.tempo
+                    track_tempo = msg.tempo
                     
                 elif msg.type == 'note_on' and msg.velocity > 0:
-                    time_seconds = mido.tick2second(current_time, midi_file.ticks_per_beat, tempo)
+                    # Use the current tempo for this track
+                    time_seconds = mido.tick2second(current_time, midi_file.ticks_per_beat, track_tempo)
                     
                     if msg.note in DRUM_MAP:
                         drum_info = DRUM_MAP[msg.note]
@@ -122,8 +124,9 @@ class MidiVideoRenderer:
         if time_until_hit < -0.5:  # Note already hit and passed
             return False
             
-        # Calculate position
-        y_pos = self.strike_line_y - int(time_until_hit * self.pixels_per_second)
+        # Calculate position using float math, only round at the end for pixel coordinates
+        y_pos_float = self.strike_line_y - (time_until_hit * self.pixels_per_second)
+        y_pos = int(round(y_pos_float))
         
         if y_pos < -self.note_height:  # Note not visible yet
             return True
@@ -203,8 +206,14 @@ class MidiVideoRenderer:
         total_frames = int(total_duration * self.fps)
         print(f"Rendering {total_frames} frames at {self.fps} FPS...")
         
+        # Pre-calculate time step to avoid floating point accumulation errors
+        time_step = 1.0 / self.fps
+        lookahead_time = 3.0  # Show notes up to 3 seconds in advance
+        note_index = 0  # Track which notes we need to check
+        
         for frame_num in range(total_frames):
-            current_time = frame_num / self.fps
+            # Use precise time calculation to avoid drift
+            current_time = frame_num * time_step
             
             # Create black frame
             frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
@@ -216,10 +225,22 @@ class MidiVideoRenderer:
             # Draw strike line
             self.draw_strike_line(frame)
             
-            # Draw all visible notes
-            for note in notes:
-                if note.time - current_time > 3.0:  # Only show notes within 3 seconds
+            # Draw visible notes - only check notes in the visible time window
+            # Start from first note that hasn't passed completely
+            visible_start = note_index
+            for i in range(visible_start, len(notes)):
+                note = notes[i]
+                time_until_hit = note.time - current_time
+                
+                # Note is too far in the future
+                if time_until_hit > lookahead_time:
                     break
+                
+                # Note has passed - update start index for next frame
+                if time_until_hit < -0.5 and i == note_index:
+                    note_index = i + 1
+                    continue
+                    
                 self.draw_note(frame, note, current_time)
             
             # Draw UI
