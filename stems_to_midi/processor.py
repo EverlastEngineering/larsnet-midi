@@ -139,12 +139,14 @@ def _configure_onset_detection(
         wait = stem_config.get('onset_wait')
         if wait is None:
             wait = onset_config['wait']
+        timing_offset = stem_config.get('timing_offset', 0.0)
 
         return {
             'hop_length': onset_config['hop_length'],
             'threshold': threshold,
             'delta': delta,
             'wait': wait,
+            'timing_offset': timing_offset,
             'learning_mode': False
         }
 
@@ -256,6 +258,10 @@ def _create_midi_events(
     Returns:
         List of MIDI event dictionaries
     """
+    # Get timing offset for this stem type (applied to MIDI timing only, not audio analysis)
+    stem_config = config.get(stem_type, {})
+    timing_offset = stem_config.get('timing_offset', 0.0)
+    
     events = []
     
     for i, (time, value) in enumerate(zip(onset_times, normalized_values)):
@@ -288,8 +294,11 @@ def _create_midi_events(
         max_duration = config.get('midi', {}).get('max_note_duration', 0.5)
         duration = min(duration, max_duration)
         
+        # Apply timing offset to MIDI event (compensates for onset detection timing)
+        midi_time = float(time) + timing_offset
+        
         events.append({
-            'time': float(time),
+            'time': midi_time,
             'note': int(midi_note),
             'velocity': int(velocity),
             'duration': float(duration)
@@ -451,12 +460,18 @@ def process_stem_to_midi(
             else:
                 print(f"      GeoMean=sqrt({energy_label_1}*{energy_label_2}) - measures combined spectral energy")
 
+            # Check if statistical filtering is enabled for kicks
+            show_badness = stem_type == 'kick' and spectral_config.get('statistical_enabled', False)
+            
             # Header row - different formats for different stem types
             if stem_type in ['cymbals', 'hihat']:
                 print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'SustainMs':>10s} {'Status':>10s}")
             elif stem_type == 'kick' and energy_label_3:
                 # Kick with 3 frequency ranges
-                print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {energy_label_3:>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
+                if show_badness:
+                    print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {energy_label_3:>8s} {'Total':>8s} {'GeoMean':>8s} {'Badness':>8s} {'Status':>10s}")
+                else:
+                    print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {energy_label_3:>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
             else:
                 print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
 
@@ -477,8 +492,13 @@ def process_stem_to_midi(
                           f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {sustain_str} {status:>10s}")
                 elif stem_type == 'kick' and 'tertiary_energy' in data:
                     # Kick with 3 frequency ranges
-                    print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} {data['tertiary_energy']:8.1f} "
-                          f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")
+                    if show_badness and 'badness_score' in data:
+                        badness_str = f"{data['badness_score']:8.3f}"
+                        print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} {data['tertiary_energy']:8.1f} "
+                              f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {badness_str} {status:>10s}")
+                    else:
+                        print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} {data['tertiary_energy']:8.1f} "
+                              f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")
                 else:
                     print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
                           f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")
@@ -488,14 +508,36 @@ def process_stem_to_midi(
             if geomean_threshold is not None:
                 kept_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] > geomean_threshold]
                 rejected_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] <= geomean_threshold]
-                print(f"        GeoMean threshold: {geomean_threshold} (adjustable in midiconfig.yaml)")
+                print(f"        Pass 1 - GeoMean threshold: {geomean_threshold} (adjustable in midiconfig.yaml)")
                 print(f"        Total onsets detected: {len(all_onset_data)}")
-                print(f"        Kept (GeoMean > {geomean_threshold}): {len(kept_geomeans)}")
-                print(f"        Rejected (GeoMean <= {geomean_threshold}): {len(rejected_geomeans)}")
+                print(f"        Pass 1 Kept (GeoMean > {geomean_threshold}): {len(kept_geomeans)}")
+                print(f"        Pass 1 Rejected (GeoMean <= {geomean_threshold}): {len(rejected_geomeans)}")
                 if kept_geomeans:
-                    print(f"        Kept GeoMean range: {min(kept_geomeans):.1f} - {max(kept_geomeans):.1f}")
+                    print(f"        Pass 1 Kept GeoMean range: {min(kept_geomeans):.1f} - {max(kept_geomeans):.1f}")
                 if rejected_geomeans:
-                    print(f"        Rejected GeoMean range: {min(rejected_geomeans):.1f} - {max(rejected_geomeans):.1f}")
+                    print(f"        Pass 1 Rejected GeoMean range: {min(rejected_geomeans):.1f} - {max(rejected_geomeans):.1f}")
+                
+                # Show statistical filter summary if enabled
+                if show_badness and spectral_config.get('statistical_params'):
+                    badness_threshold = spectral_config.get('badness_threshold', 0.6)
+                    stats_params = spectral_config['statistical_params']
+                    
+                    print(f"\n        Pass 2 - Statistical Outlier Detection:")
+                    print(f"        Badness threshold: {badness_threshold} (adjustable in midiconfig.yaml)")
+                    print(f"        Median FundE/BodyE ratio: {stats_params['median_ratio']:.3f}")
+                    print(f"        Median Total energy: {stats_params['median_total']:.1f}")
+                    
+                    # Count pass 2 results
+                    badness_scores = [d.get('badness_score', 0) for d in all_onset_data if 'badness_score' in d]
+                    if badness_scores:
+                        pass2_kept = [s for s in badness_scores if s <= badness_threshold]
+                        pass2_rejected = [s for s in badness_scores if s > badness_threshold]
+                        print(f"        Pass 2 Kept (Badness <= {badness_threshold}): {len(pass2_kept)}")
+                        print(f"        Pass 2 Rejected (Badness > {badness_threshold}): {len(pass2_rejected)}")
+                        if pass2_kept:
+                            print(f"        Pass 2 Kept Badness range: {min(pass2_kept):.3f} - {max(pass2_kept):.3f}")
+                        if pass2_rejected:
+                            print(f"        Pass 2 Rejected Badness range: {min(pass2_rejected):.3f} - {max(pass2_rejected):.3f}")
             else:
                 print(f"        No threshold filtering enabled")
                 print(f"        Total onsets detected: {len(all_onset_data)} (all kept)")

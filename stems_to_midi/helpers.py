@@ -267,6 +267,102 @@ def calculate_geomean(primary_energy: float, secondary_energy: float, tertiary_e
         return float(np.sqrt(primary_energy * secondary_energy))
 
 
+def calculate_statistical_params(onset_data_list: List[Dict]) -> Dict[str, float]:
+    """
+    Analyze full dataset of onsets to compute normalization parameters.
+    
+    Used for statistical outlier detection to identify snare bleed in kicks
+    by comparing FundE/BodyE ratio and total energy against dataset medians.
+    
+    Pure function - no side effects.
+    
+    Args:
+        onset_data_list: List of onset data dicts with 'primary_energy', 
+                         'secondary_energy', 'total_energy' keys
+    
+    Returns:
+        Dict with median and spread values:
+        - median_ratio: Median FundE/BodyE ratio across all events
+        - median_total: Median total energy across all events
+        - ratio_spread: Standard deviation of ratios
+        - total_spread: Standard deviation of total energies
+    """
+    if not onset_data_list:
+        return {
+            'median_ratio': 1.0,
+            'median_total': 100.0,
+            'ratio_spread': 1.0,
+            'total_spread': 1.0
+        }
+    
+    # Extract fundamental and body energies
+    primary_energies = np.array([d['primary_energy'] for d in onset_data_list])
+    secondary_energies = np.array([d['secondary_energy'] for d in onset_data_list])
+    total_energies = np.array([d['total_energy'] for d in onset_data_list])
+    
+    # Calculate FundE/BodyE ratios (with safety for division by zero)
+    ratios = primary_energies / np.maximum(secondary_energies, 1e-9)
+    
+    params = {
+        'median_ratio': float(np.median(ratios)),
+        'median_total': float(np.median(total_energies)),
+        'ratio_spread': float(np.std(ratios)) if len(ratios) > 1 else 1.0,
+        'total_spread': float(np.std(total_energies)) if len(total_energies) > 1 else 1.0
+    }
+    
+    # Ensure non-zero spreads to avoid division by zero
+    if params['ratio_spread'] < 1e-9:
+        params['ratio_spread'] = 1e-9
+    if params['total_spread'] < 1e-9:
+        params['total_spread'] = 1e-9
+    
+    return params
+
+
+def calculate_badness_score(
+    onset_data: Dict,
+    statistical_params: Dict[str, float],
+    ratio_weight: float = 0.7,
+    total_weight: float = 0.3
+) -> float:
+    """
+    Compute normalized badness score for a single onset.
+    
+    Measures how much an onset deviates from typical kicks in the dataset.
+    Snare bleed typically has lower FundE/BodyE ratio and different total energy.
+    
+    Pure function - no side effects.
+    
+    Args:
+        onset_data: Dict with 'primary_energy', 'secondary_energy', 'total_energy'
+        statistical_params: Dict from calculate_statistical_params()
+        ratio_weight: Weight for ratio deviation (0-1)
+        total_weight: Weight for total energy deviation (0-1)
+    
+    Returns:
+        Badness score in range [0, 1]:
+        - 0.0 = perfectly typical kick
+        - 1.0 = maximum deviation (likely artifact/bleed)
+    """
+    # Calculate this onset's ratio
+    ratio = onset_data['primary_energy'] / max(onset_data['secondary_energy'], 1e-9)
+    total = onset_data['total_energy']
+    
+    # Calculate normalized deviations
+    # Ratio deviation: how much lower is this ratio compared to median?
+    ratio_dev = (statistical_params['median_ratio'] - ratio) / (statistical_params['median_ratio'] + 1e-9)
+    ratio_dev = float(np.clip(ratio_dev, 0, 1))  # Only penalize lower ratios, not higher
+    
+    # Total energy deviation: how different is total energy from median?
+    total_dev = abs(statistical_params['median_total'] - total) / (statistical_params['median_total'] + 1e-9)
+    total_dev = float(np.clip(total_dev, 0, 1))
+    
+    # Weighted combination
+    score = ratio_weight * ratio_dev + total_weight * total_dev
+    
+    return float(np.clip(score, 0, 1))
+
+
 def should_keep_onset(
     geomean: float,
     sustain_ms: Optional[float],
@@ -583,6 +679,63 @@ def filter_onsets_by_spectral(
                     'primary_energy': primary_energy,
                     'secondary_energy': secondary_energy
                 })
+    
+    # SECOND PASS: Statistical outlier detection (kick only, if enabled)
+    # This catches snare bleed that passes geomean threshold but has abnormal FundE/BodyE ratio
+    
+    if stem_type == 'kick' and not learning_mode:
+        stem_config = config.get('kick', {})
+        enable_statistical = stem_config.get('enable_statistical_filter', False)
+        
+        if enable_statistical and len(all_onset_data) > 0:
+            # Calculate statistical parameters from ALL detected onsets (including rejected ones)
+            # This gives us the population statistics to compare against
+            statistical_params = calculate_statistical_params(all_onset_data)
+            
+            # Get thresholds from config
+            badness_threshold = stem_config.get('statistical_badness_threshold', 0.6)
+            ratio_weight = stem_config.get('statistical_ratio_weight', 0.7)
+            total_weight = stem_config.get('statistical_total_weight', 0.3)
+            
+            # Calculate badness scores for ALL onsets (for debug output)
+            for onset_data in all_onset_data:
+                badness = calculate_badness_score(
+                    onset_data,
+                    statistical_params,
+                    ratio_weight,
+                    total_weight
+                )
+                onset_data['badness_score'] = badness
+            
+            # Re-filter the already-filtered onsets (Pass 1 survivors) using statistical scores
+            # Build a map of time -> onset_data for quick lookup
+            onset_data_by_time = {d['time']: d for d in all_onset_data}
+            
+            final_times = []
+            final_strengths = []
+            final_amplitudes = []
+            final_geomeans = []
+            
+            for time, strength, amplitude, geomean in zip(
+                filtered_times, filtered_strengths, filtered_amplitudes, filtered_geomeans
+            ):
+                onset_data = onset_data_by_time.get(time)
+                if onset_data and onset_data.get('badness_score', 0) <= badness_threshold:
+                    final_times.append(time)
+                    final_strengths.append(strength)
+                    final_amplitudes.append(amplitude)
+                    final_geomeans.append(geomean)
+            
+            # Update filtered arrays with statistical filter results
+            filtered_times = final_times
+            filtered_strengths = final_strengths
+            filtered_amplitudes = final_amplitudes
+            filtered_geomeans = final_geomeans
+            
+            # Store statistical info in config for debug output
+            spectral_config['statistical_params'] = statistical_params
+            spectral_config['statistical_enabled'] = True
+            spectral_config['badness_threshold'] = badness_threshold
     
     return {
         'filtered_times': np.array(filtered_times),

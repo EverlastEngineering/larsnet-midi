@@ -126,7 +126,7 @@ def detect_onsets(
     post_max: int = 3,
     pre_avg: int = 3,
     post_avg: int = 3,
-    delta: float = 0.01,
+    delta: float = 0.2,
     wait: int = 5
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -194,6 +194,10 @@ def detect_onsets(
         delta=delta,
         wait=wait
     )
+
+    # Better results when we use the peak frames for timing instead of backtracked frames
+    # could make this configurable for each stem
+    onset_frames = onset_frames_peak
     
     # Convert frames to times
     onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=hop_length)

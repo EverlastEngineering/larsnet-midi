@@ -37,10 +37,17 @@ kick:
   # Onset detection (overrides global onset_detection settings for kick)
   onset_threshold: 0.1      # Use global setting (0.01) - kicks are loud and easy to detect
   onset_delta: 0.1          # Use global setting (0.005)
-  onset_wait: 2           # Use global setting (1 frame ~11ms)
+  onset_wait: 2             # Use global setting (1 frame ~11ms)
+  timing_offset: -0.014      # Timing offset in seconds (compensates for backtracking being too early)
+                            # Positive values shift MIDI events later
+                            # Typical range: 0.020-0.050 seconds (20-50ms)
   
-  # Spectral filtering uses FFT analysis to distinguish real kicks from artifacts
-  # Real kick has energy in fundamental (40-80Hz), body (80-150Hz), and attack (2-6kHz)
+  # TWO-PASS FILTERING SYSTEM for kick drums
+  # Pass 1: Spectral filtering (GeoMean threshold)
+  # Pass 2: Statistical outlier detection (optional, catches snare bleed)
+  
+  # Pass 1: Spectral filtering uses FFT analysis to distinguish real kicks from artifacts
+  # Real kick has energy in fundamental (40-80Hz), body (80-250Hz), and attack (1.5-5kHz)
   # Artifacts (snare bleed, clicks) have low energy in one or more ranges
   
   geomean_threshold: 70.0   # Geometric mean of fundamental+body+attack energy (3-way: cube root)
@@ -56,6 +63,16 @@ kick:
   attack_freq_min: 1500      # Start of beater attack range
   attack_freq_max: 5000      # End of beater attack range
   
+  # Statistical outlier filtering (optional second-pass filter)
+  # Detects snare bleed by comparing FundE/BodyE ratio and total energy
+  # against the median values across all detected kicks
+  enable_statistical_filter: true    # Enable/disable statistical outlier detection
+  statistical_badness_threshold: 0.3  # Badness score threshold (0-1)
+                                      # Higher = more permissive (0.6-0.7 recommended)
+                                      # Lower = stricter filtering (0.4-0.5 very strict)
+  statistical_ratio_weight: 0.7       # Weight for FundE/BodyE ratio deviation (0-1)
+  statistical_total_weight: 0.3       # Weight for total energy deviation (0-1)
+  
 snare:
   # Snare drum settings
   midi_note: 38
@@ -64,6 +81,7 @@ snare:
   onset_threshold: null      # Use global setting (0.01) - snares are loud and transient
   onset_delta: null          # Use global setting (0.005)
   onset_wait: null           # Use global setting (1 frame ~11ms)
+  timing_offset: -0.007         # Timing offset in seconds (0 = no offset)
   
   # Spectral filtering uses FFT analysis to distinguish real snare hits from artifacts
   # Real snare has energy in both body (150-400Hz) and wires (2-8kHz)
@@ -92,6 +110,7 @@ toms:
   onset_threshold: null      # Use global setting (0.01) - toms are loud and transient
   onset_delta: null          # Use global setting (0.005)
   onset_wait: null           # Use global setting (1 frame ~11ms)
+  timing_offset: 0.0         # Timing offset in seconds (0 = no offset)
   
   # Pitch detection for automatic low/mid/high classification
   enable_pitch_detection: true   # Detect pitch and assign to low/mid/high tom notes
@@ -121,6 +140,7 @@ hihat:
   onset_threshold: 0.05      # Moderate sensitivity (between global 0.01 and cymbals 0.15)
   onset_delta: 0.01          # Moderate peak picking
   onset_wait: 5              # 3 frames = ~35ms min spacing (allows 16th notes at fast tempos)
+  timing_offset: 0.0         # Timing offset in seconds (0 = no offset)
   
   # Open/Closed detection
   detect_open: true          # Enable open vs closed hi-hat detection
@@ -154,6 +174,7 @@ cymbals:
   onset_threshold: 0.15      # Less sensitive than global (0.01) to avoid retriggering on decay
   onset_delta: 0.02          # Less sensitive peak picking (global: 0.005)
   onset_wait: 20             # Longer wait between peaks: 10 frames = ~115ms (global: 1 frame = ~11ms)
+  timing_offset: 0.0         # Timing offset in seconds (0 = no offset)
   
   # Spectral filtering
   geomean_threshold: 10      # Geometric mean of body (1-4kHz) + brilliance (4-10kHz) energy
