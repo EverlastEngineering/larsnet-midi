@@ -391,6 +391,75 @@ The `-t` threshold controls sensitivity:
 
 ---
 
+## Advanced Features
+
+### Spectral Filtering
+
+The detection system uses multi-band spectral analysis to distinguish real drum hits from artifacts and bleed:
+
+**Kick Drum - 3-Way Filtering:**
+- **Fundamental** (40-80 Hz): Deep bass thump
+- **Body** (80-150 Hz): Shell resonance and punch  
+- **Attack** (2000-6000 Hz): Beater click
+- Calculates: `GeoMean = ∛(Fundamental × Body × Attack)`
+- Typical threshold: 70-150
+
+**Snare Drum - 2-Way Filtering:**
+- **Body** (150-400 Hz): Shell resonance
+- **Wires** (2000-8000 Hz): Snare buzz
+- Calculates: `GeoMean = √(Body × Wires)`
+- Typical threshold: 20-50
+
+**Configuration:** Edit `midiconfig.yaml` to adjust frequency ranges and thresholds per drum type.
+
+### Statistical Outlier Detection (Kick Only)
+
+An optional second-pass filter that catches snare bleed by analyzing spectral signatures:
+
+1. Calculates median FundE/BodyE ratio across all detected kicks
+2. Scores each onset based on deviation from population
+3. Rejects statistical outliers (likely bleed or artifacts)
+
+**Enable in `midiconfig.yaml`:**
+```yaml
+kick:
+  enable_statistical_filter: true
+  statistical_badness_threshold: 0.6  # 0-1, higher = more permissive
+```
+
+**When to use:** Tracks with heavy snare bleed in the kick channel that passes basic geomean filtering.
+
+### Timing Offset Correction
+
+Per-stem timing adjustment to compensate for perceived latency:
+
+```yaml
+kick:
+  timing_offset: 0.030    # Shift MIDI 30ms later (kick often feels early)
+hihat:
+  timing_offset: -0.010   # Shift 10ms earlier (hi-hat often feels late)
+```
+
+**Applied during MIDI creation** - does not affect spectral analysis location. Can use large values (±0.3s) without breaking detection.
+
+### Learning Mode
+
+Automatically calibrate thresholds from user-edited MIDI:
+
+```bash
+# 1. Generate initial MIDI
+python stems_to_midi.py -i stems/ -o initial_midi/
+
+# 2. Edit in DAW - mark correct hits, delete false positives
+
+# 3. Re-run with learning mode
+python stems_to_midi.py -i stems/ -o improved_midi/ --learn-from initial_midi/edited.mid
+```
+
+The system analyzes which onsets you kept/deleted and suggests optimal threshold values. See `LEARNING_MODE.md` for details.
+
+---
+
 ## Advanced Customization
 
 ### Custom MIDI Note Mapping

@@ -51,25 +51,32 @@ LarsNet can separate five stems from a stereo drum mixture:
 
 ### Code Architecture 🏗️
 
-The **stems_to_midi.py** module follows the **Functional Core, Imperative Shell** pattern:
+The **stems_to_midi** module follows the **Functional Core, Imperative Shell (FCIS)** pattern, separating pure logic from side effects:
 
-- **Functional Core** (`stems_to_midi_helpers.py`): Pure, testable functions with no side effects
-  - 8 helper functions with 86% test coverage (26 unit tests)
-  - Handles audio analysis, spectral filtering, sustain detection
-  - All logic is deterministic and easily tested
+**Functional Core** (`stems_to_midi/helpers.py`):
+- Pure functions with no side effects: `ensure_mono()`, `calculate_spectral_energies()`, `should_keep_onset()`, etc.
+- All logic is deterministic and testable
+- 86% test coverage (26 unit tests)
 
-- **Imperative Shell** (`stems_to_midi.py`): Thin orchestration layer
-  - Handles I/O (file operations, printing, MIDI creation)
-  - Coordinates functional core for main processing pipeline
-  - 47 total tests passing (21 integration + 26 unit tests)
+**Imperative Shell** (`stems_to_midi.py`):
+- Thin orchestration layer handling I/O (files, printing, MIDI)
+- Delegates all logic to functional core and specialized modules
+- Coordinates workflow without implementing business logic
 
-This architecture ensures:
+**Specialized Modules:**
+- `stems_to_midi/config.py` - Configuration loading and data structures
+- `stems_to_midi/detection.py` - Onset detection and drum classification  
+- `stems_to_midi/processor.py` - Audio processing pipeline
+- `stems_to_midi/midi.py` - MIDI file creation and reading
+- `stems_to_midi/learning.py` - Threshold learning from user edits
+
+**Benefits:**
 - ✅ **Testability**: Pure functions are easy to test in isolation
 - ✅ **Maintainability**: Changes to helpers automatically benefit all call sites
-- ✅ **Clarity**: Side effects isolated to shell, logic in core
-- ✅ **Reusability**: Functional core can be used in different contexts
+- ✅ **Clarity**: Side effects isolated to shell, logic in functional core
+- ✅ **Modularity**: Each module has a single, well-defined responsibility
 
-See `STEMS_TO_MIDI_GUIDE.md` for detailed usage and `stems_to_midi_helpers.py.plan.md` for the refactoring approach.
+See `STEMS_TO_MIDI_GUIDE.md` for detailed usage. Architecture plans are in `docs/archive/` for reference.
 
 ## Setup 🔧
 
@@ -167,6 +174,26 @@ In fact, we argue that StemGMD may rival other large-scale datasets, such as **E
 ## LARS 🔌
 
 You may also want to check out **LARS**, an open-source VST3/AU plug-in that runs LarsNet under the hood and can be used inside any DAW.
+
+## Contributing 🤝
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for:
+- Development setup and testing
+- Code architecture and standards
+- Git workflow and PR process
+- Refactoring guidelines
+
+Quick start for contributors:
+```bash
+# Clone and setup
+git clone https://github.com/EverlastEngineering/larsnet-midi.git
+cd larsnet-midi
+mamba env create -f environment.yml
+conda activate larsnet
+
+# Run tests
+pytest --cov=stems_to_midi
+```
 
 LARS was presented at ISMIR 2023 Late-Breaking Demo Session
 > A. I. Mezza, R. di Palma, E. Morena, A. Orsatti, R. Giampiccolo, A. Bernardini, and A. Sarti, "LARS: An open-source VST3 plug-in for deep drums demixing with pretrained models," _ISMIR 2023 LBD Session_, 2023.
