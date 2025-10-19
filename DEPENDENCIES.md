@@ -151,20 +151,53 @@ pytest stems_to_midi/
 python separate.py -i input/ -o output/
 ```
 
-### Cross-Platform Testing
+### Reproducible Environments with conda-lock
 
-Use conda-lock for reproducible environments:
+**What is conda-lock?**
+
+conda-lock generates platform-specific lockfiles from `environment.yml` that pin exact package versions and checksums. This ensures identical environments across machines and over time, similar to `package-lock.json` for npm or `Pipfile.lock` for pipenv.
+
+**When to use it:**
+
+- CI/CD pipelines requiring exact reproducibility
+- Deploying to production environments
+- Sharing exact environments with collaborators
+- Preventing dependency drift over time
+
+**Installation:**
 
 ```bash
-# Install conda-lock
 conda install -c conda-forge conda-lock
-
-# Generate platform-specific lockfiles
-conda-lock -f environment.yml -p linux-64 -p linux-aarch64 -p osx-arm64
-
-# Use lockfile
-conda-lock install --name larsnet conda-linux-64.lock
 ```
+
+**Generating lockfiles:**
+
+```bash
+# Generate unified lockfile for multiple platforms
+conda-lock -f environment.yml -p linux-64 -p linux-aarch64
+
+# Note: Cannot generate osx-arm64 locks from Linux due to platform-specific 
+# libraries like libgomp. Run from macOS to include osx-arm64.
+```
+
+This creates `conda-lock.yml` containing pinned versions for all specified platforms.
+
+**Using lockfiles:**
+
+```bash
+# Install from lockfile
+conda-lock install -n larsnet conda-lock.yml
+
+# Update specific package
+conda-lock lock --lockfile conda-lock.yml --update numpy
+
+# Regenerate from updated environment.yml
+conda-lock -f environment.yml --lockfile conda-lock.yml
+```
+
+**Current state:**
+
+The repository includes `conda-lock.yml` with locks for linux-64 and linux-aarch64. macOS users should regenerate locks on their platform if exact reproducibility is needed.
 
 ## Deprecated Files
 
