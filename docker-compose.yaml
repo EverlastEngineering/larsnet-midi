@@ -1,7 +1,8 @@
 services:
-  larsnet_env:
+  larsmet-midi:
     # Use the Dockerfile located in the current directory (.) to build the image
     build: .
+    container_name: larsnet-midi
     
     # Map the entire host project directory (.) to the container's working directory /app.
     # This automatically includes all source files and subdirectories like the models folder,

@@ -1,4 +1,4 @@
-name: larsnet
+name: larsnet-midi
 channels:
   - conda-forge
   - pytorch
