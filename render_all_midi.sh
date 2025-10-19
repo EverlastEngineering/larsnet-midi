@@ -50,7 +50,7 @@ for midi_file in "${MIDI_FILES[@]}"; do
     echo -e "${BLUE}🎵 Processing: $basename${NC}"
     
     # Render video in Docker
-    docker exec -it larsnet-larsnet_env-1 python /app/render_midi_to_video.py \
+    docker exec -it larsnet-midi python /app/render_midi_to_video.py \
         "/app/$midi_file" \
         --output "/app/$video_file" \
         --width $WIDTH \
@@ -78,7 +78,7 @@ for midi_file in "${MIDI_FILES[@]}"; do
             final_file="$OUTPUT_DIR/${basename}_final.mp4"
             echo -e "${YELLOW}🎵 Adding audio from: $audio_file${NC}"
             
-            docker exec -it larsnet-larsnet_env-1 ffmpeg -y \
+            docker exec -it larsnet-midi ffmpeg -y \
                 -i "/app/$video_file" \
                 -i "/app/$audio_file" \
                 -c:v copy -c:a aac -shortest \

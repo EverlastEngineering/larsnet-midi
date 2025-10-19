@@ -23,7 +23,7 @@ if [ -f /.dockerenv ]; then
 else
     echo -e "${YELLOW}Running on local machine${NC}"
     echo -e "${YELLOW}Note: It's recommended to run tests inside Docker for consistency${NC}"
-    echo -e "${YELLOW}Use: docker exec -it larsnet-larsnet_env-1 bash /app/run_tests.sh${NC}"
+    echo -e "${YELLOW}Use: docker exec -it larsnet-midi bash /app/run_tests.sh${NC}"
     echo ""
 fi
 

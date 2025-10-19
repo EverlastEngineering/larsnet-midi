@@ -107,14 +107,14 @@ Using tempo: 124.00 BPM ✅
 
 ```bash
 # Diagnostic tool to analyze timing
-docker exec -it larsnet-larsnet_env-1 python /app/diagnose_midi_timing.py \
+docker exec -it larsnet-midi python /app/diagnose_midi_timing.py \
   "/app/midi/The Fate Of Ophelia.mid" --focus-time 11.6
 
 # Verify fix
-docker exec -it larsnet-larsnet_env-1 python /app/verify_timing_fix.py
+docker exec -it larsnet-midi python /app/verify_timing_fix.py
 
 # Render with correct timing
-docker exec -it larsnet-larsnet_env-1 python /app/render_midi_to_video.py \
+docker exec -it larsnet-midi python /app/render_midi_to_video.py \
   "/app/midi/The Fate Of Ophelia.mid" --output /app/output.mp4 --fps 60
 ```
 

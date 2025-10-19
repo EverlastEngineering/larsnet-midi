@@ -99,7 +99,7 @@ conda activate larsnet
 docker-compose up -d
 
 # Enter the container
-docker exec -it larsnet-larsnet_env-1 /bin/bash
+docker exec -it larsnet-midi /bin/bash
 
 # The environment is automatically activated
 ```

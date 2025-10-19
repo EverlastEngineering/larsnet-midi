@@ -102,13 +102,13 @@ To verify the fixes:
 
 ```bash
 # Render a test video
-docker exec -it larsnet-larsnet_env-1 python /app/render_midi_to_video.py \
+docker exec -it larsnet-midi python /app/render_midi_to_video.py \
   /app/learn_midi_output/ophilia.mid \
   --output /app/test_smooth.mp4 \
   --width 1920 --height 1080 --fps 60
 
 # Compare with preview
-docker exec -it larsnet-larsnet_env-1 python /app/render_midi_to_video.py \
+docker exec -it larsnet-midi python /app/render_midi_to_video.py \
   /app/learn_midi_output/ophilia.mid \
   --output /app/test_smooth_preview.mp4 \
   --preview

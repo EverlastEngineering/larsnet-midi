@@ -236,13 +236,13 @@ learning_mode:
 ### Test Commands:
 ```bash
 # Unit tests
-docker exec larsnet-larsnet_env-1 bash -c "cd /app && python -m pytest test_stems_to_midi_helpers.py -v"
+docker exec larsnet-midi bash -c "cd /app && python -m pytest test_stems_to_midi_helpers.py -v"
 
 # Integration tests  
-docker exec larsnet-larsnet_env-1 bash -c "cd /app && python -m pytest test_stems_to_midi.py -v"
+docker exec larsnet-midi bash -c "cd /app && python -m pytest test_stems_to_midi.py -v"
 
 # All tests with coverage
-docker exec larsnet-larsnet_env-1 bash -c "cd /app && python -m pytest test_stems_to_midi.py test_stems_to_midi_helpers.py --cov=stems_to_midi --cov=stems_to_midi_helpers --cov-report=term-missing -v"
+docker exec larsnet-midi bash -c "cd /app && python -m pytest test_stems_to_midi.py test_stems_to_midi_helpers.py --cov=stems_to_midi --cov=stems_to_midi_helpers --cov-report=term-missing -v"
 ```
 
 ## Rollback Plan

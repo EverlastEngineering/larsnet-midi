@@ -327,47 +327,51 @@ class TestHiHatStateDetection:
     def test_detect_hihat_state_with_precalculated(self, sample_config):
         """Test hi-hat state detection with pre-calculated sustain durations."""
         onset_times = np.array([0.5, 1.0, 1.5])
-        sustain_durations = [100.0, 200.0, 50.0]  # ms
+        sustain_durations = [80.0, 200.0, 50.0]  # ms (open_sustain_ms is 90 in config)
         spectral_data = [
-            {'primary_energy': 50, 'secondary_energy': 200},
-            {'primary_energy': 50, 'secondary_energy': 200},
-            {'primary_energy': 50, 'secondary_energy': 200}
+            {'primary_energy': 180, 'secondary_energy': 200},  # Closed: sustain < threshold
+            {'primary_energy': 250, 'secondary_energy': 200},  # Open: high energy + long sustain
+            {'primary_energy': 180, 'secondary_energy': 200}   # Closed: sustain < threshold
         ]
         
-        # Dummy audio (not used when sustain_durations provided)
-        audio = np.zeros(44100 * 2)
+        # Dummy audio (not used when sustain_durations provided, but needs low peak amplitude)
         sr = 44100
+        audio = np.zeros(sr * 2)
+        # Add low amplitude transients at onset times for peak detection
+        for onset_time in onset_times:
+            idx = int(onset_time * sr)
+            audio[idx:idx+10] = 0.05  # Very low amplitude for open detection
         
         states = detect_hihat_state(
             audio, sr, onset_times,
             sustain_durations=sustain_durations,
-            open_sustain_threshold_ms=150.0,
+            open_sustain_threshold_ms=90.0,
             spectral_data=spectral_data,
             config=sample_config
         )
         
         assert len(states) == 3
-        assert states[0] == 'closed'  # 100ms < 150ms
-        assert states[1] == 'open'    # 200ms > 150ms
-        assert states[2] == 'closed'  # 50ms < 150ms
+        assert states[0] == 'closed'  # 80ms < 90ms
+        assert states[1] == 'open'    # 200ms > 90ms + energy > 200 + low peak
+        assert states[2] == 'closed'  # 50ms < 90ms
     
     def test_detect_hihat_handclap(self, sample_config):
         """Test handclap detection."""
         onset_times = np.array([0.5])
-        sustain_durations = [30.0]  # Short duration
+        sustain_durations = [30.0]  # Short duration (< handclap_sustain_max of 75ms)
         spectral_data = [
-            {'primary_energy': 100, 'secondary_energy': 200}  # High energy
+            {'primary_energy': 450, 'secondary_energy': 200}  # High energy (body > 400)
         ]
         
         audio = np.zeros(44100 * 2)
         sr = 44100
         
-        # Enable handclap detection
+        # Enable handclap detection with current config values
         config = sample_config.copy()
         config['hihat']['detect_handclap'] = True
-        config['hihat']['handclap_body_min'] = 20
+        config['hihat']['handclap_body_min'] = 400
         config['hihat']['handclap_sizzle_min'] = 100
-        config['hihat']['handclap_sustain_max'] = 50
+        config['hihat']['handclap_sustain_max'] = 75
         
         states = detect_hihat_state(
             audio, sr, onset_times,

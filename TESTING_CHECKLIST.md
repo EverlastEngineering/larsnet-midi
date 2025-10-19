@@ -190,7 +190,7 @@ Use this checklist to verify the new `environment.yml` setup works correctly on 
 
 - [ ] Enter container and test:
   ```bash
-  docker exec -it larsnet-larsnet_env-1 /bin/bash
+  docker exec -it larsnet-midi /bin/bash
   python -c "import torch, librosa, mido, cv2; print('✅ Docker imports OK')"
   pytest stems_to_midi/
   exit

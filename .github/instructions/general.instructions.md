@@ -1,9 +1,15 @@
 ---
-applyTo: '**/*.py, **/*.yaml'
+applyTo: '**'
 ---
 Use functional core, imperative shell to separate logic from side effects.
 Before refactoring, write tests to cover existing behavior.
 Use configuration files for parameters instead of hardcoding values.
+You may edit your own instruction files, and there's an instruction file for that!
+Review the writing-documentation.instructions.md for guidance before writing documentation.
+Review the how-to-perform-testing.instructions.md when dealing with tests.
+Let user know you've read instructions for confidence in your actions.
+When you complete a task, simply say "Done!" - do not provide summaries, explanations, or lists of changes made. The user can see what you did through the tool calls and test results.
+Do not make summary documents after completing tasks.
 
 For significant refactoring work:
 1. Create an immutable plan file: `<module>.plan.md` documenting the approach, phases, risks, and success criteria.
