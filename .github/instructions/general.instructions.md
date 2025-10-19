@@ -1,6 +1,7 @@
 ---
 applyTo: '**'
 ---
+Be very critical of code quality, approaches, and architecture.
 Use functional core, imperative shell to separate logic from side effects.
 Before refactoring, write tests to cover existing behavior.
 Use configuration files for parameters instead of hardcoding values.
@@ -12,8 +13,8 @@ When you complete a task, simply say "Done!" - do not provide summaries, explana
 Do not make summary documents after completing tasks.
 
 For significant refactoring work:
-1. Create an immutable plan file: `<module>.plan.md` documenting the approach, phases, risks, and success criteria.
-2. Create a mutable results file: `<module>.results.md` tracking completion of each phase with checkboxes, metrics, and decision log.
+1. Create an immutable plan file: `./agent-plans/<module>.plan.md` documenting the approach, phases, risks, and success criteria.
+2. Create a mutable results file: `./agent-plans/<module>.results.md` tracking completion of each phase with checkboxes, metrics, and decision log.
 3. Do NOT edit the plan file after creation - it represents original intent.
 4. Update the results file as work progresses to track actual outcomes vs plan.
 5. Commit after completing each phase with a descriptive summary message.
