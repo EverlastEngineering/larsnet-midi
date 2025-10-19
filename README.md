@@ -71,6 +71,57 @@ This architecture ensures:
 
 See `STEMS_TO_MIDI_GUIDE.md` for detailed usage and `stems_to_midi_helpers.py.plan.md` for the refactoring approach.
 
+## Setup 🔧
+
+### Using Conda/Mamba (Recommended)
+
+We use Conda for dependency management to ensure cross-platform compatibility and proper handling of complex dependencies like PyTorch and audio processing libraries.
+
+```bash
+# Clone the repository
+git clone https://github.com/EverlastEngineering/larsnet-midi.git
+cd larsnet-midi
+
+# Create the environment (use mamba for faster installation)
+mamba env create -f environment.yml
+# OR: conda env create -f environment.yml
+
+# Activate the environment
+conda activate larsnet
+```
+
+**Note on PyTorch:** The `environment.yml` installs CPU PyTorch by default. For GPU support (CUDA/ROCm), install PyTorch separately following instructions at [pytorch.org](https://pytorch.org/get-started/locally/).
+
+### Using Docker
+
+```bash
+# Build and run the container
+docker-compose up -d
+
+# Enter the container
+docker exec -it larsnet-larsnet_env-1 /bin/bash
+
+# The environment is automatically activated
+```
+
+### Platform Support
+
+Tested on:
+- **Linux** (x86_64, aarch64/ARM64)
+- **macOS** (Apple Silicon, Intel)
+- **Docker** (all platforms)
+
+### Dependency Notes
+
+All dependencies are specified in `environment.yml`:
+- **Core**: PyTorch, NumPy, SciPy, librosa, soundfile
+- **MIDI**: midiutil, mido
+- **Visualization**: opencv-python-headless (for MIDI-to-video rendering)
+- **Optional**: scikit-learn (improves tom pitch classification, has fallback)
+- **Testing**: pytest
+
+**Legacy files** `requirements.txt`, `requirements_midi.txt`, and `requirements_visualization.txt` are deprecated and should not be used.
+
 ## Pretrained LarsNet Models 📥 
 
 Pretrained LarsNet model checkpoints can be found [here](https://drive.google.com/uc?id=1U8-5924B1ii1cjv9p0MTPzayb00P4qoL&export=download) (562 MB) licensed under CC BY-NC 4.0.

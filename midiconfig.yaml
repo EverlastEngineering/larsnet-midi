@@ -178,7 +178,7 @@ cymbals:
   timing_offset: 0.0         # Timing offset in seconds (0 = no offset)
   
   # Sustain analysis and decay pattern detection
-  sustain_window_sec: 2.0    # Window size for sustain analysis AND decay pattern analysis (seconds)
+  sustain_window_sec: 0.2    # Window size for sustain analysis AND decay pattern analysis (seconds)
                               # Cymbals need longer window than default (0.2s) to measure full decay
                               # Used to analyze spectral energy decay pattern: onsets within this window
                               # are filtered if they occur during exponential decay (not independent hits)

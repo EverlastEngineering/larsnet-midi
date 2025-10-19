@@ -1,33 +1,72 @@
-name: myenv-arm
+name: larsnet
 channels:
   - conda-forge
+  - pytorch
 dependencies:
+  # ============================================================================
+  # Python Interpreter
+  # ============================================================================
   - python=3.11
-  - numpy
-  - scipy
+  
+  # ============================================================================
+  # Core Scientific Computing
+  # ============================================================================
+  - numpy>=1.24.0
+  - scipy>=1.10.0
   - pandas
+  
+  # ============================================================================
+  # Deep Learning (PyTorch)
+  # Conda manages platform-specific builds (CPU/CUDA/MPS)
+  # ============================================================================
+  - pytorch>=2.0.0
+  - torchaudio>=2.0.0
+  
+  # ============================================================================
+  # Audio Processing
+  # ============================================================================
+  - librosa>=0.10.0
+  # pysoundfile name is deprecated, we're asked to use soundfile
+  # but no conda package seems to exist
+  - pysoundfile>=0.12.0
+  
+  # ============================================================================
+  # Machine Learning (optional but recommended for tom pitch classification)
+  # ============================================================================
+  - scikit-learn>=1.3.0
+  
+  # ============================================================================
+  # Configuration and Utilities
+  # ============================================================================
+  - pyyaml>=6.0
+  - tqdm>=4.60.0
+  
+  # ============================================================================
+  # Testing
+  # ============================================================================
+  - pytest>=7.0.0
+  
+  # ============================================================================
+  # System Libraries (conda manages these better than pip)
+  # ============================================================================
   - libopenblas
   - libgomp
-  - pyyaml
-  - tqdm
-  - sympy
-  - jinja2
-  - filelock
-  - markupsafe
-  - typing-extensions
+  
+  # ============================================================================
+  # Additional system dependencies
+  # ============================================================================
   - zlib
   - bzip2
   - xz
-  - ncurses
-  - readline
-  - sqlite
-  - tk
-  - yaml
+  
+  # ============================================================================
+  # Pip-only packages (not available or better from PyPI)
+  # ============================================================================
   - pip
   - pip:
-      - soundfile
-      - torch
-      - torchaudio
-      - librosa>=0.10.0
+      # MIDI handling
       - midiutil>=1.2.1
-      - mido>=1.2.10
+      - mido>=1.3.0
+      
+      # Video rendering (headless for Docker/server environments)
+      - opencv-python-headless>=4.8.0
