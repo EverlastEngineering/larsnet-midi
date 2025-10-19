@@ -1,37 +1,160 @@
-from separation_utils import process_stems
+"""
+Separate drums into individual stems using LarsNet.
+
+Uses project-based workflow: automatically detects projects in user-files/
+or processes new audio files dropped there.
+
+Usage:
+    python separate.py              # Auto-detect project or new file
+    python separate.py 1            # Process specific project by number
+    python separate.py --device cuda  # Use GPU acceleration
+"""
+
+from separation_utils import process_stems_for_project
+from project_manager import (
+    discover_projects,
+    find_loose_files,
+    create_project,
+    select_project,
+    get_project_by_number,
+    get_project_config,
+    update_project_metadata,
+    USER_FILES_DIR
+)
 from pathlib import Path
-from typing import Union, Optional
+from typing import Optional
 import argparse
+import sys
 
 
-def separate(input_dir: Union[str, Path], output_dir: Union[str, Path], wiener_exponent: Optional[float], device: str):
+def separate_project(
+    project: dict,
+    wiener_exponent: Optional[float] = None,
+    device: str = 'cpu',
+    apply_eq: bool = False
+):
     """
-    Separate drums without post-processing EQ.
+    Separate drums for a specific project.
     
-    This is a simple wrapper around process_stems with EQ disabled.
+    Args:
+        project: Project info dictionary from project_manager
+        wiener_exponent: Wiener filter exponent (None to disable)
+        device: 'cpu' or 'cuda'
+        apply_eq: Whether to apply frequency cleanup
     """
-    process_stems(
-        input_dir=input_dir,
-        output_dir=output_dir,
+    project_dir = project["path"]
+    
+    print(f"\n{'='*60}")
+    print(f"Processing Project {project['number']}: {project['name']}")
+    print(f"{'='*60}\n")
+    
+    # Get project-specific config
+    config_path = get_project_config(project_dir, "config.yaml")
+    if config_path is None:
+        print("ERROR: config.yaml not found in project or root directory")
+        sys.exit(1)
+    
+    print(f"Using config: {config_path}")
+    
+    # Input: project directory (original audio file)
+    # Output: project/stems/ subdirectory
+    stems_dir = project_dir / "stems"
+    
+    # Process stems
+    process_stems_for_project(
+        project_dir=project_dir,
+        stems_dir=stems_dir,
+        config_path=config_path,
         wiener_exponent=wiener_exponent,
         device=device,
-        apply_eq=False,
+        apply_eq=apply_eq,
         verbose=True
     )
+    
+    # Update project metadata
+    update_project_metadata(project_dir, {
+        "status": {
+            "separated": True,
+            "cleaned": project["metadata"]["status"].get("cleaned", False) if project["metadata"] else False,
+            "midi_generated": project["metadata"]["status"].get("midi_generated", False) if project["metadata"] else False,
+            "video_rendered": project["metadata"]["status"].get("video_rendered", False) if project["metadata"] else False
+        }
+    })
+    
+    print(f"\n✓ Separation complete!")
+    print(f"  Stems saved to: {stems_dir}")
+    print(f"  Project status updated\n")
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-i', '--input_dir', type=str, required=True, help="Path to the root directory where to find the target drum mixtures.")
-    parser.add_argument('-o', '--output_dir', type=str, default='separated_stems', help="Path to the directory where to save the separated tracks.")
-    parser.add_argument('-w', '--wiener_exponent', type=float, default=None, help="Positive α-Wiener filter exponent (float). Use it only if Wiener filtering is to be applied.")
-    parser.add_argument('-d', '--device', type=str, default='cpu', help="Torch device. Default 'cpu'")
-
-    args = vars(parser.parse_args())
-
-    separate(
-        input_dir=args['input_dir'],
-        output_dir=args['output_dir'],
-        wiener_exponent=args['wiener_exponent'],
-        device=args['device']
+    parser = argparse.ArgumentParser(
+        description="Separate drums into individual stems using LarsNet.",
+        epilog="""
+Examples:
+  python separate.py                    # Auto-detect project or new file
+  python separate.py 1                  # Process project #1
+  python separate.py --device cuda      # Use GPU
+  python separate.py --wiener 2.0       # Apply Wiener filtering
+        """
     )
+    
+    parser.add_argument('project_number', type=int, nargs='?', default=None,
+                       help="Project number to process (optional)")
+    parser.add_argument('-w', '--wiener', type=float, default=None,
+                       help="Wiener filter exponent (default: disabled)")
+    parser.add_argument('-d', '--device', type=str, default='cpu',
+                       help="Torch device: 'cpu' or 'cuda' (default: cpu)")
+    parser.add_argument('--eq', action='store_true',
+                       help="Apply frequency cleanup (experimental)")
+    
+    args = parser.parse_args()
+    
+    # Validate
+    if args.wiener is not None and args.wiener <= 0:
+        print("ERROR: Wiener exponent must be positive")
+        sys.exit(1)
+    
+    # Check for loose files first (new audio files to process)
+    loose_files = find_loose_files(USER_FILES_DIR)
+    
+    if loose_files:
+        print(f"\nFound {len(loose_files)} new audio file(s):")
+        for f in loose_files:
+            print(f"  - {f.name}")
+        
+        if len(loose_files) == 1:
+            print(f"\nCreating project for: {loose_files[0].name}")
+            try:
+                project = create_project(loose_files[0], USER_FILES_DIR, Path("."))
+                print(f"✓ Created project {project['number']}: {project['name']}")
+                
+                # Process the newly created project
+                separate_project(project, args.wiener, args.device, args.eq)
+                
+            except Exception as e:
+                print(f"ERROR: Failed to create project: {e}")
+                sys.exit(1)
+        else:
+            # Multiple loose files - ask user to process them one at a time
+            print("\nPlease move all but one file to process them individually,")
+            print("or organize them into project folders.")
+            sys.exit(0)
+    
+    else:
+        # No loose files - look for existing projects
+        if args.project_number is not None:
+            # Specific project requested
+            project = get_project_by_number(args.project_number, USER_FILES_DIR)
+            if project is None:
+                print(f"ERROR: Project {args.project_number} not found")
+                sys.exit(1)
+        else:
+            # Auto-select project
+            project = select_project(None, USER_FILES_DIR, allow_interactive=True)
+            if project is None:
+                print("\nNo projects found in user-files/")
+                print("Drop an audio file (.wav, .mp3, .flac) in user-files/ to get started!")
+                sys.exit(0)
+        
+        # Process the selected project
+        separate_project(project, args.wiener, args.device, args.eq)

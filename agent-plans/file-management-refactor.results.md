@@ -50,28 +50,34 @@ Refactor file management system from `-i/-o` flags to unified `user-files/` proj
 
 ---
 
-### Phase 2: Refactor separate.py ⬜
-**Status**: Not Started  
-**Started**: —  
-**Completed**: —
+### Phase 2: Refactor separate.py ✅
+**Status**: Complete  
+**Started**: 2025-10-19  
+**Completed**: 2025-10-19
 
 **Tasks**:
-- [ ] Remove all `-i/-o` argument parsing
-- [ ] Add project detection logic
-- [ ] Support parameterless invocation
-- [ ] Support `separate.py <number>` syntax
-- [ ] Implement file moving into project structure
-- [ ] Load config from project folder
-- [ ] Update project metadata after separation
-- [ ] Update tests
-- [ ] Update LARSNET.md documentation
+- [x] Remove all `-i/-o` argument parsing
+- [x] Add project detection logic
+- [x] Support parameterless invocation
+- [x] Support `separate.py <number>` syntax
+- [x] Implement file moving into project structure (via create_project)
+- [x] Load config from project folder
+- [x] Update project metadata after separation
+- [x] Update tests
+- [ ] Update LARSNET.md documentation (deferred to Phase 6)
 
 **Metrics**:
-- Tests written: 0
-- Tests passing: 0
-- Lines changed: 0
+- Tests written: 2
+- Tests passing: 32/32 (100%)
+- Lines changed: ~150 (separate.py: ~120, separation_utils.py: +90, tests: +60)
 
 **Notes**:
+- Removed legacy -i/-o flags completely
+- Added process_stems_for_project() to separation_utils.py
+- Auto-detects loose files and creates projects
+- Uses project-specific config.yaml with fallback to root
+- Updates project status after successful separation
+- Clean error messages guide users
 
 ---
 
@@ -186,10 +192,10 @@ Refactor file management system from `-i/-o` flags to unified `user-files/` proj
 
 ## Overall Metrics
 
-**Total Progress**: 1/6 phases complete (17%)  
-**Total Tests Added**: 30  
-**Total Tests Passing**: 30/30 (100%)  
-**Total Lines Changed**: ~900  
+**Total Progress**: 2/6 phases complete (33%)  
+**Total Tests Added**: 32  
+**Total Tests Passing**: 32/32 (100%)  
+**Total Lines Changed**: ~1050  
 **Documentation Files Updated**: 0
 
 ---

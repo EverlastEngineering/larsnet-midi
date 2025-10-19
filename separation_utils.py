@@ -137,3 +137,107 @@ def process_stems(
             sf.write(save_path, waveform_np, larsnet.sr)
             if verbose:
                 print(f"  Saved: {save_path}")
+
+
+def process_stems_for_project(
+    project_dir: Path,
+    stems_dir: Path,
+    config_path: Union[str, Path],
+    wiener_exponent: Optional[float],
+    device: str,
+    apply_eq: bool = False,
+    verbose: bool = True
+):
+    """
+    Separate drums for a project using project-specific configuration.
+    
+    This is the project-aware version of process_stems. It:
+    - Finds audio files in the project directory
+    - Uses project-specific config
+    - Outputs to project/stems/ directory
+    
+    Args:
+        project_dir: Path to project directory
+        stems_dir: Path to stems output directory (project/stems/)
+        config_path: Path to config.yaml (project-specific or root)
+        wiener_exponent: Wiener filter exponent (None to disable)
+        device: 'cpu' or 'cuda'
+        apply_eq: Whether to apply frequency cleanup
+        verbose: Whether to print progress information
+    """
+    project_dir = Path(project_dir)
+    stems_dir = Path(stems_dir)
+    config_path = Path(config_path)
+    
+    if not project_dir.exists():
+        raise RuntimeError(f'Project directory not found: {project_dir}')
+    
+    if not config_path.exists():
+        raise RuntimeError(f'Config file not found: {config_path}')
+    
+    if wiener_exponent is not None and wiener_exponent <= 0:
+        raise ValueError(f'α-Wiener filter exponent should be positive.')
+    
+    # Find audio files in project root
+    audio_files = [f for f in project_dir.iterdir() 
+                   if f.is_file() and f.suffix.lower() in {'.wav', '.mp3', '.flac', '.aiff', '.aif'}]
+    
+    if not audio_files:
+        raise RuntimeError(f'No audio files found in {project_dir}')
+    
+    # Load EQ config if needed
+    eq_config = None
+    if apply_eq:
+        eq_config_path = project_dir / "eq.yaml"
+        if not eq_config_path.exists():
+            eq_config_path = Path("eq.yaml")  # Fall back to root
+        if eq_config_path.exists():
+            eq_config = load_eq_config(eq_config_path)
+        else:
+            print("Warning: EQ requested but eq.yaml not found, skipping EQ")
+            apply_eq = False
+    
+    if verbose:
+        print(f"Initializing LarsNet...")
+        print(f"  Config: {config_path}")
+        print(f"  Wiener filter: {'Enabled (α=' + str(wiener_exponent) + ')' if wiener_exponent else 'Disabled'}")
+        print(f"  Post-processing EQ: {'Enabled' if apply_eq else 'Disabled'}")
+        print(f"  Device: {device}")
+    
+    larsnet = LarsNet(
+        wiener_filter=wiener_exponent is not None,
+        wiener_exponent=wiener_exponent,
+        device=device,
+        config=str(config_path),
+    )
+    
+    # Create stems directory
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Process each audio file
+    for audio_file in audio_files:
+        if verbose:
+            print(f"\nProcessing: {audio_file.name}")
+        
+        stems = larsnet(audio_file)
+        
+        for stem, waveform in stems.items():
+            # Apply frequency cleanup if enabled
+            if apply_eq:
+                if verbose:
+                    print(f"  Applying EQ cleanup to {stem}...")
+                waveform = apply_frequency_cleanup(waveform, larsnet.sr, stem, eq_config)
+            
+            # Save to stems directory
+            save_path = stems_dir / f'{audio_file.stem}-{stem}.wav'
+            
+            # Convert to numpy for saving
+            waveform_np = waveform.cpu().numpy()
+            if waveform_np.ndim == 1:
+                waveform_np = waveform_np.reshape(-1, 1)
+            else:
+                waveform_np = waveform_np.T
+            
+            sf.write(save_path, waveform_np, larsnet.sr)
+            if verbose:
+                print(f"  Saved: {save_path}")
