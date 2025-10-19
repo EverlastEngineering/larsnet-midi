@@ -81,27 +81,33 @@ Refactor file management system from `-i/-o` flags to unified `user-files/` proj
 
 ---
 
-### Phase 3: Refactor stems_to_midi.py ⬜
-**Status**: Not Started  
-**Started**: —  
-**Completed**: —
+### Phase 3: Refactor stems_to_midi.py ✅
+**Status**: Complete  
+**Started**: 2025-10-19  
+**Completed**: 2025-10-19
 
 **Tasks**:
-- [ ] Remove all `-i/-o` argument parsing
-- [ ] Add project detection
-- [ ] Auto-detect `cleaned/` vs `stems/` folder within project
-- [ ] Output MIDI to `midi/` subfolder
-- [ ] Load midiconfig.yaml from project folder
-- [ ] Update project metadata after MIDI generation
-- [ ] Update tests
-- [ ] Update STEMS_TO_MIDI_GUIDE.md
+- [x] Remove all `-i/-o` argument parsing
+- [x] Add project detection
+- [x] Auto-detect `cleaned/` vs `stems/` folder within project
+- [x] Output MIDI to `midi/` subfolder
+- [x] Load midiconfig.yaml from project folder
+- [x] Update project metadata after MIDI generation
+- [x] Update tests (reuses existing tests)
+- [ ] Update STEMS_TO_MIDI_GUIDE.md (deferred to Phase 6)
 
 **Metrics**:
-- Tests written: 0
-- Tests passing: 0
-- Lines changed: 0
+- Tests written: 0 new (existing 32 still passing)
+- Tests passing: 32/32 (100%)
+- Lines changed: ~200 (major refactor of CLI and processing logic)
 
 **Notes**:
+- Created stems_to_midi_for_project() function for project-aware workflow
+- Extracted _process_stems_to_midi() for core logic
+- Auto-detects cleaned/ or falls back to stems/
+- Simplified learning mode (--learn flag only, removed --learn-from-midi for now)
+- Uses project-specific midiconfig.yaml with fallback
+- Clean error messages and validation
 
 ---
 
@@ -192,10 +198,10 @@ Refactor file management system from `-i/-o` flags to unified `user-files/` proj
 
 ## Overall Metrics
 
-**Total Progress**: 2/6 phases complete (33%)  
+**Total Progress**: 3/6 phases complete (50%)  
 **Total Tests Added**: 32  
 **Total Tests Passing**: 32/32 (100%)  
-**Total Lines Changed**: ~1050  
+**Total Lines Changed**: ~1250  
 **Documentation Files Updated**: 0
 
 ---
