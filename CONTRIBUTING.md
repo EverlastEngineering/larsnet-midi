@@ -97,9 +97,6 @@ open htmlcov/index.html
 ```bash
 # Run tests inside container
 docker exec -it larsnet-midi bash -c "cd /app && pytest"
-
-# Or use the convenience script
-docker exec -it larsnet-midi bash /app/run_tests.sh
 ```
 
 ### Writing Tests
