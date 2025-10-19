@@ -35,6 +35,10 @@ cleaned_stems/
 midi_output*/
 test_*/
 
+# User files directory (all content except .gitkeep)
+user-files/*
+!user-files/.gitkeep
+
 # Data files
 *.wav
 *.mp3
