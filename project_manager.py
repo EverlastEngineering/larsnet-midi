@@ -1,7 +1,7 @@
 """
 Project Manager - Functional Core for LarsNet Project Management
 
-Manages user projects in the user-files/ directory with auto-numbering,
+Manages user projects in the user_files/ directory with auto-numbering,
 metadata tracking, and per-project configuration files.
 
 Architecture: Functional Core
@@ -10,7 +10,7 @@ Architecture: Functional Core
 - All logic testable without touching filesystem
 
 Project Structure:
-    user-files/
+    user_files/
     └── 1 - song name/
         ├── .larsnet_project.json    # Metadata
         ├── config.yaml              # Project-specific LarsNet config
@@ -35,7 +35,7 @@ import shutil
 # CONSTANTS
 # ============================================================================
 
-USER_FILES_DIR = Path("user-files")
+USER_FILES_DIR = Path("user_files")
 PROJECT_METADATA_FILE = ".larsnet_project.json"
 
 # Root config files to copy to projects
@@ -239,10 +239,10 @@ def update_status_field(metadata: Dict, field: str, value: bool) -> Dict:
 
 def discover_projects(user_files_dir: Path = USER_FILES_DIR) -> List[Dict]:
     """
-    Discover all valid projects in user-files directory.
+    Discover all valid projects in user_files directory.
     
     Args:
-        user_files_dir: Path to user-files directory
+        user_files_dir: Path to user_files directory
         
     Returns:
         List of project info dictionaries, sorted by project number
@@ -288,10 +288,10 @@ def discover_projects(user_files_dir: Path = USER_FILES_DIR) -> List[Dict]:
 
 def find_loose_files(user_files_dir: Path = USER_FILES_DIR) -> List[Path]:
     """
-    Find audio files in root of user-files directory (not in project folders).
+    Find audio files in root of user_files directory (not in project folders).
     
     Args:
-        user_files_dir: Path to user-files directory
+        user_files_dir: Path to user_files directory
         
     Returns:
         List of audio file paths
@@ -316,7 +316,7 @@ def get_project_by_number(
     
     Args:
         project_number: Project number to find
-        user_files_dir: Path to user-files directory
+        user_files_dir: Path to user_files directory
         
     Returns:
         Project info dictionary or None if not found
@@ -379,7 +379,7 @@ def create_project(
     
     Args:
         audio_file: Path to audio file (should be in user_files_dir root)
-        user_files_dir: Path to user-files directory
+        user_files_dir: Path to user_files directory
         root_dir: Path to root directory containing config files
         
     Returns:
@@ -526,7 +526,7 @@ def select_project(
     
     Args:
         project_number: Specific project number to select
-        user_files_dir: Path to user-files directory
+        user_files_dir: Path to user_files directory
         allow_interactive: Whether to prompt user if multiple projects
         
     Returns:

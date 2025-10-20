@@ -36,8 +36,8 @@ midi_output*/
 test_*/
 
 # User files directory (all content except .gitkeep)
-user-files/*
-!user-files/.gitkeep
+user_files/*
+!user_files/.gitkeep
 
 # Data files
 *.wav

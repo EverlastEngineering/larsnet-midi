@@ -1,7 +1,7 @@
 """
 Separate drums into individual stems using LarsNet.
 
-Uses project-based workflow: automatically detects projects in user-files/
+Uses project-based workflow: automatically detects projects in user_files/
 or processes new audio files dropped there.
 
 Usage:
@@ -152,8 +152,8 @@ Examples:
             # Auto-select project
             project = select_project(None, USER_FILES_DIR, allow_interactive=True)
             if project is None:
-                print("\nNo projects found in user-files/")
-                print("Drop an audio file (.wav, .mp3, .flac) in user-files/ to get started!")
+                print("\nNo projects found in user_files/")
+                print("Drop an audio file (.wav, .mp3, .flac) in user_files/ to get started!")
                 sys.exit(0)
         
         # Process the selected project

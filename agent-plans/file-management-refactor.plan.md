@@ -23,7 +23,7 @@
 
 ### New Directory Structure
 ```
-user-files/                    # Ignored in git, single location for all user content
+user_files/                    # Ignored in git, single location for all user content
 ├── .gitkeep                   # Keep folder in repo
 └── 1 - bob's song/            # Auto-numbered project folders
     ├── bob's song.wav         # Original input (moved here)
@@ -49,9 +49,9 @@ user-files/                    # Ignored in git, single location for all user co
 ### User Workflow
 
 #### Initial Setup (First Time)
-User drops `bob's song.wav` into `user-files/`:
+User drops `bob's song.wav` into `user_files/`:
 ```
-user-files/
+user_files/
 └── bob's song.wav
 ```
 
@@ -60,15 +60,15 @@ user-files/
 python separate.py           # No args needed!
 ```
 **Behavior**:
-- Detects `bob's song.wav` in `user-files/`
-- Creates `user-files/1 - bob's song/`
+- Detects `bob's song.wav` in `user_files/`
+- Creates `user_files/1 - bob's song/`
 - Moves wav into folder
 - Processes stems into `stems/` subfolder
 - Updates project metadata (timestamp, status)
 
 **Result**:
 ```
-user-files/
+user_files/
 └── 1 - bob's song/
     ├── bob's song.wav
     └── stems/
@@ -125,7 +125,7 @@ python stems_to_midi.py 2     # Work with project 2
 ```
 
 #### New Files While Projects Exist
-If loose `.wav` files exist in `user-files/` root, tools prioritize them:
+If loose `.wav` files exist in `user_files/` root, tools prioritize them:
 ```bash
 $ python separate.py
 Found new file: charlie's drums.wav
@@ -169,8 +169,8 @@ Each project gets its own copies of configuration files on creation:
 **Goal**: Create project management system.
 
 **Tasks**:
-1. Create `user-files/` directory with `.gitkeep`
-2. Update `.gitignore` to include `user-files/` (except `.gitkeep`)
+1. Create `user_files/` directory with `.gitkeep`
+2. Update `.gitignore` to include `user_files/` (except `.gitkeep`)
 3. Create `project_manager.py` module:
    - `discover_projects()`: List existing projects
    - `find_loose_files()`: Find wav files in root

@@ -1,12 +1,12 @@
 # ## Plan Overview
-Refactor file management system from `-i/-o` flags to unified `user-files/` project-based structure with per-project YAML configs.
+Refactor file management system from `-i/-o` flags to unified `user_files/` project-based structure with per-project YAML configs.
 
 **Created**: 2025-10-19  
 **Updated**: 2025-10-19 (removed backward compatibility, added project-specific configs)  
 **Status**: Planning Complete, Ready to BeginManagement Refactoring - Results Tracker
 
 ## Plan Overview
-Refactor file management system from `-i/-o` flags to unified `user-files/` project-based structure.
+Refactor file management system from `-i/-o` flags to unified `user_files/` project-based structure.
 
 **Created**: 2025-10-19  
 **Status**: Planning Complete, Awaiting Approval
@@ -21,8 +21,8 @@ Refactor file management system from `-i/-o` flags to unified `user-files/` proj
 **Completed**: 2025-10-19
 
 **Tasks**:
-- [x] Create `user-files/` directory with `.gitkeep`
-- [x] Update `.gitignore` to include `user-files/`
+- [x] Create `user_files/` directory with `.gitkeep`
+- [x] Update `.gitignore` to include `user_files/`
 - [x] Create `project_manager.py` module
   - [x] `discover_projects()` function
   - [x] `find_loose_files()` function
@@ -387,7 +387,7 @@ Refactor file management system from `-i/-o` flags to unified `user-files/` proj
 
 | Date | Decision | Rationale | Impact |
 |------|----------|-----------|--------|
-| 2025-10-19 | Use `user-files/` as root directory | Single, clear location for all user content | Low risk, clear organization |
+| 2025-10-19 | Use `user_files/` as root directory | Single, clear location for all user content | Low risk, clear organization |
 | 2025-10-19 | Auto-number projects (1 - song name) | Easy reference, sortable, intuitive | Medium complexity in project manager |
 | 2025-10-19 | ~~Maintain backward compatibility~~ REMOVED | User requested clean break from old system | Simpler implementation, cleaner code |
 | 2025-10-19 | Use `.larsnet_project.json` for metadata only | Standard format, easy to read/edit | Minimal overhead |

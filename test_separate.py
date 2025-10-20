@@ -19,7 +19,7 @@ class TestSeparateIntegration:
     @pytest.fixture
     def temp_env(self, tmp_path):
         """Create a complete test environment."""
-        user_files = tmp_path / "user-files"
+        user_files = tmp_path / "user_files"
         user_files.mkdir()
         
         # Create root configs
@@ -33,7 +33,7 @@ class TestSeparateIntegration:
     
     def test_project_creation_from_audio_file(self, temp_env):
         """Test that a new audio file triggers project creation."""
-        # Create an audio file in user-files root
+        # Create an audio file in user_files root
         audio_file = temp_env["user_files"] / "test_song.wav"
         audio_file.write_text("fake audio data")
         

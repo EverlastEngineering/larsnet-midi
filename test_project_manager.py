@@ -136,8 +136,8 @@ class TestImperativeShell:
     
     @pytest.fixture
     def user_files_dir(self, temp_dir):
-        """Create a user-files directory."""
-        user_dir = temp_dir / "user-files"
+        """Create a user_files directory."""
+        user_dir = temp_dir / "user_files"
         user_dir.mkdir()
         return user_dir
     
@@ -248,7 +248,7 @@ class TestImperativeShell:
         assert (project_dir / "config.yaml").read_text() == "# Existing"
     
     def test_create_project_success(self, user_files_dir, temp_dir, root_configs):
-        # Create audio file in user-files root
+        # Create audio file in user_files root
         audio_file = user_files_dir / "test_song.wav"
         audio_file.write_text("fake audio data")
         
@@ -431,7 +431,7 @@ class TestIntegration:
     @pytest.fixture
     def setup_environment(self, tmp_path):
         """Set up complete test environment."""
-        user_files = tmp_path / "user-files"
+        user_files = tmp_path / "user_files"
         user_files.mkdir()
         
         # Create root configs
@@ -448,7 +448,7 @@ class TestIntegration:
         """Test complete workflow from audio file to project."""
         env = setup_environment
         
-        # 1. Drop audio file in user-files
+        # 1. Drop audio file in user_files
         audio_file = env["user_files"] / "my_song.wav"
         audio_file.write_text("fake audio data")
         

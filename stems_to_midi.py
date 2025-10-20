@@ -377,7 +377,7 @@ MIDI Note Mapping (General MIDI):
         # Auto-select project
         project = select_project(None, USER_FILES_DIR, allow_interactive=True)
         if project is None:
-            print("\nNo projects found in user-files/")
+            print("\nNo projects found in user_files/")
             print("Run separate.py first to create stems!")
             sys.exit(0)
     

@@ -429,7 +429,7 @@ Examples:
         # Auto-select project
         project = select_project(None, USER_FILES_DIR, allow_interactive=True)
         if project is None:
-            print("\nNo projects found in user-files/")
+            print("\nNo projects found in user_files/")
             print("Run separate.py and stems_to_midi.py first!")
             sys.exit(0)
     
