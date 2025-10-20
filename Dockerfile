@@ -18,7 +18,8 @@ RUN python -c "import cv2; print('OpenCV version:', cv2.__version__)"
 # Configure shell to use environment by default
 SHELL ["bash", "--login", "-c"]
 RUN conda init bash
-RUN echo "conda activate larsnet-midi" >> ~/.bashrc
+RUN echo "conda activate larsnet-midi" >> ~/.bashrc && \
+    echo "cd /app" >> ~/.bashrc
 
 # Create .bash_env for non-interactive shells (docker exec -c)
 RUN echo 'eval "$(conda shell.bash hook)"' >> ~/.bash_env && \
@@ -26,3 +27,6 @@ RUN echo 'eval "$(conda shell.bash hook)"' >> ~/.bash_env && \
 
 # Set BASH_ENV to source our conda setup for all bash invocations
 ENV BASH_ENV=~/.bash_env
+
+# Set working directory
+WORKDIR /app
