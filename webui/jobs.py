@@ -168,6 +168,7 @@ class StdoutWrapper:
             for line in lines[:-1]:
                 if line.strip():
                     self.job.add_log(self.level, line.strip())
+                    
                     # Check for progress updates in format "Progress: X%"
                     if 'Progress:' in line and '%' in line:
                         try:
@@ -177,6 +178,19 @@ class StdoutWrapper:
                             self.job.progress = max(0, min(100, progress))
                         except (ValueError, IndexError):
                             pass  # Ignore malformed progress lines
+                    
+                    # Check for tqdm progress format (e.g., "20%|##" or "kick: 20%|##")
+                    elif '%|' in line:
+                        try:
+                            # Find the percentage before the pipe
+                            parts = line.split('%|')
+                            if len(parts) >= 2:
+                                # Get the last token before %|
+                                progress_part = parts[0].split()[-1]
+                                progress = int(float(progress_part))
+                                self.job.progress = max(0, min(100, progress))
+                        except (ValueError, IndexError):
+                            pass  # Ignore malformed tqdm lines
             
             # Keep incomplete line in buffer
             self.buffer = io.StringIO()
