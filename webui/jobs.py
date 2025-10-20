@@ -13,6 +13,8 @@ import uuid
 import threading
 import time
 import queue
+import sys
+import io
 from datetime import datetime
 from typing import Dict, Callable, Any, Optional, List
 from dataclasses import dataclass, field
@@ -97,6 +99,93 @@ class Job:
             'started_at': self.started_at.isoformat() if self.started_at else None,
             'completed_at': self.completed_at.isoformat() if self.completed_at else None
         }
+
+
+class StdoutCapture:
+    """
+    Context manager to capture stdout/stderr and add to job logs.
+    
+    Usage:
+        with StdoutCapture(job):
+            print("This will be captured")  # Added to job.logs
+    """
+    def __init__(self, job: Job):
+        self.job = job
+        self.stdout_buffer = io.StringIO()
+        self.stderr_buffer = io.StringIO()
+        self.old_stdout = None
+        self.old_stderr = None
+    
+    def __enter__(self):
+        self.old_stdout = sys.stdout
+        self.old_stderr = sys.stderr
+        
+        # Create wrapper objects for stdout and stderr
+        sys.stdout = StdoutWrapper(self.stdout_buffer, self.job, 'info')
+        sys.stderr = StdoutWrapper(self.stderr_buffer, self.job, 'error')
+        
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Flush any remaining output
+        stdout_remaining = self.stdout_buffer.getvalue()
+        if stdout_remaining.strip():
+            for line in stdout_remaining.strip().split('\n'):
+                if line.strip():
+                    self.job.add_log('info', line.strip())
+        
+        stderr_remaining = self.stderr_buffer.getvalue()
+        if stderr_remaining.strip():
+            for line in stderr_remaining.strip().split('\n'):
+                if line.strip():
+                    self.job.add_log('error', line.strip())
+        
+        sys.stdout = self.old_stdout
+        sys.stderr = self.old_stderr
+        return False
+
+
+class StdoutWrapper:
+    """Wrapper for stdout/stderr that captures output line-by-line"""
+    def __init__(self, buffer: io.StringIO, job: Job, level: str):
+        self.buffer = buffer
+        self.job = job
+        self.level = level
+    
+    def write(self, text):
+        """Write to buffer and flush complete lines to job logs"""
+        if not text:
+            return
+        
+        self.buffer.write(text)
+        
+        # Process complete lines
+        if '\n' in text:
+            content = self.buffer.getvalue()
+            lines = content.split('\n')
+            
+            # Log all complete lines
+            for line in lines[:-1]:
+                if line.strip():
+                    self.job.add_log(self.level, line.strip())
+                    # Check for progress updates in format "Progress: X%"
+                    if 'Progress:' in line and '%' in line:
+                        try:
+                            # Extract percentage (e.g., "Progress: 45.2%" -> 45)
+                            progress_str = line.split('Progress:')[1].split('%')[0].strip()
+                            progress = int(float(progress_str))
+                            self.job.progress = max(0, min(100, progress))
+                        except (ValueError, IndexError):
+                            pass  # Ignore malformed progress lines
+            
+            # Keep incomplete line in buffer
+            self.buffer = io.StringIO()
+            if lines[-1]:
+                self.buffer.write(lines[-1])
+    
+    def flush(self):
+        """Flush method for compatibility"""
+        pass
 
 
 class JobQueue:
@@ -239,10 +328,13 @@ class JobQueue:
                 time.sleep(0.5)
                 continue
             
-            # Execute job
+            # Execute job with stdout/stderr capture
             try:
                 job_to_run.add_log('info', 'Executing operation...')
-                result = job_to_run._func(**job_to_run._kwargs)
+                
+                # Capture stdout/stderr and add to job logs
+                with StdoutCapture(job_to_run):
+                    result = job_to_run._func(**job_to_run._kwargs)
                 
                 with self.job_lock:
                     if job_to_run.status == JobStatus.CANCELLED:
