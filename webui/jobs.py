@@ -120,9 +120,9 @@ class StdoutCapture:
         self.old_stdout = sys.stdout
         self.old_stderr = sys.stderr
         
-        # Create wrapper objects for stdout and stderr
-        sys.stdout = StdoutWrapper(self.stdout_buffer, self.job, 'info')
-        sys.stderr = StdoutWrapper(self.stderr_buffer, self.job, 'error')
+        # Create wrapper objects for stdout and stderr that write to both job logs and console
+        sys.stdout = StdoutWrapper(self.stdout_buffer, self.job, 'info', self.old_stdout)
+        sys.stderr = StdoutWrapper(self.stderr_buffer, self.job, 'error', self.old_stderr)
         
         return self
     
@@ -147,15 +147,21 @@ class StdoutCapture:
 
 class StdoutWrapper:
     """Wrapper for stdout/stderr that captures output line-by-line"""
-    def __init__(self, buffer: io.StringIO, job: Job, level: str):
+    def __init__(self, buffer: io.StringIO, job: Job, level: str, original_stream=None):
         self.buffer = buffer
         self.job = job
         self.level = level
+        self.original_stream = original_stream
     
     def write(self, text):
         """Write to buffer and flush complete lines to job logs"""
         if not text:
             return
+        
+        # Write to original stream (console) as well
+        if self.original_stream:
+            self.original_stream.write(text)
+            self.original_stream.flush()
         
         self.buffer.write(text)
         
