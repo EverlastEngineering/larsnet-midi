@@ -248,9 +248,15 @@ function updateJobCard(job) {
     
     // Remove card if job is done
     if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
-        // Refresh current project to update status badges
-        if (job.status === 'completed' && currentProject) {
-            selectProject(currentProject.number);
+        // Refresh project data to update status badges
+        if (job.status === 'completed') {
+            // Refresh project list (left sidebar badges)
+            loadProjects();
+            
+            // Refresh current project details
+            if (currentProject) {
+                selectProject(currentProject.number);
+            }
         }
         
         setTimeout(() => {
