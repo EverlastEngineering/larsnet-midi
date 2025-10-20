@@ -16,6 +16,7 @@ class LarsNet(nn.Module):
                  config: Union[str, Path] = "config.yaml",
                  return_stft: bool = False,
                  device: str = 'cpu',
+                 verbose: bool = True,
                  **kwargs
                  ):
         super().__init__(**kwargs)
@@ -31,6 +32,7 @@ class LarsNet(nn.Module):
         self.stems = config['inference_models'].keys()
         self.utils = UNetUtils(device=self.device)
         self.sr = config['global']['sr']
+        self.verbose = verbose
 
         if wiener_filter:
             print(f'> Applying Wiener filter with α={self.wiener_exponent}')
@@ -72,8 +74,12 @@ class LarsNet(nn.Module):
             pbar = tqdm(self.models.items())
             for stem, model in pbar:
                 pbar.set_description(stem)
+                if self.verbose:
+                    print(f'  Processing {stem}...')
                 y, __ = model(x)
                 out[stem] = y.squeeze(0).detach()
+                if self.verbose:
+                    print(f'  {stem} complete')
 
         return out
 
@@ -83,16 +89,25 @@ class LarsNet(nn.Module):
             mag_pred = []
 
             x = self._fix_dim(x).to(self.device)
+            
+            if self.verbose:
+                print('  Computing STFT...')
             mag, phase = self.utils.batch_stft(x)
+            if self.verbose:
+                print('  STFT computed, starting model inference...')
 
             print('Separate drums...')
             pbar = tqdm(self.models.items())
             for stem, model in pbar:
                 pbar.set_description(stem)
+                if self.verbose:
+                    print(f'  Processing {stem}...')
                 __, mask = model(mag)
                 mag_pred.append(
                     (mask * mag) ** self.wiener_exponent
                 )
+                if self.verbose:
+                    print(f'  {stem} complete')
 
             pred_sum = sum(mag_pred)
 
@@ -108,23 +123,40 @@ class LarsNet(nn.Module):
             out = {}
 
             x = self._fix_dim(x).to(self.device)
+            if self.verbose:
+                print('  Computing STFT...')
             mag, phase = self.utils.batch_stft(x)
+            if self.verbose:
+                print('  STFT computed, starting model inference...')
 
             print('Separate drum magnitude...')
             pbar = tqdm(self.models.items())
             for stem, model in pbar:
                 pbar.set_description(stem)
+                if self.verbose:
+                    print(f'  Processing {stem}...')
                 mag_pred, __ = model(mag)
                 stft = torch.polar(mag_pred, phase)
                 out[stem] = stft.squeeze(0).detach()
+                if self.verbose:
+                    print(f'  {stem} complete')
 
         return out
 
     def forward(self, x):
         if isinstance(x, (str, Path)):
+            if self.verbose:
+                print(f'  Loading audio: {Path(x).name}...')
             x, sr_ = ta.load(str(x))
+            if self.verbose:
+                duration = x.shape[-1] / sr_
+                print(f'  Audio loaded: {duration:.1f}s @ {sr_}Hz')
             if sr_ != self.sr:
+                if self.verbose:
+                    print(f'  Resampling to {self.sr}Hz...')
                 x = ta.functional.resample(x, sr_, self.sr)
+                if self.verbose:
+                    print(f'  Resampling complete')
 
         if self.return_stft:
             return self.separate_stft(x)
