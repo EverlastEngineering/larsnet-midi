@@ -190,7 +190,9 @@ def _process_stems_to_midi(
         onset_wait = config['onset_detection']['wait']
     if hop_length is None:
         hop_length = config['onset_detection']['hop_length']
-    print(f"Processing {len(audio_files_to_process)} file(s)...")
+    if tempo is None:
+        tempo = config['midi']['default_tempo']
+    
     print(f"Settings:")
     print(f"  Onset threshold: {onset_threshold}")
     print(f"  Onset delta: {onset_delta}")

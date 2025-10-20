@@ -3,6 +3,13 @@ Sidechain compression to reduce bleed between stems.
 
 Uses the separated snare track as a sidechain trigger to duck the kick track
 when the snare is playing, effectively removing snare bleed from the kick.
+
+Uses project-based workflow: automatically detects projects with stems
+and creates cleaned versions in the project/cleaned/ directory.
+
+Usage:
+    python sidechain_cleanup.py              # Auto-detect project
+    python sidechain_cleanup.py 1            # Process specific project
 """
 
 from pathlib import Path
@@ -10,7 +17,18 @@ import numpy as np
 import soundfile as sf
 from scipy import signal
 import argparse
+import sys
 from typing import Union, Tuple
+
+# Import project manager
+from project_manager import (
+    discover_projects,
+    select_project,
+    get_project_by_number,
+    get_project_config,
+    update_project_metadata,
+    USER_FILES_DIR
+)
 
 
 def envelope_follower(audio: np.ndarray, sr: int, attack_ms: float = 5.0, release_ms: float = 50.0) -> np.ndarray:
@@ -229,27 +247,85 @@ def process_stems(
     print(f"\nDone! Processed stems saved to: {output_dir}")
 
 
+def cleanup_project_stems(
+    project_number: int = None,
+    threshold_db: float = -30.0,
+    ratio: float = 10.0,
+    attack_ms: float = 1.0,
+    release_ms: float = 100.0,
+    dry_wet: float = 1.0
+):
+    """
+    Clean up stems for a project using sidechain compression.
+    
+    Args:
+        project_number: Specific project to process, or None for auto-select
+        threshold_db: Sidechain threshold in dB
+        ratio: Compression ratio (higher = more aggressive)
+        attack_ms: Attack time in milliseconds
+        release_ms: Release time in milliseconds
+        dry_wet: Mix between original (0.0) and processed (1.0)
+    """
+    # Select project
+    project_info = select_project(project_number)
+    if not project_info:
+        print("No project available for cleanup.")
+        sys.exit(1)
+    
+    project_folder = project_info['project_folder']
+    song_name = project_info['song_name']
+    
+    print(f"\n{'='*60}")
+    print(f"Sidechain Cleanup: {song_name}")
+    print(f"Project: {project_folder.name}")
+    print(f"{'='*60}\n")
+    
+    # Check for stems directory
+    stems_dir = project_folder / 'stems'
+    if not stems_dir.exists():
+        print(f"❌ No stems directory found in project.")
+        print(f"   Expected: {stems_dir}")
+        print(f"   Run separate.py first to generate stems.")
+        sys.exit(1)
+    
+    # Create cleaned directory
+    cleaned_dir = project_folder / 'cleaned'
+    cleaned_dir.mkdir(exist_ok=True)
+    
+    # Process the stems
+    process_stems(
+        stems_dir=stems_dir,
+        output_dir=cleaned_dir,
+        threshold_db=threshold_db,
+        ratio=ratio,
+        attack_ms=attack_ms,
+        release_ms=release_ms,
+        dry_wet=dry_wet
+    )
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description="Remove snare bleed from kick track using sidechain compression.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic usage
-  python sidechain_cleanup.py -i separated_stems/ -o cleaned_stems/
+  # Process most recent project with default settings
+  python sidechain_cleanup.py
+  
+  # Process specific project
+  python sidechain_cleanup.py 1
   
   # Aggressive ducking
-  python sidechain_cleanup.py -i separated_stems/ -o cleaned_stems/ -t -40 -r 20 --attack 0.5
+  python sidechain_cleanup.py -t -40 -r 20 --attack 0.5
   
   # Gentle/subtle ducking
-  python sidechain_cleanup.py -i separated_stems/ -o cleaned_stems/ -t -25 -r 4 --dry-wet 0.5
+  python sidechain_cleanup.py -t -25 -r 4 --dry-wet 0.5
         """
     )
     
-    parser.add_argument('-i', '--input_dir', type=str, required=True,
-                        help="Directory containing separated stems (must have kick/ and snare/ subdirectories).")
-    parser.add_argument('-o', '--output_dir', type=str, default='cleaned_stems',
-                        help="Directory to save cleaned stems (default: cleaned_stems).")
+    parser.add_argument('project_number', type=int, nargs='?', default=None,
+                        help="Project number to process (auto-selects most recent if not provided).")
     parser.add_argument('-t', '--threshold', type=float, default=-30.0,
                         help="Sidechain threshold in dB. Lower = more sensitive (default: -30).")
     parser.add_argument('-r', '--ratio', type=float, default=10.0,
@@ -269,9 +345,8 @@ Examples:
     if args.ratio < 1.0:
         parser.error("--ratio must be >= 1.0")
     
-    process_stems(
-        stems_dir=args.input_dir,
-        output_dir=args.output_dir,
+    cleanup_project_stems(
+        project_number=args.project_number,
         threshold_db=args.threshold,
         ratio=args.ratio,
         attack_ms=args.attack,

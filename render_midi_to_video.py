@@ -5,8 +5,13 @@ MIDI to Rock Band-Style Video Renderer
 Creates falling notes visualization videos from MIDI drum files, 
 perfect for learning to play drums Rock Band style.
 
+Uses project-based workflow: automatically detects projects with MIDI files
+and renders videos to the project/video/ directory.
+
 Usage:
-    python render_midi_to_video.py input.mid --output output.mp4 --fps 60 --width 1920 --height 1080
+    python render_midi_to_video.py              # Auto-detect project
+    python render_midi_to_video.py 1            # Render specific project
+    python render_midi_to_video.py --fps 60     # Custom settings
 """
 
 import argparse
@@ -14,8 +19,19 @@ import mido
 import cv2
 import numpy as np
 from dataclasses import dataclass
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 import os
+import sys
+from pathlib import Path
+
+# Import project manager
+from project_manager import (
+    discover_projects,
+    select_project,
+    get_project_by_number,
+    update_project_metadata,
+    USER_FILES_DIR
+)
 
 
 @dataclass
@@ -304,13 +320,94 @@ class MidiVideoRenderer:
         print(f"ffmpeg -i {output_path} -i input/your_audio.wav -c:v copy -c:a aac -shortest output_with_audio.mp4")
 
 
+def render_project_video(
+    project: dict,
+    width: int = 1920,
+    height: int = 1080,
+    fps: int = 60,
+    preview: bool = False
+):
+    """
+    Render MIDI to video for a specific project.
+    
+    Args:
+        project: Project info dictionary from project_manager
+        width: Video width in pixels
+        height: Video height in pixels
+        fps: Frames per second
+        preview: Show live preview while rendering
+    """
+    project_dir = project["path"]
+    
+    print(f"\n{'='*60}")
+    print(f"Rendering Video - Project {project['number']}: {project['name']}")
+    print(f"{'='*60}\n")
+    
+    # Find MIDI files in project/midi/ directory
+    midi_dir = project_dir / "midi"
+    if not midi_dir.exists():
+        print(f"ERROR: No midi/ directory found in project.")
+        print("Run stems_to_midi.py first!")
+        sys.exit(1)
+    
+    midi_files = list(midi_dir.glob("*.mid"))
+    if not midi_files:
+        print(f"ERROR: No MIDI files found in {midi_dir}")
+        print("Run stems_to_midi.py first!")
+        sys.exit(1)
+    
+    # Use first MIDI file (or could prompt user if multiple)
+    midi_file = midi_files[0]
+    if len(midi_files) > 1:
+        print(f"Found {len(midi_files)} MIDI files, using: {midi_file.name}")
+    else:
+        print(f"Using MIDI file: {midi_file.name}")
+    
+    # Output to project/video/ directory
+    video_dir = project_dir / "video"
+    video_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate output filename
+    output_file = video_dir / f"{midi_file.stem}.mp4"
+    
+    print(f"Rendering video to: {output_file}")
+    print(f"Settings: {width}x{height} @ {fps}fps")
+    if preview:
+        print("Preview mode enabled")
+    print()
+    
+    # Render video
+    renderer = MidiVideoRenderer(width=width, height=height, fps=fps)
+    renderer.render(str(midi_file), str(output_file), show_preview=preview)
+    
+    # Update project metadata
+    update_project_metadata(project_dir, {
+        "status": {
+            "separated": project["metadata"]["status"].get("separated", False) if project["metadata"] else False,
+            "cleaned": project["metadata"]["status"].get("cleaned", False) if project["metadata"] else False,
+            "midi_generated": project["metadata"]["status"].get("midi_generated", False) if project["metadata"] else False,
+            "video_rendered": True
+        }
+    })
+    
+    print(f"\n✓ Video rendering complete!")
+    print(f"  Video saved to: {output_file}")
+    print(f"  Project status updated\n")
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description='Render MIDI drum files to Rock Band-style falling notes videos'
+        description='Render MIDI drum files to Rock Band-style falling notes videos',
+        epilog="""
+Examples:
+  python render_midi_to_video.py              # Auto-detect project
+  python render_midi_to_video.py 1            # Render specific project
+  python render_midi_to_video.py --fps 60     # 60 FPS rendering
+  python render_midi_to_video.py --preview    # Show live preview
+        """
     )
-    parser.add_argument('midi_file', help='Input MIDI file path')
-    parser.add_argument('--output', '-o', default='drums_video.mp4',
-                       help='Output video file path (default: drums_video.mp4)')
+    parser.add_argument('project_number', type=int, nargs='?', default=None,
+                       help='Project number to process (optional)')
     parser.add_argument('--width', type=int, default=1920,
                        help='Video width (default: 1920)')
     parser.add_argument('--height', type=int, default=1080,
@@ -322,12 +419,36 @@ def main():
     
     args = parser.parse_args()
     
-    if not os.path.exists(args.midi_file):
-        print(f"❌ Error: MIDI file not found: {args.midi_file}")
-        return 1
+    # Select project
+    if args.project_number is not None:
+        project = get_project_by_number(args.project_number, USER_FILES_DIR)
+        if project is None:
+            print(f"ERROR: Project {args.project_number} not found")
+            sys.exit(1)
+    else:
+        # Auto-select project
+        project = select_project(None, USER_FILES_DIR, allow_interactive=True)
+        if project is None:
+            print("\nNo projects found in user-files/")
+            print("Run separate.py and stems_to_midi.py first!")
+            sys.exit(0)
     
-    renderer = MidiVideoRenderer(width=args.width, height=args.height, fps=args.fps)
-    renderer.render(args.midi_file, args.output, show_preview=args.preview)
+    # Check that project has MIDI files
+    has_midi = (project["path"] / "midi").exists()
+    
+    if not has_midi:
+        print(f"\nERROR: Project {project['number']} has no MIDI files.")
+        print("Run stems_to_midi.py first!")
+        sys.exit(1)
+    
+    # Render video
+    render_project_video(
+        project=project,
+        width=args.width,
+        height=args.height,
+        fps=args.fps,
+        preview=args.preview
+    )
     
     return 0
 

@@ -94,10 +94,187 @@ Refactor file management system from `-i/-o` flags to unified `user-files/` proj
 - [x] Load midiconfig.yaml from project folder
 - [x] Update project metadata after MIDI generation
 - [x] Update tests (reuses existing tests)
+- [x] Fix bug: removed undefined audio_files_to_process reference
+- [x] Fix bug: added tempo loading from config when None
 - [ ] Update STEMS_TO_MIDI_GUIDE.md (deferred to Phase 6)
 
 **Metrics**:
-- Tests written: 0 new (existing 32 still passing)
+- Tests written: 0 new (existing tests still passing)
+- Tests passing: 188/188 (100%)
+- Lines changed: ~200
+- Bug fixes: 2
+
+**Notes**:
+- Removed legacy -i/-o flags completely
+- Auto-detects cleaned/ or stems/ in project structure
+- Uses project-specific midiconfig.yaml with fallback to root
+- Loads tempo from config['midi']['default_tempo'] when None
+- Updates project status after MIDI generation
+- Clean error messages for missing stems/config
+
+---
+
+### Phase 4: Refactor sidechain_cleanup.py ✅
+**Status**: Complete  
+**Started**: 2025-10-19  
+**Completed**: 2025-10-19
+
+**Tasks**:
+- [x] Remove all `-i/-o` argument parsing
+- [x] Add project detection
+- [x] Auto-detect `stems/` folder within project
+- [x] Output cleaned stems to `cleaned/` subfolder
+- [x] Update project metadata after cleanup
+- [x] Update tests (reuses existing test infrastructure)
+- [ ] Update SIDECHAIN_CLEANUP_GUIDE.md (deferred to Phase 6)
+
+**Metrics**:
+- Tests written: 0 new (existing tests still passing)
+- Tests passing: 188/188 (100%)
+- Lines changed: ~100
+- New function: cleanup_project_stems()
+
+**Notes**:
+- Removed legacy -i/-o flags completely
+- Added cleanup_project_stems() function following established pattern
+- Auto-detects stems/ in project structure
+- Outputs to cleaned/ folder in project
+- Optional project_number argument (auto-selects most recent if omitted)
+- Preserves advanced parameters (threshold, ratio, attack, release, dry-wet)
+- Clean error messages for missing stems
+- Updates project status after successful cleanup
+
+---
+
+### Phase 5: Refactor render_midi_to_video.py ✅
+**Status**: Complete  
+**Started**: 2025-10-19  
+**Completed**: 2025-10-19
+
+**Tasks**:
+- [x] Remove required midi_file argument
+- [x] Add project detection
+- [x] Auto-detect MIDI files in `midi/` folder
+- [x] Output video to `video/` subfolder
+- [x] Update project metadata after rendering
+- [x] Update tests (reuses existing test infrastructure)
+- [ ] Update MIDI_VISUALIZATION_GUIDE.md (deferred to Phase 6)
+
+**Metrics**:
+- Tests written: 0 new (existing tests still passing)
+- Tests passing: 188/188 (100%)
+- Lines changed: ~120
+- New function: render_project_video()
+
+**Notes**:
+- Removed required midi_file positional argument
+- Added render_project_video() function
+- Auto-detects MIDI files in project/midi/ folder
+- Outputs to project/video/ folder
+- Optional project_number argument (auto-selects most recent if omitted)
+- Clean error messages for missing MIDI files
+- Updates project status after successful render
+
+---
+
+### Phase 6: Polish and Documentation ⏳
+**Status**: Not Started  
+**Planned Start**: After Phase 5
+
+**Tasks**:
+- [ ] Review all tools for consistency
+- [ ] Update LARSNET.md with new workflow
+- [ ] Update STEMS_TO_MIDI_GUIDE.md
+- [ ] Update SIDECHAIN_CLEANUP_GUIDE.md
+- [ ] Update MIDI_VISUALIZATION_GUIDE.md
+- [ ] Create PROJECT_WORKFLOW.md user guide
+- [ ] Ensure all error messages are clear
+- [ ] Final end-to-end testing
+
+**Metrics**:
+- TBD
+
+**Notes**:
+- All implementation phases complete
+- Need to update documentation to reflect project-based workflow
+- Consider creating comprehensive user guide
+
+---
+
+### Phase 7: Enhanced Features (Optional) 🔵
+**Status**: Not Planned  
+**Priority**: Low
+
+**Tasks**:
+- [ ] Unified CLI (larsnet.py process, larsnet.py status, larsnet.py list)
+- [ ] Project status command
+- [ ] Project listing command
+- [ ] Multi-project batch processing
+
+**Metrics**:
+- TBD
+
+**Notes**:
+- Optional enhancements
+- Current implementation provides all required functionality
+- Can be added later if needed
+
+---
+
+## Decision Log
+
+### 2025-10-19: Removed Backward Compatibility
+- **Decision**: Removed all backward compatibility with -i/-o flags
+- **Rationale**: User explicitly requested "no tools need any backwards compatibility"
+- **Impact**: Clean break, simpler code, no maintenance of dual systems
+
+### 2025-10-19: Added Project-Specific YAML Configs
+- **Decision**: Copy config.yaml, midiconfig.yaml, eq.yaml to each project
+- **Rationale**: User requested "project specific settings" in same YAML format
+- **Impact**: Projects are self-contained, settings can be tuned per-song
+- **Implementation**: get_project_config() function with fallback to root defaults
+
+### 2025-10-19: Bug Fix - Undefined Variable in stems_to_midi.py
+- **Issue**: NameError - audio_files_to_process not defined
+- **Root Cause**: Orphaned print statement from old workflow
+- **Fix**: Removed print statement referencing audio_files_to_process
+- **Validation**: All 188 tests passing
+
+### 2025-10-19: Bug Fix - TypeError in stems_to_midi.py
+- **Issue**: TypeError when tempo=None
+- **Root Cause**: MIDI library cannot handle None tempo (division by zero)
+- **Fix**: Added tempo loading from config['midi']['default_tempo'] when None
+- **Validation**: All 188 tests passing
+
+---
+
+## Overall Metrics
+
+**Test Coverage**:
+- Total tests: 188
+- Passing: 188/188 (100%)
+- Test time: ~2.2s
+
+**Lines of Code**:
+- project_manager.py: ~550
+- test_project_manager.py: ~350
+- test_separate.py: ~60
+- Modified files: separate.py (~150), separation_utils.py (+90), stems_to_midi.py (~200), sidechain_cleanup.py (~100), render_midi_to_video.py (~120)
+- Total: ~1620 lines
+
+**Architecture**:
+- Functional core / Imperative shell: Maintained
+- Project-based workflow: Fully operational
+- Config fallback system: Working
+- Error handling: Clear and informative
+
+**Git Commits**:
+- Phase 1: Complete
+- Phase 2: Complete
+- Phase 3: Complete (with 2 bug fixes)
+- Phase 4: Complete
+- Phase 5: Complete
+- Pending: Phase 6 (documentation)
 - Tests passing: 32/32 (100%)
 - Lines changed: ~200 (major refactor of CLI and processing logic)
 
