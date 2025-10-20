@@ -272,8 +272,8 @@ def cleanup_project_stems(
         print("No project available for cleanup.")
         sys.exit(1)
     
-    project_folder = project_info['project_folder']
-    song_name = project_info['song_name']
+    project_folder = project_info['path']
+    song_name = project_info['name']
     
     print(f"\n{'='*60}")
     print(f"Sidechain Cleanup: {song_name}")

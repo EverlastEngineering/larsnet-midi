@@ -42,15 +42,11 @@ def run_cleanup(project_number: int, threshold_db: float = -30.0, ratio: float =
     
     This is the actual work function that runs in the job queue.
     """
-    from sidechain_cleanup import sidechain_compress_project
-    from project_manager import get_project_by_number, USER_FILES_DIR
+    from sidechain_cleanup import cleanup_project_stems
     
-    project = get_project_by_number(project_number, USER_FILES_DIR)
-    if project is None:
-        raise ValueError(f'Project {project_number} not found')
-    
-    sidechain_compress_project(
-        project,
+    # cleanup_project_stems takes project_number directly
+    cleanup_project_stems(
+        project_number=project_number,
         threshold_db=threshold_db,
         ratio=ratio,
         attack_ms=attack_ms,
@@ -66,14 +62,25 @@ def run_stems_to_midi(project_number: int, **kwargs):
     
     This is the actual work function that runs in the job queue.
     """
-    from stems_to_midi import stems_to_midi_for_project
+    # Import from stems_to_midi.py file using importlib
+    # (stems_to_midi/ package directory shadows the .py file)
+    import importlib.util
+    import sys
+    from pathlib import Path
+    
+    # Load stems_to_midi.py explicitly
+    stems_to_midi_path = Path(__file__).parent.parent.parent / "stems_to_midi.py"
+    spec = importlib.util.spec_from_file_location("stems_to_midi_cli", stems_to_midi_path)
+    stems_to_midi_cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stems_to_midi_cli)
+    
     from project_manager import get_project_by_number, USER_FILES_DIR
     
     project = get_project_by_number(project_number, USER_FILES_DIR)
     if project is None:
         raise ValueError(f'Project {project_number} not found')
     
-    stems_to_midi_for_project(project, **kwargs)
+    stems_to_midi_cli.stems_to_midi_for_project(project, **kwargs)
     
     return {'project_number': project_number, 'midi_created': True}
 
@@ -84,14 +91,14 @@ def run_render_video(project_number: int, fps: int = 60, width: int = 1920, heig
     
     This is the actual work function that runs in the job queue.
     """
-    from render_midi_to_video import render_project_midi_to_video
+    from render_midi_to_video import render_project_video
     from project_manager import get_project_by_number, USER_FILES_DIR
     
     project = get_project_by_number(project_number, USER_FILES_DIR)
     if project is None:
         raise ValueError(f'Project {project_number} not found')
     
-    render_project_midi_to_video(project, fps=fps, width=width, height=height)
+    render_project_video(project, fps=fps, width=width, height=height)
     
     return {'project_number': project_number, 'video_created': True}
 
