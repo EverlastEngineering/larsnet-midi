@@ -128,6 +128,7 @@ function updateProjectHeader() {
     
     const statuses = [];
     if (currentProject.files.stems.length > 0) statuses.push('stems separated');
+    if (currentProject.files.cleaned.length > 0) statuses.push('stems cleaned');
     if (currentProject.files.midi.length > 0) statuses.push('MIDI generated');
     if (currentProject.files.video.length > 0) statuses.push('video rendered');
     
