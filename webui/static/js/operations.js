@@ -125,11 +125,22 @@ function monitorJob(jobId, operationName) {
     // Create job card
     addJobCard(jobId, operationName);
     
+    // Track last log count to avoid duplicates
+    let lastLogCount = 0;
+    
     // Connect to SSE stream
     const stream = api.streamJobStatus(jobId, {
         onUpdate: (job) => {
             updateJobCard(job);
-            addConsoleLog(`[${job.operation}] Progress: ${job.progress}%`, 'info');
+            
+            // Display new logs from the job
+            if (job.logs && job.logs.length > lastLogCount) {
+                const newLogs = job.logs.slice(lastLogCount);
+                newLogs.forEach(log => {
+                    addConsoleLog(`[${job.operation}] ${log.message}`, log.level);
+                });
+                lastLogCount = job.logs.length;
+            }
         },
         onComplete: (job) => {
             updateJobCard(job);

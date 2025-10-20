@@ -222,15 +222,23 @@ def _process_stems_to_midi(
         print(f"No stem files found matching expected pattern (name-stemtype.wav)")
         return
     
-    for base_name, stem_files_dict in files_by_song.items():
+    total_songs = len(files_by_song)
+    for song_idx, (base_name, stem_files_dict) in enumerate(files_by_song.items(), 1):
         print(f"Processing: {base_name}")
+        
+        # Progress: start of song processing
+        song_start_progress = int((song_idx - 1) / total_songs * 90)
+        print(f"Progress: {song_start_progress}%")
         
         events_by_stem = {}
         
         # Process each stem type
+        total_stems = len(stems_to_process)
+        processed_stems = 0
         for stem_type in stems_to_process:
             if stem_type not in stem_files_dict:
                 print(f"  Warning: {stem_type} file not found, skipping...")
+                processed_stems += 1
                 continue
             
             stem_file = stem_files_dict[stem_type]
@@ -258,6 +266,11 @@ def _process_stems_to_midi(
             
             if events:
                 events_by_stem[stem_type] = events
+            
+            # Progress: after each stem (0-90% of total)
+            processed_stems += 1
+            stem_progress = int((song_idx - 1) / total_songs * 90 + (processed_stems / total_stems) * (90 / total_songs))
+            print(f"Progress: {stem_progress}%")
         
         # Create MIDI file
         if events_by_stem:
@@ -275,6 +288,10 @@ def _process_stems_to_midi(
                 track_name=f"Drums - {base_name}",
                 config=config
             )
+            
+            # Progress: after MIDI creation (90-100% of total)
+            midi_progress = int(90 + (song_idx / total_songs) * 10)
+            print(f"Progress: {midi_progress}%")
             
             if learning_mode:
                 print(f"  Saved LEARNING MIDI: {midi_path}")

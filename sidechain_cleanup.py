@@ -193,8 +193,13 @@ def process_stems(
     print(f"  Dry/Wet: {dry_wet * 100:.0f}% processed")
     print()
     
-    for base_name, kick_file, snare_file in tracks_to_process:
+    total_tracks = len(tracks_to_process)
+    for track_idx, (base_name, kick_file, snare_file) in enumerate(tracks_to_process, 1):
         print(f"Processing: {base_name}")
+        
+        # Progress: start of track processing
+        track_start_progress = int((track_idx - 1) / total_tracks * 90)
+        print(f"Progress: {track_start_progress}%")
         
         # Load audio files
         kick_audio, sr = sf.read(str(kick_file))
@@ -230,7 +235,13 @@ def process_stems(
         sf.write(str(output_file), kick_final, sr)
         print(f"  Saved: {output_file}")
         
+        # Progress: after kick processing (70% of track work)
+        kick_progress = int((track_idx - 1) / total_tracks * 90 + 63)
+        print(f"Progress: {kick_progress}%")
+        
         # Copy other stems unchanged
+        total_other_stems = 4  # snare, toms, hihat, cymbals
+        stem_counter = 0
         for stem_name in ['snare', 'toms', 'hihat', 'cymbals']:
             stem_file = stems_dir / f"{base_name}-{stem_name}.wav"
             if stem_file.exists():
@@ -238,6 +249,11 @@ def process_stems(
                 stem_audio, stem_sr = sf.read(str(stem_file))
                 output_file = output_dir / f'{base_name}-{stem_name}.wav'
                 sf.write(str(output_file), stem_audio, stem_sr)
+            
+            stem_counter += 1
+            # Progress: copying other stems (70-90% of track work)
+            copy_progress = int((track_idx - 1) / total_tracks * 90 + 63 + (stem_counter / total_other_stems) * 27)
+            print(f"Progress: {copy_progress}%")
     
     print(f"\nDone! Processed stems saved to: {output_dir}")
 

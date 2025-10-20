@@ -215,13 +215,23 @@ def process_stems_for_project(
     stems_dir.mkdir(parents=True, exist_ok=True)
     
     # Process each audio file
-    for audio_file in audio_files:
+    total_files = len(audio_files)
+    for file_idx, audio_file in enumerate(audio_files, 1):
         if verbose:
             print(f"\nProcessing: {audio_file.name}")
         
+        # Progress: start of separation (0-80% of total)
+        separation_progress = int((file_idx - 1) / total_files * 80)
+        print(f"Progress: {separation_progress}%")
+        
         stems = larsnet(audio_file)
         
-        for stem, waveform in stems.items():
+        # Progress: after separation, before EQ/save (80-90% of total)
+        post_separation_progress = int((file_idx - 0.5) / total_files * 80 + 10)
+        print(f"Progress: {post_separation_progress}%")
+        
+        total_stems = len(stems)
+        for stem_idx, (stem, waveform) in enumerate(stems.items(), 1):
             # Apply frequency cleanup if enabled
             if apply_eq:
                 if verbose:
@@ -241,3 +251,7 @@ def process_stems_for_project(
             sf.write(save_path, waveform_np, larsnet.sr)
             if verbose:
                 print(f"  Saved: {save_path}")
+            
+            # Progress: saving stems (80-100% of total)
+            save_progress = int(80 + (file_idx - 1) / total_files * 20 + (stem_idx / total_stems) * (20 / total_files))
+            print(f"Progress: {save_progress}%")
