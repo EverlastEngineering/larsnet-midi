@@ -237,6 +237,11 @@ function updateJobCard(job) {
     
     // Remove card if job is done
     if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
+        // Refresh current project to update status badges
+        if (job.status === 'completed' && currentProject) {
+            selectProject(currentProject.number);
+        }
+        
         setTimeout(() => {
             const card = document.getElementById(`job-${job.id}`);
             if (card) {

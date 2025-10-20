@@ -58,6 +58,7 @@ function renderProjectsList() {
                     </div>
                     <div class="flex items-center mt-2 space-x-2 text-xs">
                         ${getStatusBadge('stems', project.has_stems)}
+                        ${getStatusBadge('cleaned', project.has_cleaned)}
                         ${getStatusBadge('midi', project.has_midi)}
                         ${getStatusBadge('video', project.has_video)}
                     </div>
@@ -74,6 +75,7 @@ function renderProjectsList() {
 function getStatusBadge(type, hasIt) {
     const icons = {
         stems: 'fa-divide',
+        cleaned: 'fa-broom',
         midi: 'fa-music',
         video: 'fa-video'
     };
