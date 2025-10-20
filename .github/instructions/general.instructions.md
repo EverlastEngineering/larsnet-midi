@@ -12,6 +12,13 @@ Let user know you've read instructions for confidence in your actions.
 When you complete a task, simply say "Done!" - do not provide summaries, explanations, or lists of changes made. The user can see what you did through the tool calls and test results.
 Do not make summary documents after completing tasks.
 
+Documentation and error handling are first-class concerns, not afterthoughts:
+- Write documentation as you build each feature, not at the end
+- Document how things work alongside implementation
+- Include error handling and user feedback from the start
+- Good documentation enables seamless handoffs during AI-driven development
+- Documentation serves as reference during testing and debugging
+
 For significant refactoring work:
 1. Create an immutable plan file: `./agent-plans/<module>.plan.md` documenting the approach, phases, risks, and success criteria.
 2. Create a mutable results file: `./agent-plans/<module>.results.md` tracking completion of each phase with checkboxes, metrics, and decision log.

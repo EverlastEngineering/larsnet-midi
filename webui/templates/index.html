@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LarsNet MIDI - Drum Track Processing</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Custom Tailwind Config -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'larsnet-primary': '#3b82f6',
+                        'larsnet-secondary': '#8b5cf6',
+                        'larsnet-success': '#10b981',
+                        'larsnet-warning': '#f59e0b',
+                        'larsnet-error': '#ef4444',
+                        'larsnet-dark': '#1f2937',
+                        'larsnet-darker': '#111827'
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1f2937;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #4b5563;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #6b7280;
+        }
+        
+        /* Drag and drop zone hover effect */
+        .drag-over {
+            border-color: #3b82f6 !important;
+            background-color: rgba(59, 130, 246, 0.1) !important;
+        }
+        
+        /* Smooth transitions */
+        .transition-smooth {
+            transition: all 0.3s ease;
+        }
+        
+        /* Progress bar animation */
+        @keyframes progress {
+            0% { width: 0%; }
+        }
+        .progress-bar {
+            animation: progress 0.5s ease-out;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans">
+    
+    <!-- Main Container -->
+    <div class="flex h-screen overflow-hidden">
+        
+        <!-- Left Sidebar - Projects -->
+        <aside id="projects-sidebar" class="w-80 bg-larsnet-darker border-r border-gray-700 flex flex-col">
+            <!-- Sidebar Header -->
+            <div class="p-6 border-b border-gray-700">
+                <h1 class="text-2xl font-bold text-larsnet-primary flex items-center">
+                    <i class="fas fa-drum mr-3"></i>
+                    LarsNet MIDI
+                </h1>
+                <p class="text-sm text-gray-400 mt-1">Drum Track Processing</p>
+            </div>
+            
+            <!-- Projects List -->
+            <div class="flex-1 overflow-y-auto p-4">
+                <div class="flex items-center justify-between mb-3">
+                    <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wide">Projects</h2>
+                    <button id="refresh-projects-btn" class="text-gray-400 hover:text-gray-200 transition-smooth">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                </div>
+                
+                <!-- Projects will be loaded here dynamically -->
+                <div id="projects-list">
+                    <!-- Loading state -->
+                    <div class="text-center py-8 text-gray-500">
+                        <i class="fas fa-spinner fa-spin text-2xl mb-2"></i>
+                        <p class="text-sm">Loading projects...</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Sidebar Footer -->
+            <div class="p-4 border-t border-gray-700">
+                <div class="text-xs text-gray-500 text-center">
+                    <p>v0.1.0 | <a href="#" class="text-larsnet-primary hover:underline">API Docs</a></p>
+                </div>
+            </div>
+        </aside>
+        
+        <!-- Main Content Area -->
+        <main class="flex-1 flex flex-col overflow-hidden">
+            
+            <!-- Top Bar -->
+            <header class="bg-larsnet-dark border-b border-gray-700 px-6 py-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h2 id="current-project-name" class="text-xl font-semibold text-gray-100">
+                            Select a project or upload new audio
+                        </h2>
+                        <p id="current-project-subtitle" class="text-sm text-gray-400 mt-1">
+                            Drag and drop an audio file to get started
+                        </p>
+                    </div>
+                    
+                    <!-- Health Status Indicator -->
+                    <div id="health-status" class="flex items-center">
+                        <div class="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></div>
+                        <span class="text-sm text-gray-400">Connected</span>
+                    </div>
+                </div>
+            </header>
+            
+            <!-- Content Grid -->
+            <div class="flex-1 overflow-y-auto p-6">
+                <div class="max-w-7xl mx-auto space-y-6">
+                    
+                    <!-- Upload Zone -->
+                    <section id="upload-section" class="bg-larsnet-dark rounded-lg border-2 border-dashed border-gray-600 p-8 text-center transition-smooth hover:border-gray-500">
+                        <div id="upload-zone" class="space-y-4">
+                            <div class="flex justify-center">
+                                <i class="fas fa-cloud-upload-alt text-6xl text-gray-500"></i>
+                            </div>
+                            <div>
+                                <h3 class="text-xl font-semibold text-gray-200 mb-2">Upload Audio File</h3>
+                                <p class="text-gray-400 mb-4">
+                                    Drag and drop your drum track here, or click to browse
+                                </p>
+                                <p class="text-sm text-gray-500">
+                                    Supported formats: WAV, MP3, FLAC, AIFF (max 500MB)
+                                </p>
+                            </div>
+                            <input type="file" id="file-input" class="hidden" accept=".wav,.mp3,.flac,.aiff,.aif">
+                            <button id="browse-btn" class="bg-larsnet-primary hover:bg-blue-600 text-white px-6 py-2 rounded-lg font-medium transition-smooth">
+                                <i class="fas fa-folder-open mr-2"></i>
+                                Browse Files
+                            </button>
+                        </div>
+                        
+                        <!-- Upload Progress -->
+                        <div id="upload-progress" class="hidden space-y-3 mt-6">
+                            <div class="flex items-center justify-between text-sm">
+                                <span class="text-gray-400">Uploading...</span>
+                                <span id="upload-percent" class="text-larsnet-primary font-semibold">0%</span>
+                            </div>
+                            <div class="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
+                                <div id="upload-progress-bar" class="bg-larsnet-primary h-full transition-smooth" style="width: 0%"></div>
+                            </div>
+                        </div>
+                    </section>
+                    
+                    <!-- Project Details & Operations -->
+                    <section id="project-section" class="hidden space-y-6">
+                        
+                        <!-- Operation Buttons -->
+                        <div class="bg-larsnet-dark rounded-lg p-6">
+                            <h3 class="text-lg font-semibold mb-4">Operations</h3>
+                            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                
+                                <!-- Separate Button -->
+                                <button id="btn-separate" class="operation-btn bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-lg transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
+                                    <i class="fas fa-divide text-2xl mb-2"></i>
+                                    <p class="font-semibold">Separate</p>
+                                    <p class="text-xs opacity-75">Split drums</p>
+                                </button>
+                                
+                                <!-- Cleanup Button -->
+                                <button id="btn-cleanup" class="operation-btn bg-purple-600 hover:bg-purple-700 text-white p-4 rounded-lg transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
+                                    <i class="fas fa-broom text-2xl mb-2"></i>
+                                    <p class="font-semibold">Clean</p>
+                                    <p class="text-xs opacity-75">Reduce bleed</p>
+                                </button>
+                                
+                                <!-- MIDI Button -->
+                                <button id="btn-midi" class="operation-btn bg-green-600 hover:bg-green-700 text-white p-4 rounded-lg transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
+                                    <i class="fas fa-music text-2xl mb-2"></i>
+                                    <p class="font-semibold">MIDI</p>
+                                    <p class="text-xs opacity-75">Convert notes</p>
+                                </button>
+                                
+                                <!-- Video Button -->
+                                <button id="btn-video" class="operation-btn bg-orange-600 hover:bg-orange-700 text-white p-4 rounded-lg transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
+                                    <i class="fas fa-video text-2xl mb-2"></i>
+                                    <p class="font-semibold">Video</p>
+                                    <p class="text-xs opacity-75">Visualize</p>
+                                </button>
+                                
+                            </div>
+                        </div>
+                        
+                        <!-- Active Jobs -->
+                        <div id="active-jobs-section" class="hidden">
+                            <h3 class="text-lg font-semibold mb-4">Active Jobs</h3>
+                            <div id="active-jobs-list" class="space-y-3">
+                                <!-- Jobs will be loaded here dynamically -->
+                            </div>
+                        </div>
+                        
+                        <!-- Downloads -->
+                        <div id="downloads-section" class="bg-larsnet-dark rounded-lg p-6">
+                            <h3 class="text-lg font-semibold mb-4">Downloads</h3>
+                            <div id="downloads-list" class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                <!-- Download buttons will be added here -->
+                            </div>
+                        </div>
+                        
+                    </section>
+                    
+                    <!-- Console/Logs -->
+                    <section id="console-section" class="bg-larsnet-dark rounded-lg p-6 hidden">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-lg font-semibold">Console</h3>
+                            <button id="clear-console-btn" class="text-sm text-gray-400 hover:text-gray-200 transition-smooth">
+                                <i class="fas fa-trash-alt mr-1"></i>
+                                Clear
+                            </button>
+                        </div>
+                        <div id="console-output" class="bg-gray-900 rounded p-4 font-mono text-sm h-64 overflow-y-auto">
+                            <div class="text-gray-500">Console initialized...</div>
+                        </div>
+                    </section>
+                    
+                </div>
+            </div>
+            
+        </main>
+    </div>
+    
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="fixed top-4 right-4 z-50 space-y-2">
+        <!-- Toasts will be inserted here dynamically -->
+    </div>
+    
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="hidden fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50">
+        <div class="bg-larsnet-dark rounded-lg p-8 max-w-md">
+            <div class="text-center">
+                <i class="fas fa-spinner fa-spin text-5xl text-larsnet-primary mb-4"></i>
+                <h3 class="text-xl font-semibold mb-2">Processing...</h3>
+                <p id="loading-message" class="text-gray-400">Please wait</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- JavaScript -->
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/projects.js"></script>
+    <script src="/static/js/operations.js"></script>
+    <script src="/static/js/app.js"></script>
+    
+</body>
+</html>

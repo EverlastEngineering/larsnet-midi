@@ -16,12 +16,19 @@ This project runs in Docker. Install [Docker Desktop](https://www.docker.com/pro
 docker compose up -d
 ```
 
-This will incur some significant downloads for tools and such. Once complete and running, execute this from Terminal to enter the shell inside Docker.
+This will incur some significant downloads for tools and such. Once complete and running, you can use either:
 
+**Option 1: Web Interface (Recommended)**
+```bash
+docker exec -it larsnet-midi bash
+python -m webui.app
+```
+Then open http://localhost:49152 in your browser. See [WEBUI_SETUP.md](WEBUI_SETUP.md) for details.
+
+**Option 2: Command Line**
 ```bash
 docker exec -it larsnet-midi bash
 ```
-
 This is where you'll execute the scripts.
 
 ## Turning Drum Tracks into MIDI

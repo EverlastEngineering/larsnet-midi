@@ -10,9 +10,9 @@ services:
     volumes:
       - .:/app
     
-    # You can open ports if your application needs to expose a web interface.
-    # ports:
-    #   - "8888:8888" # Example for Jupyter Notebooks
+    # Expose web UI port
+    ports:
+      - "49152:5000"  # LarsNet Web UI
     
     # To keep the container running for inspection, we override the Dockerfile's CMD
     # of ["/bin/bash"] to use 'tail -f /dev/null'.
