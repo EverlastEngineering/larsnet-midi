@@ -225,8 +225,9 @@ function updateJobCard(job) {
     
     if (!statusEl) return; // Card was removed
     
-    // Update status
-    statusEl.textContent = job.status;
+    // Update status - show detailed status if available, otherwise use basic status
+    const displayStatus = job.status_detail || job.status;
+    statusEl.textContent = displayStatus;
     statusEl.className = {
         'queued': 'text-yellow-500',
         'running': 'text-blue-500',

@@ -49,6 +49,7 @@ class Job:
         operation: Operation name (e.g., 'separate', 'stems-to-midi')
         project_id: Associated project ID
         status: Current job status
+        status_detail: Detailed status message (e.g., 'Processing kick')
         progress: Progress percentage (0-100)
         logs: List of log entries
         result: Result data (if completed)
@@ -61,6 +62,7 @@ class Job:
     operation: str
     project_id: Optional[int]
     status: JobStatus = JobStatus.QUEUED
+    status_detail: str = ""
     progress: int = 0
     logs: List[JobLog] = field(default_factory=list)
     result: Optional[Any] = None
@@ -84,6 +86,7 @@ class Job:
             'operation': self.operation,
             'project_id': self.project_id,
             'status': self.status.value,
+            'status_detail': self.status_detail,
             'progress': self.progress,
             'logs': [
                 {
@@ -184,6 +187,22 @@ class StdoutWrapper:
                             self.job.progress = max(0, min(100, progress))
                         except (ValueError, IndexError):
                             pass  # Ignore malformed progress lines
+                    
+                    # Check for stem processing messages from tqdm (e.g., "kick pretrained_kick_unet")
+                    elif any(stem in line.lower() for stem in ['kick', 'snare', 'toms', 'hihat', 'cymbals']):
+                        # Extract stem name
+                        for stem in ['kick', 'snare', 'toms', 'hihat', 'cymbals']:
+                            if stem in line.lower():
+                                self.job.status_detail = f"Processing {stem}"
+                                break
+                    
+                    # Check for other status indicators
+                    elif 'Loading UNet models' in line:
+                        self.job.status_detail = "Initializing models"
+                    elif 'Separate drums' in line:
+                        self.job.status_detail = "Separating drums"
+                    elif 'Saved:' in line and '.wav' in line:
+                        self.job.status_detail = "Saving stems"
                     
                     # Check for tqdm progress format (e.g., "20%|##" or "kick: 20%|##")
                     elif '%|' in line:
