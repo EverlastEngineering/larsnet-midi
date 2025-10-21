@@ -70,10 +70,16 @@ class LarsNet(nn.Module):
 
             print('Separate drums...')
             pbar = tqdm(self.models.items())
+            stem_count = 0
+            total_stems = len(self.models)
             for stem, model in pbar:
                 pbar.set_description(stem)
                 y, __ = model(x)
                 out[stem] = y.squeeze(0).detach()
+                stem_count += 1
+                # Report progress: 15% (init) + 15% per stem
+                progress = 15 + int((stem_count / total_stems) * 75)
+                print(f'Progress: {progress}%')
 
         return out
 
@@ -87,12 +93,18 @@ class LarsNet(nn.Module):
 
             print('Separate drums...')
             pbar = tqdm(self.models.items())
+            stem_count = 0
+            total_stems = len(self.models)
             for stem, model in pbar:
                 pbar.set_description(stem)
                 __, mask = model(mag)
                 mag_pred.append(
                     (mask * mag) ** self.wiener_exponent
                 )
+                stem_count += 1
+                # Report progress: 15% (init) + 15% per stem
+                progress = 15 + int((stem_count / total_stems) * 75)
+                print(f'Progress: {progress}%')
 
             pred_sum = sum(mag_pred)
 
@@ -112,11 +124,17 @@ class LarsNet(nn.Module):
 
             print('Separate drum magnitude...')
             pbar = tqdm(self.models.items())
+            stem_count = 0
+            total_stems = len(self.models)
             for stem, model in pbar:
                 pbar.set_description(stem)
                 mag_pred, __ = model(mag)
                 stft = torch.polar(mag_pred, phase)
                 out[stem] = stft.squeeze(0).detach()
+                stem_count += 1
+                # Report progress: 15% (init) + 15% per stem
+                progress = 15 + int((stem_count / total_stems) * 75)
+                print(f'Progress: {progress}%')
 
         return out
 

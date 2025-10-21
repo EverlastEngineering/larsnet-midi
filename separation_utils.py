@@ -204,32 +204,31 @@ def process_stems_for_project(
         print(f"  Post-processing EQ: {'Enabled' if apply_eq else 'Disabled'}")
         print(f"  Device: {device}")
     
+    print("Progress: 0%")
     larsnet = LarsNet(
         wiener_filter=wiener_exponent is not None,
         wiener_exponent=wiener_exponent,
         device=device,
         config=str(config_path),
     )
+    print("Progress: 15%")
     
     # Create stems directory
     stems_dir.mkdir(parents=True, exist_ok=True)
     
     # Process each audio file
-    total_files = len(audio_files)
-    for file_idx, audio_file in enumerate(audio_files, 1):
+    for audio_file in audio_files:
         if verbose:
             print(f"\nProcessing: {audio_file.name}")
         
-        # Progress: start of separation (0-80% of total)
-        separation_progress = int((file_idx - 1) / total_files * 80)
-        print(f"Progress: {separation_progress}%")
-        
+        # Separation happens here - we'll report progress per stem via callback if possible
+        # For now, just report that separation is happening
         stems = larsnet(audio_file)
         
-        # Progress: after separation, before EQ/save (80-90% of total)
-        post_separation_progress = int((file_idx - 0.5) / total_files * 80 + 10)
-        print(f"Progress: {post_separation_progress}%")
+        # After all stems are separated: 15% (init) + 75% (5 stems * 15%) = 90%
+        print("Progress: 90%")
         
+        # Saving phase: 90-100%
         total_stems = len(stems)
         for stem_idx, (stem, waveform) in enumerate(stems.items(), 1):
             # Apply frequency cleanup if enabled
@@ -252,6 +251,6 @@ def process_stems_for_project(
             if verbose:
                 print(f"  Saved: {save_path}")
             
-            # Progress: saving stems (80-100% of total)
-            save_progress = int(80 + (file_idx - 1) / total_files * 20 + (stem_idx / total_stems) * (20 / total_files))
+            # Progress: saving stems (90-100%)
+            save_progress = int(90 + (stem_idx / total_stems) * 10)
             print(f"Progress: {save_progress}%")
