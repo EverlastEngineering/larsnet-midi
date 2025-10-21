@@ -166,13 +166,6 @@ function monitorJob(jobId, operationName) {
             
             // Clean up
             activeStreams.delete(jobId);
-            
-            // Reload project to update file lists
-            setTimeout(() => {
-                if (currentProject) {
-                    selectProject(currentProject.number);
-                }
-            }, 1000);
         },
         onError: (job) => {
             updateJobCard(job);
@@ -207,14 +200,14 @@ function addJobCard(jobId, operationName) {
     
     const card = document.createElement('div');
     card.id = `job-${jobId}`;
-    card.className = 'bg-gray-800 rounded-lg p-4 border border-gray-700';
+    card.className = 'bg-gray-800 rounded-lg p-4 border border-gray-700 transition-smooth';
     card.innerHTML = `
         <div class="flex items-center justify-between mb-3">
             <div class="flex items-center">
                 <i class="fas ${icons[operationName] || 'fa-cog'} text-larsnet-primary mr-2"></i>
                 <span class="font-medium">${capitalize(operationName)}</span>
             </div>
-            <button onclick="cancelJob('${jobId}')" class="text-gray-400 hover:text-red-500 transition-smooth">
+            <button id="job-${jobId}-close-btn" data-job-id="${jobId}" class="text-gray-400 hover:text-red-500 transition-smooth">
                 <i class="fas fa-times"></i>
             </button>
         </div>
@@ -230,6 +223,12 @@ function addJobCard(jobId, operationName) {
     `;
     
     container.appendChild(card);
+    
+    // Attach event listener for close/cancel button
+    const closeBtn = document.getElementById(`job-${jobId}-close-btn`);
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => cancelJob(jobId));
+    }
 }
 
 /**
@@ -245,52 +244,96 @@ function updateJobCard(job) {
     // Update status - show detailed status if available, otherwise use basic status
     const displayStatus = job.status_detail || job.status;
     statusEl.textContent = displayStatus;
+    const statusLower = job.status.toLowerCase();
     statusEl.className = {
         'queued': 'text-yellow-500',
         'running': 'text-blue-500',
         'completed': 'text-green-500',
         'failed': 'text-red-500',
         'cancelled': 'text-gray-500'
-    }[job.status] || 'text-gray-500';
+    }[statusLower] || 'text-gray-500';
     
     // Update progress
     progressEl.textContent = `${job.progress}%`;
     barEl.style.width = `${job.progress}%`;
     
     // Change bar color based on status
-    if (job.status === 'completed') {
+    if (statusLower === 'completed') {
         barEl.className = 'bg-green-500 h-full transition-smooth';
-    } else if (job.status === 'failed') {
+    } else if (statusLower === 'failed') {
         barEl.className = 'bg-red-500 h-full transition-smooth';
     }
     
     // Remove card if job is done
-    if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
+    if (statusLower === 'completed' || statusLower === 'failed' || statusLower === 'cancelled') {
+        // Change X button to close instead of cancel
+        const closeBtn = document.getElementById(`job-${job.id}-close-btn`);
+        if (closeBtn) {
+            // Remove inline onclick attribute
+            closeBtn.removeAttribute('onclick');
+            // Set up new click handler
+            closeBtn.onclick = (e) => {
+                e.preventDefault();
+                removeJobCard(job.id);
+            };
+            closeBtn.className = 'text-gray-400 hover:text-gray-200 transition-smooth';
+        }
+        
         // Refresh project data to update status badges
-        if (job.status === 'completed') {
+        if (statusLower === 'completed') {
             // Refresh project list (left sidebar badges)
             loadProjects();
             
-            // Refresh current project details
+            // Refresh current project files without reloading jobs
             if (currentProject) {
-                selectProject(currentProject.number);
+                refreshCurrentProjectFiles();
             }
         }
         
+        // Auto-remove after 10 seconds
         setTimeout(() => {
-            const card = document.getElementById(`job-${job.id}`);
-            if (card) {
-                card.style.opacity = '0';
-                card.style.transform = 'translateX(100%)';
-                setTimeout(() => card.remove(), 300);
-            }
+            removeJobCard(job.id);
+        }, 10000);
+    }
+}
+
+/**
+ * Refresh current project's files without reloading jobs
+ */
+async function refreshCurrentProjectFiles() {
+    if (!currentProject) return;
+    
+    try {
+        const data = await api.getProject(currentProject.number);
+        currentProject = data.project;
+        
+        // Update UI elements that depend on files
+        updateProjectHeader();
+        updateOperationButtons();
+        updateDownloads();
+        renderProjectsList(); // Update sidebar badges
+    } catch (error) {
+        console.error('Failed to refresh project files:', error);
+    }
+}
+
+/**
+ * Remove a job card from UI
+ */
+function removeJobCard(jobId) {
+    const card = document.getElementById(`job-${jobId}`);
+    if (card) {
+        card.style.opacity = '0';
+        card.style.transform = 'translateY(-20px)';
+        setTimeout(() => {
+            card.remove();
             
             // Hide section if no more jobs
             const container = document.getElementById('active-jobs-list');
             if (container.children.length === 0) {
                 document.getElementById('active-jobs-section').classList.add('hidden');
             }
-        }, 3000);
+        }, 300);
     }
 }
 

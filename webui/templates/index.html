@@ -100,6 +100,17 @@
                         <p class="text-sm">Loading projects...</p>
                     </div>
                 </div>
+                
+                <!-- Upload Zone for Selected Project -->
+                <div id="sidebar-upload-section" class="hidden mt-4">
+                    <div class="border-2 border-dashed border-gray-600 rounded-lg p-4 text-center hover:border-gray-500 transition-smooth">
+                        <i class="fas fa-cloud-upload-alt text-3xl text-gray-500 mb-2"></i>
+                        <p class="text-xs text-gray-400 mb-2">Upload new audio</p>
+                        <button id="sidebar-browse-btn" class="bg-larsnet-primary hover:bg-blue-600 text-white text-xs px-3 py-1 rounded transition-smooth">
+                            <i class="fas fa-folder-open mr-1"></i>Browse
+                        </button>
+                    </div>
+                </div>
             </div>
             
             <!-- Sidebar Footer -->
@@ -137,6 +148,13 @@
             <div class="flex-1 overflow-y-auto p-6">
                 <div class="max-w-7xl mx-auto space-y-6">
                     
+                    <!-- Active Jobs (at top) -->
+                    <section id="active-jobs-section" class="hidden">
+                        <div id="active-jobs-list" class="space-y-3">
+                            <!-- Jobs will be loaded here dynamically -->
+                        </div>
+                    </section>
+                    
                     <!-- Upload Zone -->
                     <section id="upload-section" class="bg-larsnet-dark rounded-lg border-2 border-dashed border-gray-600 p-8 text-center transition-smooth hover:border-gray-500">
                         <div id="upload-zone" class="space-y-4">
@@ -173,6 +191,14 @@
                     
                     <!-- Project Details & Operations -->
                     <section id="project-section" class="hidden space-y-6">
+                        
+                        <!-- Downloads -->
+                        <div id="downloads-section" class="bg-larsnet-dark rounded-lg p-6">
+                            <h3 class="text-lg font-semibold mb-4">Downloads</h3>
+                            <div id="downloads-list" class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                <!-- Download buttons will be added here -->
+                            </div>
+                        </div>
                         
                         <!-- Operation Buttons -->
                         <div class="bg-larsnet-dark rounded-lg p-6">
@@ -369,22 +395,6 @@
                                 </div>
                             </div>
                             
-                        </div>
-                        
-                        <!-- Active Jobs -->
-                        <div id="active-jobs-section" class="hidden">
-                            <h3 class="text-lg font-semibold mb-4">Active Jobs</h3>
-                            <div id="active-jobs-list" class="space-y-3">
-                                <!-- Jobs will be loaded here dynamically -->
-                            </div>
-                        </div>
-                        
-                        <!-- Downloads -->
-                        <div id="downloads-section" class="bg-larsnet-dark rounded-lg p-6">
-                            <h3 class="text-lg font-semibold mb-4">Downloads</h3>
-                            <div id="downloads-list" class="grid grid-cols-2 md:grid-cols-4 gap-3">
-                                <!-- Download buttons will be added here -->
-                            </div>
                         </div>
                         
                     </section>

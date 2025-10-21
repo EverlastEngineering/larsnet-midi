@@ -100,8 +100,10 @@ async function selectProject(projectNumber) {
         updateOperationButtons();
         updateDownloads();
         
-        // Show project section
+        // Show project section and sidebar upload, hide main upload
         document.getElementById('project-section').classList.remove('hidden');
+        document.getElementById('upload-section').classList.add('hidden');
+        document.getElementById('sidebar-upload-section').classList.remove('hidden');
         
         // Load active jobs for this project
         loadProjectJobs(projectNumber);
@@ -238,9 +240,10 @@ function updateDownloads() {
 async function loadProjectJobs(projectNumber) {
     try {
         const data = await api.getProjectJobs(projectNumber);
-        const activeJobs = data.jobs.filter(job => 
-            job.status === 'queued' || job.status === 'running'
-        );
+        const activeJobs = data.jobs.filter(job => {
+            const status = job.status.toLowerCase();
+            return status === 'queued' || status === 'running';
+        });
         
         if (activeJobs.length > 0) {
             document.getElementById('active-jobs-section').classList.remove('hidden');

@@ -82,6 +82,11 @@ function setupEventListeners() {
         document.getElementById('file-input').click();
     });
     
+    // Sidebar file input
+    document.getElementById('sidebar-browse-btn').addEventListener('click', () => {
+        document.getElementById('file-input').click();
+    });
+    
     document.getElementById('file-input').addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
             handleFileUpload(e.target.files[0]);
@@ -94,6 +99,7 @@ function setupEventListeners() {
  */
 function setupUploadZone() {
     const uploadZone = document.getElementById('upload-section');
+    const sidebarUploadZone = document.getElementById('sidebar-upload-section');
     
     // Prevent default drag behaviors
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -116,6 +122,30 @@ function setupUploadZone() {
     
     // Handle dropped files
     uploadZone.addEventListener('drop', (e) => {
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            handleFileUpload(files[0]);
+        }
+    }, false);
+    
+    // Setup sidebar upload zone drag and drop
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        sidebarUploadZone.addEventListener(eventName, preventDefaults, false);
+    });
+    
+    ['dragenter', 'dragover'].forEach(eventName => {
+        sidebarUploadZone.addEventListener(eventName, () => {
+            sidebarUploadZone.classList.add('drag-over');
+        }, false);
+    });
+    
+    ['dragleave', 'drop'].forEach(eventName => {
+        sidebarUploadZone.addEventListener(eventName, () => {
+            sidebarUploadZone.classList.remove('drag-over');
+        }, false);
+    });
+    
+    sidebarUploadZone.addEventListener('drop', (e) => {
         const files = e.dataTransfer.files;
         if (files.length > 0) {
             handleFileUpload(files[0]);
