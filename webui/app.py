@@ -11,8 +11,8 @@ Usage:
     FLASK_ENV=production python -m webui.app
 """
 
-from flask import Flask, render_template, send_from_directory
-from flask_cors import CORS
+from flask import Flask, render_template, send_from_directory # type: ignore
+from flask_cors import CORS # type: ignore
 from pathlib import Path
 import sys
 import logging

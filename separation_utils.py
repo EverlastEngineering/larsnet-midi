@@ -4,10 +4,10 @@ Shared utilities for drum separation with optional post-processing EQ.
 from larsnet import LarsNet
 from pathlib import Path
 from typing import Union, Optional, Dict
-import soundfile as sf
-import torch
-import torchaudio.functional as F
-import yaml
+import soundfile as sf # type: ignore
+import torch # type: ignore
+import torchaudio.functional as F # type: ignore
+import yaml # type: ignore
 
 
 def load_eq_config(config_path: Union[str, Path] = "eq.yaml") -> Dict:

@@ -4,8 +4,8 @@ Stem Processing Module
 Handles the main processing pipeline for converting audio stems to MIDI events.
 """
 
-import numpy as np
-import soundfile as sf
+import numpy as np # type: ignore
+import soundfile as sf # type: ignore
 from pathlib import Path
 from typing import Union, List, Dict, Optional
 
