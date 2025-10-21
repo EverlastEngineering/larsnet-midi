@@ -384,7 +384,7 @@ Get detailed status of a specific job.
     "id": "550e8400-e29b-41d4-a716-446655440000",
     "operation": "stems-to-midi",
     "project_id": 1,
-    "status": "running",
+    "status": "Running",
     "progress": 65,
     "logs": [...],
     "result": null,
@@ -417,7 +417,7 @@ Real-time job status updates using Server-Sent Events. Connect once and receive 
 **`job_update`** - Periodic progress updates:
 ```
 event: job_update
-data: {"id": "...", "status": "running", "progress": 50, "logs": [...]}
+data: {"id": "...", "status": "Running", "progress": 50, "logs": [...]}
 ```
 
 **`job_complete`** - Job finished successfully:
@@ -505,7 +505,7 @@ Get all jobs associated with a specific project.
       "id": "...",
       "operation": "stems-to-midi",
       "project_id": 1,
-      "status": "running",
+      "status": "Running",
       ...
     }
   ]

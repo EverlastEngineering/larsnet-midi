@@ -115,7 +115,7 @@ def process_stems(
             print(f"\nProcessing: {mixture.name}")
         
         stems = larsnet(mixture)
-
+        print(f"Status Update: Saving Stems...")
         for stem, waveform in stems.items():
             # Apply frequency cleanup if enabled
             if apply_eq:
@@ -230,6 +230,7 @@ def process_stems_for_project(
         
         # Saving phase: 90-100%
         total_stems = len(stems)
+        print(f"Status Update: Saving Stems...")
         for stem_idx, (stem, waveform) in enumerate(stems.items(), 1):
             # Apply frequency cleanup if enabled
             if apply_eq:

@@ -99,17 +99,25 @@ def sidechain_compress(
         Compressed audio
     """
     # Get envelope of sidechain (snare)
+    print(f"Applying sidechain compression with threshold={threshold_db}dB, ratio={ratio}:1")
     sidechain_envelope = envelope_follower(sidechain_audio, sr, attack_ms, release_ms)
-    
+    print(f"Sidechain envelope calculated.")
     # Convert to dB
     epsilon = 1e-10
     sidechain_db = 20 * np.log10(sidechain_envelope + epsilon)
-    
+    print(f"Sidechain envelope converted to dB.")
     # Calculate gain reduction
     threshold = threshold_db
     gain_reduction_db = np.zeros_like(sidechain_db)
-    
+    print(f"Status Update: Calculating gain reduction...")
     for i in range(len(sidechain_db)):
+        # print(f"Processing sample {i+1}/{len(sidechain_db)}", end='\r')
+
+        # Every M samples, print progress converted into percentage
+        if i % 1000000 == 0:
+            progress = (i / len(sidechain_db)) * 100
+            print(f"Progress: {progress:.0f}%", end='\r')
+
         if sidechain_db[i] > threshold + knee_db:
             # Above knee - full compression
             over_threshold = sidechain_db[i] - threshold
@@ -120,21 +128,26 @@ def sidechain_compress(
             gain_reduction_db[i] = -over_threshold**2 * (1 - 1/ratio) / (4 * knee_db)
         # else: below threshold, no gain reduction
     
+    print(f"Progress: 100%")
+    print(f"Gain reduction calculated.")
     # Convert gain reduction to linear
     gain_linear = 10 ** (gain_reduction_db / 20.0)
     
+    print(f"Applying makeup gain...")
     # Apply makeup gain
     makeup_gain_linear = 10 ** (makeup_gain_db / 20.0)
     gain_linear *= makeup_gain_linear
     
+    print(f"Makeup gain applied.")
     # Apply gain reduction to main audio
     if main_audio.ndim == 2:
         # Stereo - apply same gain to both channels
         compressed = main_audio * gain_linear[:, np.newaxis]
+        print(f"Compression applied to stereo audio.")
     else:
         # Mono
         compressed = main_audio * gain_linear
-    
+        print(f"Compression applied to mono audio.")
     return compressed
 
 
@@ -197,10 +210,6 @@ def process_stems(
     for track_idx, (base_name, kick_file, snare_file) in enumerate(tracks_to_process, 1):
         print(f"Processing: {base_name}")
         
-        # Progress: start of track processing
-        track_start_progress = int((track_idx - 1) / total_tracks * 90)
-        print(f"Progress: {track_start_progress}%")
-        
         # Load audio files
         kick_audio, sr = sf.read(str(kick_file))
         snare_audio, sr_snare = sf.read(str(snare_file))
@@ -215,7 +224,7 @@ def process_stems(
         snare_audio = snare_audio[:min_length]
         
         # Apply sidechain compression
-        print(f"  Applying sidechain compression...")
+        print(f"Status Update: Applying sidechain compression...")
         kick_compressed = sidechain_compress(
             kick_audio,
             snare_audio,
@@ -226,22 +235,26 @@ def process_stems(
             release_ms=release_ms
         )
         
+        print(f"  Sidechain compression applied.")
         # Dry/wet mix
         kick_final = dry_wet * kick_compressed + (1 - dry_wet) * kick_audio
         
+        print(f"  Saving cleaned kick track...")
+
+        print(f"Status Update: Saving Files...")
+        print(f"Progress: 0%")
+
         # Save to flat output directory (same structure as input)
         output_file = output_dir / f'{base_name}-kick.wav'
         
         sf.write(str(output_file), kick_final, sr)
         print(f"  Saved: {output_file}")
         
-        # Progress: after kick processing (70% of track work)
-        kick_progress = int((track_idx - 1) / total_tracks * 90 + 63)
-        print(f"Progress: {kick_progress}%")
+        print(f"Progress: 20%")
         
         # Copy other stems unchanged
         total_other_stems = 4  # snare, toms, hihat, cymbals
-        stem_counter = 0
+        stem_counter = 1
         for stem_name in ['snare', 'toms', 'hihat', 'cymbals']:
             stem_file = stems_dir / f"{base_name}-{stem_name}.wav"
             if stem_file.exists():
@@ -251,11 +264,10 @@ def process_stems(
                 sf.write(str(output_file), stem_audio, stem_sr)
             
             stem_counter += 1
-            # Progress: copying other stems (70-90% of track work)
-            copy_progress = int((track_idx - 1) / total_tracks * 90 + 63 + (stem_counter / total_other_stems) * 27)
-            print(f"Progress: {copy_progress}%")
-    
-    print(f"\nDone! Processed stems saved to: {output_dir}")
+            print(f"Progress: {stem_counter * 20}%")
+
+    print(f"Status Update: Process complete!")
+    print(f"Stems saved to: {output_dir}")
 
 
 def cleanup_project_stems(

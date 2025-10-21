@@ -246,6 +246,7 @@ class MidiVideoRenderer:
     
     def render(self, midi_path: str, output_path: str, show_preview: bool = False):
         """Render MIDI file to video"""
+        print(f"Status Update: Rendering Video")
         print(f"Parsing MIDI file: {midi_path}")
         notes, total_duration = self.parse_midi(midi_path)
         print(f"Found {len(notes)} notes, duration: {total_duration:.2f}s")
@@ -307,9 +308,9 @@ class MidiVideoRenderer:
                     break
             
             # Progress
-            if frame_num % (self.fps * 5) == 0:
+            if frame_num % 50 == 0:
                 progress = (frame_num / total_frames) * 100
-                print(f"Progress: {progress:.1f}%")
+                print(f"Progress: {progress:.1f}%", end='\r')
         
         out.release()
         if show_preview:
@@ -390,7 +391,7 @@ def render_project_video(
         }
     })
     
-    print(f"\n✓ Video rendering complete!")
+    print(f"Status Update: Video rendering complete")
     print(f"  Video saved to: {output_file}")
     print(f"  Project status updated\n")
 

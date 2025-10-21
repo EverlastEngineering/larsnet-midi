@@ -135,7 +135,7 @@ def stems_to_midi_for_project(
         }
     })
     
-    print(f"\n✓ MIDI conversion complete!")
+    print(f"Status Update: MIDI conversion complete!")
     print(f"  MIDI files saved to: {midi_dir}")
     print(f"  Project status updated\n")
 

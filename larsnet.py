@@ -35,11 +35,11 @@ class LarsNet(nn.Module):
         if wiener_filter:
             print(f'> Applying Wiener filter with α={self.wiener_exponent}')
 
-        print('Loading UNet models...')
-        pbar = tqdm(self.stems)
-        for stem in pbar:
+        print('Status Update: Loading UNet models...')
+        
+        for stem in self.stems:
             checkpoint_path = Path(config['inference_models'][stem])
-            pbar.set_description(f'{stem} {checkpoint_path.stem}')
+            print(f'Status Update: Loading {stem} model')
 
             F = config[stem]['F']
             T = config[stem]['T']
@@ -54,6 +54,7 @@ class LarsNet(nn.Module):
             model.eval()
 
             self.models[stem] = model
+            
 
     @staticmethod
     def _fix_dim(x):
@@ -62,18 +63,19 @@ class LarsNet(nn.Module):
         if x.dim() == 2:
             x = x.unsqueeze(0)
         return x
+    
+    def printStemName(self, stem):
+        print(f'Processing File: {stem}')
 
     def separate(self, x):
         with torch.no_grad():
             out = {}
             x = x.to(self.device)
-
-            print('Separate drums...')
-            pbar = tqdm(self.models.items())
+            
             stem_count = 0
             total_stems = len(self.models)
-            for stem, model in pbar:
-                pbar.set_description(stem)
+            for stem, model in self.models.items():
+                self.printStemName(stem)
                 y, __ = model(x)
                 out[stem] = y.squeeze(0).detach()
                 stem_count += 1
@@ -91,12 +93,10 @@ class LarsNet(nn.Module):
             x = self._fix_dim(x).to(self.device)
             mag, phase = self.utils.batch_stft(x)
 
-            print('Separate drums...')
-            pbar = tqdm(self.models.items())
             stem_count = 0
             total_stems = len(self.models)
-            for stem, model in pbar:
-                pbar.set_description(stem)
+            for stem, model in self.models.items():
+                self.printStemName(stem)
                 __, mask = model(mag)
                 mag_pred.append(
                     (mask * mag) ** self.wiener_exponent
@@ -122,12 +122,10 @@ class LarsNet(nn.Module):
             x = self._fix_dim(x).to(self.device)
             mag, phase = self.utils.batch_stft(x)
 
-            print('Separate drum magnitude...')
-            pbar = tqdm(self.models.items())
             stem_count = 0
             total_stems = len(self.models)
-            for stem, model in pbar:
-                pbar.set_description(stem)
+            for stem, model in self.models.items():
+                self.printStemName(stem)
                 mag_pred, __ = model(mag)
                 stft = torch.polar(mag_pred, phase)
                 out[stem] = stft.squeeze(0).detach()

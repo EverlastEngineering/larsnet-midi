@@ -29,7 +29,7 @@ def list_jobs():
                     "id": "uuid-here",
                     "operation": "separate",
                     "project_id": 1,
-                    "status": "running",
+                    "status": "Running",
                     "progress": 50,
                     "logs": [...],
                     "created_at": "2025-10-19T12:00:00",
@@ -75,7 +75,7 @@ def get_job(job_id):
                 "id": "uuid-here",
                 "operation": "separate",
                 "project_id": 1,
-                "status": "running",
+                "status": "Running",
                 "progress": 50,
                 "logs": [...],
                 "result": null,
@@ -173,13 +173,13 @@ def stream_job_status(job_id):
         
     Event format:
         event: job_update
-        data: {"id": "uuid", "status": "running", "progress": 50, ...}
+        data: {"id": "uuid", "status": "Running", "progress": 50, ...}
         
         event: job_complete
-        data: {"id": "uuid", "status": "completed", "result": {...}}
+        data: {"id": "uuid", "status": "Completed", "result": {...}}
         
         event: job_error
-        data: {"id": "uuid", "status": "failed", "error": "..."}
+        data: {"id": "uuid", "status": "Failed", "error": "..."}
     """
     job_queue = get_job_queue()
     job = job_queue.get_job(job_id)

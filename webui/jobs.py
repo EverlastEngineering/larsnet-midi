@@ -24,11 +24,11 @@ import traceback
 
 class JobStatus(Enum):
     """Job execution status"""
-    QUEUED = "queued"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
+    QUEUED = "Queued"
+    RUNNING = "Initlializing"
+    COMPLETED = "Completed"
+    FAILED = "Failed"
+    CANCELLED = "Cancelled"
 
 
 @dataclass
@@ -169,9 +169,16 @@ class StdoutWrapper:
         self.buffer.write(text)
         
         # Process complete lines
-        if '\n' in text:
+        # if \n or \r in text
+        if '\n' in text or '\r' in text:
             content = self.buffer.getvalue()
-            lines = content.split('\n')
+
+            # make lines split by \n or by \r
+            if '\r' in content:
+                lines = content.split('\r')
+            else:
+                lines = content.split('\n')
+            # lines = content.replace('\r', '\n').split('\n')
             
             # Log all complete lines
             for line in lines[:-1]:
@@ -188,35 +195,20 @@ class StdoutWrapper:
                         except (ValueError, IndexError):
                             pass  # Ignore malformed progress lines
                     
+                    # Check for other status indicators
+                    if 'Status Update: ' in line:
+                        status_msg = line.split('Status Update: ')[1].strip()
+                        self.job.status_detail = status_msg
                     # Check for stem processing messages from tqdm (e.g., "kick pretrained_kick_unet")
                     elif any(stem in line.lower() for stem in ['kick', 'snare', 'toms', 'hihat', 'cymbals']):
-                        # Extract stem name
-                        for stem in ['kick', 'snare', 'toms', 'hihat', 'cymbals']:
-                            if stem in line.lower():
-                                self.job.status_detail = f"Processing {stem}"
-                                break
-                    
-                    # Check for other status indicators
-                    elif 'Loading UNet models' in line:
-                        self.job.status_detail = "Initializing models"
-                    elif 'Separate drums' in line:
-                        self.job.status_detail = "Separating drums"
-                    elif 'Saved:' in line and '.wav' in line:
-                        self.job.status_detail = "Saving stems"
-                    
-                    # Check for tqdm progress format (e.g., "20%|##" or "kick: 20%|##")
-                    elif '%|' in line:
-                        try:
-                            # Find the percentage before the pipe
-                            parts = line.split('%|')
-                            if len(parts) >= 2:
-                                # Get the last token before %|
-                                progress_part = parts[0].split()[-1]
-                                progress = int(float(progress_part))
-                                self.job.progress = max(0, min(100, progress))
-                        except (ValueError, IndexError):
-                            pass  # Ignore malformed tqdm lines
-            
+                        # Only update if it's a processing message, not just mentioning the stem
+                        if 'pretrained' in line.lower() or 'processing' in line.lower():
+                            # Extract stem name
+                            for stem in ['kick', 'snare', 'toms', 'hihat', 'cymbals']:
+                                if stem in line.lower():
+                                    self.job.status_detail = f"Stem Splitting - {stem.capitalize()}"
+                                    break
+           
             # Keep incomplete line in buffer
             self.buffer = io.StringIO()
             if lines[-1]:

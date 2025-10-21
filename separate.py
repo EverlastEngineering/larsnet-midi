@@ -81,7 +81,7 @@ def separate_project(
         }
     })
     
-    print(f"\n✓ Separation complete!")
+    print(f"Status Update: Process complete!")
     print(f"  Stems saved to: {stems_dir}")
     print(f"  Project status updated\n")
 

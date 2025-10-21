@@ -63,7 +63,9 @@ def _load_and_validate_audio(
     Returns:
         Tuple of (audio, sample_rate) or (None, None) if invalid
     """
-    print(f"  Processing {stem_type} from: {audio_path.name}")
+    
+    print(f"Status Update: Generating MIDI from {stem_type.capitalize()}")
+    print(f"    from: {audio_path.name}")
     
     # Load audio (I/O)
     audio, sr = sf.read(str(audio_path))
