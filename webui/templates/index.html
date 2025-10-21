@@ -220,7 +220,7 @@
                         <!-- Downloads -->
                         <div id="downloads-section" class="bg-larsnet-dark rounded-lg p-6">
                             <h3 class="text-lg font-semibold mb-4">Downloads</h3>
-                            <div id="downloads-list" class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <div id="downloads-list" class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <!-- Download buttons will be added here -->
                             </div>
                         </div>
@@ -382,10 +382,10 @@
                                     </div>
                                 </div>
                                 
-                                <!-- Advanced Settings (Stub) -->
+                                <!-- Advanced Settings -->
                                 <div class="pt-4 border-t border-gray-700">
                                     <button class="text-sm text-larsnet-primary hover:text-blue-400 transition-smooth" id="btn-advanced-midi">
-                                        <i class="fas fa-cog mr-2"></i>Advanced Per-Stem Settings (Coming Soon)
+                                        <i class="fas fa-sliders-h mr-2"></i>Advanced Per-Stem Settings
                                     </button>
                                     <p class="text-xs text-gray-500 mt-2">Configure spectral filtering, timing offsets, and detection parameters for each drum individually</p>
                                 </div>
@@ -455,12 +455,54 @@
         <!-- Toasts will be inserted here dynamically -->
     </div>
     
+    <!-- Advanced MIDI Settings Modal -->
+    <div id="advanced-midi-modal" class="fixed inset-0 bg-black bg-opacity-75 z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-larsnet-dark rounded-lg border border-gray-700 max-w-6xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            <!-- Modal Header -->
+            <div class="flex items-center justify-between p-6 border-b border-gray-700">
+                <div>
+                    <h2 class="text-2xl font-bold">Advanced MIDI Settings</h2>
+                    <p class="text-sm text-gray-400 mt-1">Fine-tune per-stem detection and filtering</p>
+                </div>
+                <button id="close-advanced-midi" class="text-gray-400 hover:text-gray-200 transition-smooth">
+                    <i class="fas fa-times text-2xl"></i>
+                </button>
+            </div>
+            
+            <!-- Modal Body -->
+            <div class="flex-1 overflow-y-auto p-6">
+                <div id="advanced-midi-content">
+                    <div class="flex items-center justify-center py-12">
+                        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-larsnet-primary"></div>
+                        <span class="ml-4 text-gray-400">Loading configuration...</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Modal Footer -->
+            <div class="flex items-center justify-between p-6 border-t border-gray-700">
+                <button id="reset-advanced-midi" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition-smooth">
+                    <i class="fas fa-undo mr-2"></i>Reset to Defaults
+                </button>
+                <div class="flex gap-3">
+                    <button id="cancel-advanced-midi" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition-smooth">
+                        Cancel
+                    </button>
+                    <button id="save-advanced-midi" class="px-6 py-2 bg-larsnet-primary hover:bg-blue-600 text-white font-semibold rounded transition-smooth">
+                        <i class="fas fa-save mr-2"></i>Save Changes
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
     <!-- JavaScript -->
-    <script src="/static/js/api.js"></script>
-    <script src="/static/js/settings.js"></script>
-    <script src="/static/js/projects.js"></script>
-    <script src="/static/js/operations.js"></script>
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/api.js?v=6"></script>
+    <script src="/static/js/settings.js?v=6"></script>
+    <script src="/static/js/advanced-midi.js?v=6"></script>
+    <script src="/static/js/projects.js?v=6"></script>
+    <script src="/static/js/operations.js?v=6"></script>
+    <script src="/static/js/app.js?v=6"></script>
     
 </body>
 </html>

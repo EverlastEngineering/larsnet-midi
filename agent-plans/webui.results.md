@@ -58,19 +58,20 @@
 - [x] Store preferences in localStorage
 - [x] Settings toggle UI (collapsible panels with chevron animation)
 - [x] Settings integrated with operation triggers
-- [ ] Advanced: MIDI config (from midiconfig.yaml) - stubbed
+- [x] Advanced: MIDI config modal (from midiconfig.yaml)
+- [x] Advanced: Dynamic form generation from YAML structure
+- [x] Advanced: Save and reset functionality for MIDI config
+- [x] Individual file downloads for stems and cleaned stems
 - [ ] Advanced: EQ config (from eq.yaml)
 - [ ] Advanced: Separation config (from config.yaml)
-- [ ] Add "Reset to Defaults" buttons
-- [ ] Add "Save to Project" functionality
 - [ ] Add parameter tooltips (inline help text)
 - [ ] Add form validation
 - [ ] Write WEBUI_CONFIG_GUIDE.md
 
-**Status**: Basic Settings Complete (advanced YAML editor pending)  
+**Status**: Advanced MIDI Settings Complete, Downloads Enhanced  
 **Tests Passing**: 40/40 (config_engine + config_api tests)  
 **Coverage**: 100% on backend code  
-**Lines Changed**: ~1000  
+**Lines Changed**: ~1500  
 
 ### Phase 4: Testing & Polish
 - [ ] Write frontend tests
@@ -147,6 +148,20 @@
 - Implemented toast notifications for user feedback
 - Created comprehensive JavaScript API client wrapper
 - Added loading overlays and smooth animations throughout
+
+### [Date: 2025-10-21] Phase 3 Advanced MIDI Settings Modal Implemented
+- Created modal dialog for advanced per-stem MIDI configuration
+- Built dynamic form generation from YAML config structure using config engine
+- Organized settings into collapsible sections (audio, learning, onsets, velocity, etc.)
+- Implemented field type detection and appropriate input controls (checkbox, number, text)
+- Added save functionality to persist changes back to midiconfig.yaml
+- Added reset to defaults functionality
+- Exposed currentProject to window scope for cross-module access
+- Added cache-busting version parameters to JavaScript imports
+- Enhanced download UI with individual file downloads for stems and cleaned stems
+- Changed download layout from 4-column to 2-column grid for better file list display
+- Added drum-specific icons for individual file downloads (kick, snare, hihat, etc.)
+- Maintained ZIP download option alongside individual file downloads
 - All components fully documented with inline comments
 - Mobile-responsive design (ready for device testing)
 

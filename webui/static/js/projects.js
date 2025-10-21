@@ -92,6 +92,7 @@ async function selectProject(projectNumber) {
     try {
         const data = await api.getProject(projectNumber);
         currentProject = data.project;
+        window.currentProject = currentProject; // Expose to window for other modules
         
         renderProjectsList(); // Re-render to update active state
         updateProjectHeader();
@@ -198,25 +199,29 @@ function updateDownloads() {
     const files = currentProject.files;
     const downloads = [];
     
-    // Stems
+    // Stems (with individual file downloads)
     if (files.stems.length > 0) {
         downloads.push({
             label: 'Stems',
             icon: 'fa-divide',
             color: 'blue',
             type: 'stems',
-            count: files.stems.length
+            count: files.stems.length,
+            files: files.stems,
+            hasIndividual: true
         });
     }
     
-    // Cleaned
+    // Cleaned (with individual file downloads)
     if (files.cleaned.length > 0) {
         downloads.push({
             label: 'Cleaned Stems',
             icon: 'fa-broom',
             color: 'purple',
             type: 'cleaned',
-            count: files.cleaned.length
+            count: files.cleaned.length,
+            files: files.cleaned,
+            hasIndividual: true
         });
     }
     
@@ -247,16 +252,112 @@ function updateDownloads() {
         return;
     }
     
-    container.innerHTML = downloads.map(dl => `
-        <button class="bg-${dl.color}-600 hover:bg-${dl.color}-700 text-white p-3 rounded-lg transition-smooth flex items-center justify-between"
-                onclick="downloadFiles('${dl.type}')">
-            <div>
-                <i class="fas ${dl.icon} mr-2"></i>
-                ${dl.label}
-            </div>
-            <span class="text-xs opacity-75">${dl.count}</span>
-        </button>
-    `).join('');
+    container.innerHTML = downloads.map(dl => {
+        if (dl.hasIndividual) {
+            // Sort files in standard drum kit order and generate buttons
+            const sortedFiles = sortDrumFiles(dl.files);
+            const individualFiles = sortedFiles.map(file => {
+                const drumName = file.split('-').pop().replace('.wav', '');
+                const drumIcon = getDrumIcon(drumName);
+                return `
+                    <button class="text-xs px-2 py-2 bg-gray-700 hover:bg-gray-600 rounded flex items-center gap-1 transition-smooth"
+                            onclick="event.stopPropagation(); downloadIndividualFile('${dl.type}', '${file}')" 
+                            title="Download ${drumName}">
+                        <i class="fas ${drumIcon} text-${dl.color}-400"></i>
+                        <span class="flex-1 text-left truncate">${drumName}</span>
+                        <i class="fas fa-download text-xs opacity-60"></i>
+                    </button>
+                `;
+            }).join('');
+            
+            return `
+                <div class="bg-gray-800 rounded-lg overflow-hidden border-2 border-${dl.color}-500">
+                    <button class="w-full p-4 bg-${dl.color}-600 hover:bg-${dl.color}-700 text-white transition-smooth flex items-center justify-between font-semibold"
+                            onclick="downloadFiles('${dl.type}')">
+                        <div class="flex items-center">
+                            <i class="fas fa-file-archive text-lg mr-3"></i>
+                            <div class="text-left">
+                                <div>${dl.label} (ZIP)</div>
+                                <div class="text-xs font-normal opacity-75">Download all ${dl.count} files</div>
+                            </div>
+                        </div>
+                        <i class="fas fa-download text-lg"></i>
+                    </button>
+                    <div class="bg-gray-800 p-3 border-t border-gray-700">
+                        <div class="text-xs text-gray-400 mb-2 px-1 font-medium">Or download individual files:</div>
+                        <div class="grid grid-cols-2 gap-1.5">
+                            ${individualFiles}
+                        </div>
+                    </div>
+                </div>
+            `;
+        } else {
+            // Simple download button for single files
+            return `
+                <button class="bg-${dl.color}-600 hover:bg-${dl.color}-700 text-white p-3 rounded-lg border-2 border-${dl.color}-500 transition-smooth flex items-center justify-between"
+                        onclick="downloadFiles('${dl.type}')">
+                    <div>
+                        <i class="fas ${dl.icon} mr-2"></i>
+                        ${dl.label}
+                    </div>
+                    <span class="text-xs opacity-75">${dl.count}</span>
+                </button>
+            `;
+        }
+    }).join('');
+}
+
+function getDrumIcon(drumName) {
+    const icons = {
+        'kick': 'fa-circle',
+        'snare': 'fa-drumstick-bite',
+        'hihat': 'fa-hat-wizard',
+        'cymbals': 'fa-compact-disc',
+        'toms': 'fa-drum'
+    };
+    return icons[drumName.toLowerCase()] || 'fa-music';
+}
+
+/**
+ * Sort drum files in standard drum kit order
+ */
+function sortDrumFiles(files) {
+    const drumOrder = ['kick', 'snare', 'toms', 'hihat', 'cymbals'];
+    
+    return files.slice().sort((a, b) => {
+        const drumA = a.split('-').pop().replace('.wav', '').toLowerCase();
+        const drumB = b.split('-').pop().replace('.wav', '').toLowerCase();
+        
+        const indexA = drumOrder.indexOf(drumA);
+        const indexB = drumOrder.indexOf(drumB);
+        
+        // If both are in the order list, sort by position
+        if (indexA !== -1 && indexB !== -1) {
+            return indexA - indexB;
+        }
+        // If only A is in the list, it comes first
+        if (indexA !== -1) return -1;
+        // If only B is in the list, it comes first
+        if (indexB !== -1) return 1;
+        // Otherwise, sort alphabetically
+        return drumA.localeCompare(drumB);
+    });
+}
+
+function downloadIndividualFile(fileType, filename) {
+    if (!currentProject) return;
+    
+    try {
+        // Trigger download
+        const url = `/api/projects/${currentProject.number}/download/${fileType}/${encodeURIComponent(filename)}`;
+        window.location.href = url;
+        
+        showToast(`Downloading ${filename.split('-').pop().replace('.wav', '')}...`, 'success');
+        
+    } catch (error) {
+        console.error('Download failed:', error);
+        showToast('Download failed: ' + error.message, 'error');
+    }
 }
 
 /**
@@ -371,6 +472,7 @@ async function confirmDeleteProject() {
         
         // Clear current project
         currentProject = null;
+        window.currentProject = null;
         
         // Hide project section
         document.getElementById('project-section').classList.add('hidden');

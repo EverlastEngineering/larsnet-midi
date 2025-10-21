@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 import re
 from dataclasses import dataclass
-from ruamel.yaml import YAML
-from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml import YAML # type: ignore
+from ruamel.yaml.comments import CommentedMap # type: ignore
 
 
 @dataclass
