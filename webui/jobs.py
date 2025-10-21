@@ -230,7 +230,7 @@ class JobQueue:
     - Concurrent job limiting
     """
     
-    def __init__(self, max_concurrent: int = 2):
+    def __init__(self, max_concurrent: int = 1):
         """
         Initialize job queue.
         

@@ -5,7 +5,7 @@ Handles triggering of LarsNet operations (separate, cleanup, MIDI, video).
 All operations run asynchronously via the job queue.
 """
 
-from flask import jsonify, request
+from flask import jsonify, request # type: ignore
 from pathlib import Path
 import sys
 

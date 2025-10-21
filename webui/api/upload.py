@@ -4,9 +4,9 @@ Upload API Endpoint
 Handles file uploads and automatic project creation.
 """
 
-from flask import jsonify, request
+from flask import jsonify, request # type: ignore
 from pathlib import Path
-from werkzeug.utils import secure_filename
+from werkzeug.utils import secure_filename # type: ignore
 import sys
 
 # Add parent directory to path for imports

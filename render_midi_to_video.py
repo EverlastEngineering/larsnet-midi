@@ -15,7 +15,7 @@ Usage:
 """
 
 import argparse
-import  # type: ignore
+import mido # type: ignore
 import cv2 # type: ignore
 import numpy as np # type: ignore
 from dataclasses import dataclass
@@ -76,7 +76,7 @@ class MidiVideoRenderer:
         
     def parse_midi(self, midi_path: str) -> Tuple[List[DrumNote], float]:
         """Parse MIDI file and extract drum notes with timing"""
-        midi_file = mido.MidiFile(midi_path) # type: ignore
+        midi_file = mido.MidiFile(midi_path)
         notes = []
         total_duration = 0.0
         
@@ -92,7 +92,7 @@ class MidiVideoRenderer:
             for msg in track:
                 # Update absolute time BEFORE processing the message
                 if msg.time > 0:
-                    absolute_time += mido.tick2second(msg.time, midi_file.ticks_per_beat, current_tempo) # type: ignore
+                    absolute_time += mido.tick2second(msg.time, midi_file.ticks_per_beat, current_tempo)
                 
                 if msg.type == 'set_tempo':
                     # Record this tempo change
@@ -129,7 +129,7 @@ class MidiVideoRenderer:
                 
                 # Calculate time delta and add to absolute time
                 if msg.time > 0:
-                    absolute_time += mido.tick2second(msg.time, midi_file.ticks_per_beat, current_tempo) # type: ignore
+                    absolute_time += mido.tick2second(msg.time, midi_file.ticks_per_beat, current_tempo)
                 
                 if msg.type == 'note_on' and msg.velocity > 0:
                     if msg.note in DRUM_MAP:

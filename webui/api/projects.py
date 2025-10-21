@@ -5,7 +5,7 @@ Provides REST API for project discovery, retrieval, and status.
 Uses project_manager functions as the functional core.
 """
 
-from flask import jsonify, request
+from flask import jsonify, request # type: ignore
 from pathlib import Path
 import sys
 
