@@ -14,9 +14,15 @@ services:
     ports:
       - "49152:5000"  # LarsNet Web UI
     
-    # To keep the container running for inspection, we override the Dockerfile's CMD
-    # of ["/bin/bash"] to use 'tail -f /dev/null'.
-    command: tail -f /dev/null
+    # Environment variables
+    environment:
+      - FLASK_ENV=production
+    
+    # Start the web UI automatically
+    command: >
+      bash -c "source ~/.bash_env &&
+               cd /app &&
+               python webui/app.py"
     
     # If you need to enter the container interactively (good for development):
     stdin_open: true  # Keep STDIN open

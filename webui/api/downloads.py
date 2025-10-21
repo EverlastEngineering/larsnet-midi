@@ -69,12 +69,30 @@ def download_file(project_number, file_type, filename):
                 'message': f'File {filename} not found in {file_type}'
             }), 404
         
-        # Send file
-        return send_file(
-            file_path,
-            as_attachment=True,
-            download_name=filename
-        )
+        # Send file - stream media files for playback, download others
+        if file_type == 'video':
+            # Stream video with range request support for playback
+            return send_file(
+                file_path,
+                mimetype='video/mp4',
+                as_attachment=False,
+                conditional=True  # Enable range request support
+            )
+        elif file_type in ['stems', 'cleaned'] and filename.endswith('.wav'):
+            # Stream audio with range request support for playback
+            return send_file(
+                file_path,
+                mimetype='audio/wav',
+                as_attachment=False,
+                conditional=True  # Enable range request support
+            )
+        else:
+            # Download other file types
+            return send_file(
+                file_path,
+                as_attachment=True,
+                download_name=filename
+            )
         
     except Exception as e:
         return jsonify({

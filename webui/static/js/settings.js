@@ -185,6 +185,7 @@ class SettingsManager {
             case 'video':
                 settings.fps = this.settings['fps'] || 60;
                 settings.resolution = this.settings['resolution'] || '1080p';
+                settings.includeAudio = this.settings['include-audio'] || false;
                 break;
         }
         
@@ -217,7 +218,8 @@ class SettingsManager {
             },
             'video': {
                 'fps': 60,
-                'resolution': '1080p'
+                'resolution': '1080p',
+                'include-audio': false
             }
         };
         

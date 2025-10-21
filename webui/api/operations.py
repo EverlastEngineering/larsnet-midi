@@ -85,7 +85,7 @@ def run_stems_to_midi(project_number: int, **kwargs):
     return {'project_number': project_number, 'midi_created': True}
 
 
-def run_render_video(project_number: int, fps: int = 60, width: int = 1920, height: int = 1080):
+def run_render_video(project_number: int, fps: int = 60, width: int = 1920, height: int = 1080, include_audio: bool = False):
     """
     Execute MIDI to video rendering for a project.
     
@@ -98,7 +98,7 @@ def run_render_video(project_number: int, fps: int = 60, width: int = 1920, heig
     if project is None:
         raise ValueError(f'Project {project_number} not found')
     
-    render_project_video(project, fps=fps, width=width, height=height)
+    render_project_video(project, fps=fps, width=width, height=height, include_audio=include_audio)
     
     return {'project_number': project_number, 'video_created': True}
 
@@ -344,9 +344,10 @@ def render_video():
     Request body (JSON):
         {
             "project_number": 1,
-            "fps": 60,        # optional: 30, 60, 120
-            "width": 1920,    # optional
-            "height": 1080    # optional
+            "fps": 60,           # optional: 30, 60, 120
+            "width": 1920,       # optional
+            "height": 1080,      # optional
+            "include_audio": false  # optional: include original audio
         }
         
     Returns:
@@ -378,6 +379,7 @@ def render_video():
         fps = data.get('fps', 60)
         width = data.get('width', 1920)
         height = data.get('height', 1080)
+        include_audio = data.get('include_audio', False)
         
         # Submit job
         job_queue = get_job_queue()
@@ -388,7 +390,8 @@ def render_video():
             project_number=project_number,
             fps=fps,
             width=width,
-            height=height
+            height=height,
+            include_audio=include_audio
         )
         
         return jsonify({

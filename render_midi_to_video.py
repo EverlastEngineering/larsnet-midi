@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from typing import List, Tuple, Dict, Optional
 import os
 import sys
+import subprocess
+import shutil
 from pathlib import Path
 
 # Import project manager
@@ -244,19 +246,65 @@ class MidiVideoRenderer:
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, info["color"], 2)
             legend_y += 25
     
-    def render(self, midi_path: str, output_path: str, show_preview: bool = False):
-        """Render MIDI file to video"""
+    def render(self, midi_path: str, output_path: str, show_preview: bool = False, audio_path: Optional[str] = None):
+        """Render MIDI file to video
+        
+        Args:
+            midi_path: Path to MIDI file
+            output_path: Path to output video file
+            show_preview: Show live preview window
+            audio_path: Optional path to audio file to include in video
+        """
         print(f"Status Update: Rendering Video")
         print(f"Parsing MIDI file: {midi_path}")
         notes, total_duration = self.parse_midi(midi_path)
         print(f"Found {len(notes)} notes, duration: {total_duration:.2f}s")
         
-        # Setup video writer
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, self.fps, (self.width, self.height))
-        
         total_frames = int(total_duration * self.fps)
         print(f"Rendering {total_frames} frames at {self.fps} FPS...")
+        
+        # Setup FFmpeg pipe for H.264 encoding with web optimization
+        ffmpeg_cmd = [
+            'ffmpeg',
+            '-y',  # Overwrite output
+            '-f', 'rawvideo',
+            '-vcodec', 'rawvideo',
+            '-s', f'{self.width}x{self.height}',
+            '-pix_fmt', 'bgr24',
+            '-r', str(self.fps),
+            '-i', '-',  # Read video from stdin
+        ]
+        
+        # Add audio input if provided
+        if audio_path:
+            print(f"Including audio from: {audio_path}")
+            ffmpeg_cmd.extend(['-i', audio_path])
+            # Map video from stdin and audio from file
+            ffmpeg_cmd.extend(['-map', '0:v:0', '-map', '1:a:0'])
+            # Use shortest stream (in case audio is longer/shorter than video)
+            ffmpeg_cmd.append('-shortest')
+        else:
+            ffmpeg_cmd.append('-an')  # No audio
+        
+        # Video encoding settings
+        ffmpeg_cmd.extend([
+            '-vcodec', 'libx264',
+            '-preset', 'medium',
+            '-crf', '23',
+            '-pix_fmt', 'yuv420p',
+        ])
+        
+        # Audio encoding settings (if audio is included)
+        if audio_path:
+            ffmpeg_cmd.extend(['-c:a', 'aac', '-b:a', '192k'])
+        
+        # Web optimization
+        ffmpeg_cmd.extend(['-movflags', '+faststart', output_path])
+        
+        print(f"Starting FFmpeg encoder for H.264 output...")
+        ffmpeg_process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, 
+                                         stdout=subprocess.DEVNULL, 
+                                         stderr=subprocess.PIPE)
         
         # Pre-calculate time step to avoid floating point accumulation errors
         time_step = 1.0 / self.fps
@@ -298,8 +346,12 @@ class MidiVideoRenderer:
             # Draw UI
             self.draw_ui(frame, current_time, total_duration)
             
-            # Write frame
-            out.write(frame)
+            # Write frame to FFmpeg
+            try:
+                ffmpeg_process.stdin.write(frame.tobytes())
+            except BrokenPipeError:
+                print("FFmpeg process terminated unexpectedly")
+                break
             
             # Show preview
             if show_preview and frame_num % 10 == 0:
@@ -312,13 +364,25 @@ class MidiVideoRenderer:
                 progress = (frame_num / total_frames) * 100
                 print(f"Progress: {progress:.1f}%")
         
-        out.release()
+        # Close FFmpeg stdin and wait for completion
+        ffmpeg_process.stdin.close()
+        ffmpeg_process.wait()
+        
         if show_preview:
             cv2.destroyAllWindows()
         
-        print(f"✅ Video saved to: {output_path}")
-        print(f"\nTo add audio, run:")
-        print(f"ffmpeg -i {output_path} -i input/your_audio.wav -c:v copy -c:a aac -shortest output_with_audio.mp4")
+        if ffmpeg_process.returncode == 0:
+            print(f"✅ Video saved to: {output_path}")
+            if audio_path:
+                print(f"   Encoded with H.264 video codec and AAC audio codec")
+            else:
+                print(f"   Encoded with H.264 video codec (no audio)")
+            print(f"   Optimized for web streaming")
+        else:
+            stderr_output = ffmpeg_process.stderr.read().decode('utf-8') if ffmpeg_process.stderr else ''
+            print(f"⚠️  FFmpeg encoding completed with return code {ffmpeg_process.returncode}")
+            if stderr_output:
+                print(f"   Error details: {stderr_output[-500:]}")  # Last 500 chars
 
 
 def render_project_video(
@@ -326,7 +390,8 @@ def render_project_video(
     width: int = 1920,
     height: int = 1080,
     fps: int = 60,
-    preview: bool = False
+    preview: bool = False,
+    include_audio: bool = False
 ):
     """
     Render MIDI to video for a specific project.
@@ -337,6 +402,7 @@ def render_project_video(
         height: Video height in pixels
         fps: Frames per second
         preview: Show live preview while rendering
+        include_audio: Include original audio file in video
     """
     project_dir = project["path"]
     
@@ -371,15 +437,34 @@ def render_project_video(
     # Generate output filename
     output_file = video_dir / f"{midi_file.stem}.mp4"
     
+    # Find original audio file if include_audio is enabled
+    audio_file = None
+    if include_audio:
+        # Look for audio file in project root (original upload location)
+        audio_extensions = ['.wav', '.mp3', '.flac', '.aiff', '.aif']
+        for ext in audio_extensions:
+            potential_audio = project_dir / f"{project['name']}{ext}"
+            if potential_audio.exists():
+                audio_file = str(potential_audio)
+                break
+        
+        if not audio_file:
+            print("WARNING: Audio inclusion requested but no audio file found in project root")
+            print(f"Looked for: {project['name']}{{.wav,.mp3,.flac,.aiff,.aif}}")
+    
     print(f"Rendering video to: {output_file}")
     print(f"Settings: {width}x{height} @ {fps}fps")
+    if include_audio and audio_file:
+        print(f"Including audio: {Path(audio_file).name}")
+    elif include_audio:
+        print("Audio: Not found, rendering without audio")
     if preview:
         print("Preview mode enabled")
     print()
     
     # Render video
     renderer = MidiVideoRenderer(width=width, height=height, fps=fps)
-    renderer.render(str(midi_file), str(output_file), show_preview=preview)
+    renderer.render(str(midi_file), str(output_file), show_preview=preview, audio_path=audio_file)
     
     # Update project metadata
     update_project_metadata(project_dir, {
@@ -417,6 +502,8 @@ Examples:
                        help='Frames per second (default: 60)')
     parser.add_argument('--preview', action='store_true',
                        help='Show live preview while rendering')
+    parser.add_argument('--audio', action='store_true',
+                       help='Include original audio file in the video')
     
     args = parser.parse_args()
     
@@ -448,7 +535,8 @@ Examples:
         width=args.width,
         height=args.height,
         fps=args.fps,
-        preview=args.preview
+        preview=args.preview,
+        include_audio=args.audio
     )
     
     return 0

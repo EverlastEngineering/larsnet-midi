@@ -109,7 +109,8 @@ async function startVideo() {
         const result = await api.renderVideo(currentProject.number, {
             fps: parseInt(settings.fps),
             width: width,
-            height: height
+            height: height,
+            include_audio: settings.includeAudio || false
         });
         
         showToast('Video rendering started', 'success');

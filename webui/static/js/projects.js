@@ -260,13 +260,20 @@ function updateDownloads() {
                 const drumName = file.split('-').pop().replace('.wav', '');
                 const drumIcon = getDrumIcon(drumName);
                 return `
-                    <button class="text-xs px-2 py-2 bg-gray-700 hover:bg-gray-600 rounded flex items-center gap-1 transition-smooth"
-                            onclick="event.stopPropagation(); downloadIndividualFile('${dl.type}', '${file}')" 
-                            title="Download ${drumName}">
-                        <i class="fas ${drumIcon} text-${dl.color}-400"></i>
-                        <span class="flex-1 text-left truncate">${drumName}</span>
-                        <i class="fas fa-download text-xs opacity-60"></i>
-                    </button>
+                    <div class="flex items-center gap-1">
+                        <button class="text-xs px-2 py-2 bg-gray-700 hover:bg-gray-600 rounded flex items-center gap-1 transition-smooth flex-1"
+                                onclick="event.stopPropagation(); playAudio('${dl.type}', '${file}')" 
+                                title="Play ${drumName}">
+                            <i class="fas ${drumIcon} text-${dl.color}-400"></i>
+                            <span class="flex-1 text-left truncate">${drumName}</span>
+                            <i class="fas fa-play text-xs opacity-60"></i>
+                        </button>
+                        <button class="text-xs px-2 py-2 bg-gray-700 hover:bg-gray-600 rounded transition-smooth"
+                                onclick="event.stopPropagation(); downloadIndividualFile('${dl.type}', '${file}')" 
+                                title="Download ${drumName}">
+                            <i class="fas fa-download text-xs opacity-60"></i>
+                        </button>
+                    </div>
                 `;
             }).join('');
             
@@ -284,15 +291,15 @@ function updateDownloads() {
                         <i class="fas fa-download text-lg"></i>
                     </button>
                     <div class="bg-gray-800 p-3 border-t border-gray-700">
-                        <div class="text-xs text-gray-400 mb-2 px-1 font-medium">Or download individual files:</div>
+                        <div class="text-xs text-gray-400 mb-2 px-1 font-medium">Click to play or download individual files:</div>
                         <div class="grid grid-cols-2 gap-1.5">
                             ${individualFiles}
                         </div>
                     </div>
                 </div>
             `;
-        } else {
-            // Simple download button for single files
+        } else if (dl.type === 'midi') {
+            // MIDI - just download
             return `
                 <button class="bg-${dl.color}-600 hover:bg-${dl.color}-700 text-white p-3 rounded-lg border-2 border-${dl.color}-500 transition-smooth flex items-center justify-between"
                         onclick="downloadFiles('${dl.type}')">
@@ -302,6 +309,30 @@ function updateDownloads() {
                     </div>
                     <span class="text-xs opacity-75">${dl.count}</span>
                 </button>
+            `;
+        } else if (dl.type === 'video') {
+            // Video - play and download
+            const videoFile = files.video[0];
+            return `
+                <div class="bg-gray-800 rounded-lg overflow-hidden border-2 border-${dl.color}-500">
+                    <button class="w-full p-4 bg-${dl.color}-600 hover:bg-${dl.color}-700 text-white transition-smooth flex items-center justify-between font-semibold"
+                            onclick="playVideo('${videoFile}')">
+                        <div class="flex items-center">
+                            <i class="fas fa-play-circle text-lg mr-3"></i>
+                            <div class="text-left">
+                                <div>${dl.label}</div>
+                                <div class="text-xs font-normal opacity-75">Click to play</div>
+                            </div>
+                        </div>
+                        <i class="fas fa-play text-lg"></i>
+                    </button>
+                    <div class="bg-gray-800 p-3 border-t border-gray-700">
+                        <button class="w-full text-sm px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded transition-smooth"
+                                onclick="downloadFiles('${dl.type}')">
+                            <i class="fas fa-download mr-2"></i>Download Video
+                        </button>
+                    </div>
+                </div>
             `;
         }
     }).join('');
@@ -488,6 +519,210 @@ async function confirmDeleteProject() {
         console.error('Failed to delete project:', error);
         showToast(`Failed to delete project: ${error.message}`, 'error');
     }
+}
+
+/**
+ * Play an audio file (WAV) in a modal
+ */
+function playAudio(fileType, filename) {
+    if (!currentProject) return;
+    
+    const url = `/api/projects/${currentProject.number}/download/${fileType}/${encodeURIComponent(filename)}`;
+    const drumName = filename.split('-').pop().replace('.wav', '');
+    
+    showMediaPlayer('audio', url, drumName);
+}
+
+/**
+ * Play a video file in a modal
+ */
+function playVideo(filename) {
+    if (!currentProject) return;
+    
+    const url = `/api/projects/${currentProject.number}/download/video/${encodeURIComponent(filename)}`;
+    
+    showMediaPlayer('video', url, filename);
+}
+
+/**
+ * Show media player modal
+ */
+function showMediaPlayer(type, url, title) {
+    // Create or get modal
+    let modal = document.getElementById('media-player-modal');
+    
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'media-player-modal';
+        modal.className = 'fixed inset-0 bg-black bg-opacity-75 z-50 flex items-center justify-center p-4';
+        modal.innerHTML = `
+            <div class="bg-larsnet-dark rounded-lg border border-gray-700 max-w-4xl w-full">
+                <div class="flex items-center justify-between p-4 border-b border-gray-700">
+                    <h3 id="media-player-title" class="text-lg font-semibold"></h3>
+                    <button onclick="closeMediaPlayer()" class="text-gray-400 hover:text-gray-200 transition-smooth">
+                        <i class="fas fa-times text-xl"></i>
+                    </button>
+                </div>
+                <div id="media-player-content" class="p-6">
+                    <!-- Media element will be inserted here -->
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+        
+        // Close on click outside
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                closeMediaPlayer();
+            }
+        });
+    }
+    
+    // Update title
+    document.getElementById('media-player-title').textContent = title;
+    
+    // Create media element
+    const content = document.getElementById('media-player-content');
+    
+    if (type === 'audio') {
+        content.innerHTML = `
+            <div class="flex flex-col items-center space-y-4">
+                <div class="w-32 h-32 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center">
+                    <i class="fas fa-volume-up text-6xl text-white opacity-90"></i>
+                </div>
+                <audio id="media-player-element" controls preload="auto" class="w-full max-w-md">
+                    <source src="${url}" type="audio/wav">
+                    Your browser does not support audio playback.
+                </audio>
+                <p id="media-player-error" class="text-sm text-red-400 hidden"></p>
+            </div>
+        `;
+    } else if (type === 'video') {
+        content.innerHTML = `
+            <div class="relative">
+                <video id="media-player-element" controls preload="metadata" class="w-full rounded bg-black" style="min-height: 400px;">
+                    <source src="${url}" type="video/mp4">
+                    Your browser does not support video playback or the video format is incompatible.
+                </video>
+                <div id="media-loading" class="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 rounded pointer-events-none">
+                    <div class="text-center">
+                        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-larsnet-primary mx-auto mb-2"></div>
+                        <p class="text-sm text-gray-300">Loading video...</p>
+                    </div>
+                </div>
+                <p id="media-player-error" class="text-sm text-red-400 mt-2 hidden"></p>
+            </div>
+        `;
+    }
+    
+    // Show modal
+    modal.classList.remove('hidden');
+    
+    // Add event listeners for media element
+    const mediaElement = document.getElementById('media-player-element');
+    const loadingOverlay = document.getElementById('media-loading');
+    const errorEl = document.getElementById('media-player-error');
+    
+    if (mediaElement) {
+        // Debug logging
+        console.log('Media player initialized:', type, url);
+        console.log('Media element readyState:', mediaElement.readyState);
+        console.log('Media element networkState:', mediaElement.networkState);
+        
+        // Handle various loading events
+        mediaElement.addEventListener('loadstart', () => {
+            console.log('Media load started');
+        });
+        
+        mediaElement.addEventListener('loadedmetadata', () => {
+            console.log('Media metadata loaded');
+        });
+        
+        mediaElement.addEventListener('loadeddata', () => {
+            console.log('Media data loaded');
+            if (loadingOverlay) loadingOverlay.classList.add('hidden');
+            // Try to play (autoplay may be blocked by browser)
+            mediaElement.play().catch(err => {
+                console.log('Autoplay prevented:', err);
+            });
+        });
+        
+        mediaElement.addEventListener('canplay', () => {
+            console.log('Media can play');
+            if (loadingOverlay) loadingOverlay.classList.add('hidden');
+        });
+        
+        mediaElement.addEventListener('canplaythrough', () => {
+            console.log('Media can play through');
+            if (loadingOverlay) loadingOverlay.classList.add('hidden');
+        });
+        
+        // Handle errors
+        mediaElement.addEventListener('error', (e) => {
+            console.error('Media error event:', e);
+            if (loadingOverlay) loadingOverlay.classList.add('hidden');
+            if (errorEl) {
+                const error = e.target.error;
+                let errorMsg = 'Unknown error';
+                if (error) {
+                    errorMsg = `Code ${error.code}: `;
+                    switch(error.code) {
+                        case 1: errorMsg += 'MEDIA_ERR_ABORTED - Fetching aborted'; break;
+                        case 2: errorMsg += 'MEDIA_ERR_NETWORK - Network error'; break;
+                        case 3: errorMsg += 'MEDIA_ERR_DECODE - Decoding error'; break;
+                        case 4: errorMsg += 'MEDIA_ERR_SRC_NOT_SUPPORTED - Format not supported'; break;
+                    }
+                }
+                errorEl.textContent = `Failed to load ${type}: ${errorMsg}`;
+                errorEl.classList.remove('hidden');
+            }
+        });
+        
+        // Handle network issues
+        mediaElement.addEventListener('stalled', () => {
+            console.log('Media loading stalled');
+        });
+        
+        mediaElement.addEventListener('waiting', () => {
+            console.log('Media waiting for data');
+        });
+        
+        mediaElement.addEventListener('progress', () => {
+            console.log('Media loading progress');
+        });
+        
+        // Only set source if it wasn't already set via <source> tag
+        if (type === 'audio') {
+            mediaElement.src = url;
+        }
+        mediaElement.load();
+        
+        // Fallback: hide loading after 10 seconds
+        setTimeout(() => {
+            if (loadingOverlay && !loadingOverlay.classList.contains('hidden')) {
+                console.warn('Loading timeout - hiding overlay');
+                loadingOverlay.classList.add('hidden');
+            }
+        }, 10000);
+    }
+}
+
+/**
+ * Close media player modal
+ */
+function closeMediaPlayer() {
+    const modal = document.getElementById('media-player-modal');
+    if (!modal) return;
+    
+    // Stop playback
+    const mediaElement = document.getElementById('media-player-element');
+    if (mediaElement) {
+        mediaElement.pause();
+        mediaElement.currentTime = 0;
+    }
+    
+    // Hide modal
+    modal.classList.add('hidden');
 }
 
 /**

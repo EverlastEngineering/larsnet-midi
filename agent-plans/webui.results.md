@@ -62,16 +62,19 @@
 - [x] Advanced: Dynamic form generation from YAML structure
 - [x] Advanced: Save and reset functionality for MIDI config
 - [x] Individual file downloads for stems and cleaned stems
+- [x] Audio playback for WAV files (stems, cleaned stems)
+- [x] Video playback for rendered videos
+- [x] Media player modal with controls
 - [ ] Advanced: EQ config (from eq.yaml)
 - [ ] Advanced: Separation config (from config.yaml)
 - [ ] Add parameter tooltips (inline help text)
 - [ ] Add form validation
 - [ ] Write WEBUI_CONFIG_GUIDE.md
 
-**Status**: Advanced MIDI Settings Complete, Downloads Enhanced  
+**Status**: Advanced MIDI Settings Complete, Downloads Enhanced, Media Playback Added  
 **Tests Passing**: 40/40 (config_engine + config_api tests)  
 **Coverage**: 100% on backend code  
-**Lines Changed**: ~1500  
+**Lines Changed**: ~1650  
 
 ### Phase 4: Testing & Polish
 - [ ] Write frontend tests
@@ -162,6 +165,10 @@
 - Changed download layout from 4-column to 2-column grid for better file list display
 - Added drum-specific icons for individual file downloads (kick, snare, hihat, etc.)
 - Maintained ZIP download option alongside individual file downloads
+- Implemented consistent drum file ordering (kick, snare, toms, hihat, cymbals)
+- Added audio playback for individual WAV files (stems and cleaned stems)
+- Added video playback for rendered videos
+- Created media player modal with HTML5 audio/video controls
 - All components fully documented with inline comments
 - Mobile-responsive design (ready for device testing)
 
