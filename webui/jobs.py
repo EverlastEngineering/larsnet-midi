@@ -146,13 +146,12 @@ class StdoutCapture:
 
 
 class StdoutWrapper:
-    """Wrapper for stdout/stderr that captures output line-by-line and handles tqdm progress bars"""
+    """Wrapper for stdout/stderr that captures output line-by-line"""
     def __init__(self, buffer: io.StringIO, job: Job, level: str, original_stream=None):
         self.buffer = buffer
         self.job = job
         self.level = level
         self.original_stream = original_stream
-        self.last_progress_line = ""  # Track last tqdm line for updates
     
     def write(self, text):
         """Write to buffer and flush complete lines to job logs"""
@@ -163,15 +162,6 @@ class StdoutWrapper:
         if self.original_stream:
             self.original_stream.write(text)
             self.original_stream.flush()
-        
-        # Handle carriage return (tqdm animated progress)
-        if '\r' in text and '\n' not in text:
-            # This is a tqdm progress update - extract and update progress only
-            content = text.strip()
-            if content:
-                self.last_progress_line = content
-                self._extract_progress(content)
-            return
         
         self.buffer.write(text)
         
@@ -184,35 +174,34 @@ class StdoutWrapper:
             for line in lines[:-1]:
                 if line.strip():
                     self.job.add_log(self.level, line.strip())
-                    self._extract_progress(line)
+                    
+                    # Check for progress updates in format "Progress: X%"
+                    if 'Progress:' in line and '%' in line:
+                        try:
+                            # Extract percentage (e.g., "Progress: 45.2%" -> 45)
+                            progress_str = line.split('Progress:')[1].split('%')[0].strip()
+                            progress = int(float(progress_str))
+                            self.job.progress = max(0, min(100, progress))
+                        except (ValueError, IndexError):
+                            pass  # Ignore malformed progress lines
+                    
+                    # Check for tqdm progress format (e.g., "20%|##" or "kick: 20%|##")
+                    elif '%|' in line:
+                        try:
+                            # Find the percentage before the pipe
+                            parts = line.split('%|')
+                            if len(parts) >= 2:
+                                # Get the last token before %|
+                                progress_part = parts[0].split()[-1]
+                                progress = int(float(progress_part))
+                                self.job.progress = max(0, min(100, progress))
+                        except (ValueError, IndexError):
+                            pass  # Ignore malformed tqdm lines
             
             # Keep incomplete line in buffer
             self.buffer = io.StringIO()
             if lines[-1]:
                 self.buffer.write(lines[-1])
-    
-    def _extract_progress(self, line: str):
-        """Extract progress percentage from various formats"""
-        # Check for explicit "Progress: X%" format
-        if 'Progress:' in line and '%' in line:
-            try:
-                progress_str = line.split('Progress:')[1].split('%')[0].strip()
-                progress = int(float(progress_str))
-                self.job.progress = max(0, min(100, progress))
-            except (ValueError, IndexError):
-                pass
-        
-        # Check for tqdm progress format (e.g., "20%|##" or "kick: 20%|##")
-        elif '%|' in line:
-            try:
-                parts = line.split('%|')
-                if len(parts) >= 2:
-                    # Get the last token before %|
-                    progress_part = parts[0].split()[-1]
-                    progress = int(float(progress_part))
-                    self.job.progress = max(0, min(100, progress))
-            except (ValueError, IndexError):
-                pass
     
     def flush(self):
         """Flush method for compatibility"""
