@@ -35,7 +35,8 @@ import shutil
 # CONSTANTS
 # ============================================================================
 
-USER_FILES_DIR = Path("user_files")
+# Resolve user_files directory relative to this file's location (project root)
+USER_FILES_DIR = Path(__file__).parent / "user_files"
 PROJECT_METADATA_FILE = ".larsnet_project.json"
 
 # Root config files to copy to projects

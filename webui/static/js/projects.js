@@ -177,6 +177,7 @@ function updateDownloads() {
             label: 'Stems',
             icon: 'fa-divide',
             color: 'blue',
+            type: 'stems',
             count: files.stems.length
         });
     }
@@ -187,6 +188,7 @@ function updateDownloads() {
             label: 'Cleaned Stems',
             icon: 'fa-broom',
             color: 'purple',
+            type: 'cleaned',
             count: files.cleaned.length
         });
     }
@@ -197,6 +199,7 @@ function updateDownloads() {
             label: 'MIDI',
             icon: 'fa-music',
             color: 'green',
+            type: 'midi',
             count: files.midi.length
         });
     }
@@ -207,6 +210,7 @@ function updateDownloads() {
             label: 'Video',
             icon: 'fa-video',
             color: 'orange',
+            type: 'video',
             count: files.video.length
         });
     }
@@ -218,7 +222,7 @@ function updateDownloads() {
     
     container.innerHTML = downloads.map(dl => `
         <button class="bg-${dl.color}-600 hover:bg-${dl.color}-700 text-white p-3 rounded-lg transition-smooth flex items-center justify-between"
-                onclick="showToast('Download feature coming in Phase 2', 'info')">
+                onclick="downloadFiles('${dl.type}')">
             <div>
                 <i class="fas ${dl.icon} mr-2"></i>
                 ${dl.label}
@@ -255,6 +259,31 @@ async function loadProjectJobs(projectNumber) {
 function renderActiveJobs(jobs) {
     const container = document.getElementById('active-jobs-list');
     container.innerHTML = jobs.map(job => createJobCard(job)).join('');
+}
+
+/**
+ * Download all files of a specific type
+ */
+async function downloadFiles(fileType) {
+    if (!currentProject) return;
+    
+    try {
+        // Show loading state
+        showToast('Preparing download...', 'info');
+        
+        // Trigger download
+        const url = `/api/projects/${currentProject.number}/download/${fileType}`;
+        window.location.href = url;
+        
+        // Show success after a brief delay
+        setTimeout(() => {
+            showToast('Download started', 'success');
+        }, 500);
+        
+    } catch (error) {
+        console.error('Download failed:', error);
+        showToast('Download failed: ' + error.message, 'error');
+    }
 }
 
 /**
