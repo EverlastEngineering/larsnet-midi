@@ -199,7 +199,7 @@ def create_project_metadata(
     Returns:
         Metadata dictionary ready for JSON serialization
     """
-    now = datetime.now().isoformat()
+    now = datetime.now().astimezone().isoformat()
     return {
         "project_name": project_name,
         "project_number": project_number,

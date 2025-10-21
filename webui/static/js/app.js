@@ -77,6 +77,15 @@ function setupEventListeners() {
     // Console clear button
     document.getElementById('clear-console-btn').addEventListener('click', clearConsole);
     
+    // Console toggle
+    document.getElementById('console-header').addEventListener('click', toggleConsole);
+    
+    // Project details toggle
+    document.getElementById('project-details-toggle').addEventListener('click', toggleProjectDetails);
+    
+    // Delete project button
+    document.getElementById('delete-project-btn').addEventListener('click', confirmDeleteProject);
+    
     // File input
     document.getElementById('browse-btn').addEventListener('click', () => {
         document.getElementById('file-input').click();
@@ -266,22 +275,7 @@ function showToast(message, type = 'info') {
     }, 5000);
 }
 
-/**
- * Show loading overlay
- */
-function showLoading(message = 'Processing...') {
-    const overlay = document.getElementById('loading-overlay');
-    const messageEl = document.getElementById('loading-message');
-    messageEl.textContent = message;
-    overlay.classList.remove('hidden');
-}
 
-/**
- * Hide loading overlay
- */
-function hideLoading() {
-    document.getElementById('loading-overlay').classList.add('hidden');
-}
 
 /**
  * Create job card HTML

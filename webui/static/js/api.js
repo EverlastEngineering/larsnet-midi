@@ -163,6 +163,24 @@ class LarsNetAPI {
         return await this.get(`/projects/${projectNumber}/jobs`);
     }
     
+    async deleteProject(projectNumber) {
+        try {
+            const response = await fetch(`${API_BASE}/projects/${projectNumber}`, {
+                method: 'DELETE'
+            });
+            const data = await response.json();
+            
+            if (!response.ok) {
+                throw new Error(data.message || data.error || 'Delete failed');
+            }
+            
+            return data;
+        } catch (error) {
+            console.error(`DELETE /projects/${projectNumber} failed:`, error);
+            throw error;
+        }
+    }
+    
     // ========== Operations API ==========
     
     async separate(projectNumber, options = {}) {

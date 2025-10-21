@@ -90,8 +90,6 @@ function getStatusBadge(type, hasIt) {
  */
 async function selectProject(projectNumber) {
     try {
-        showLoading('Loading project...');
-        
         const data = await api.getProject(projectNumber);
         currentProject = data.project;
         
@@ -107,10 +105,7 @@ async function selectProject(projectNumber) {
         
         // Load active jobs for this project
         loadProjectJobs(projectNumber);
-        
-        hideLoading();
     } catch (error) {
-        hideLoading();
         console.error('Failed to load project:', error);
         showToast('Failed to load project details', 'error');
     }
@@ -120,9 +115,14 @@ async function selectProject(projectNumber) {
  * Update project header with current project info
  */
 function updateProjectHeader() {
+    const detailsToggle = document.getElementById('project-details-toggle');
+    const deleteBtn = document.getElementById('delete-project-btn');
+    
     if (!currentProject) {
         document.getElementById('current-project-name').textContent = 'Select a project or upload new audio';
         document.getElementById('current-project-subtitle').textContent = 'Drag and drop an audio file to get started';
+        detailsToggle.classList.add('hidden');
+        deleteBtn.classList.add('hidden');
         return;
     }
     
@@ -136,6 +136,31 @@ function updateProjectHeader() {
     
     document.getElementById('current-project-subtitle').textContent = 
         statuses.length > 0 ? statuses.join(' • ') : 'Ready to process';
+    
+    // Show details toggle and delete button
+    detailsToggle.classList.remove('hidden');
+    deleteBtn.classList.remove('hidden');
+    
+    // Update project details
+    const audioFile = currentProject.files.audio[0] || 'Unknown';
+    document.getElementById('project-audio-file').textContent = audioFile;
+    
+    // Format created date if available
+    if (currentProject.metadata && currentProject.metadata.created) {
+        const date = new Date(currentProject.metadata.created);
+        // Format with user's timezone
+        const options = {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            timeZoneName: 'short'
+        };
+        document.getElementById('project-created').textContent = date.toLocaleString(undefined, options);
+    } else {
+        document.getElementById('project-created').textContent = 'Unknown';
+    }
 }
 
 /**
@@ -286,6 +311,80 @@ async function downloadFiles(fileType) {
     } catch (error) {
         console.error('Download failed:', error);
         showToast('Download failed: ' + error.message, 'error');
+    }
+}
+
+/**
+ * Toggle project details expanded/collapsed
+ */
+function toggleProjectDetails() {
+    const container = document.getElementById('project-details-container');
+    const icon = document.querySelector('#project-details-toggle i');
+    const isCollapsed = container.style.maxHeight === '0px' || container.style.maxHeight === '';
+    
+    if (isCollapsed) {
+        container.style.maxHeight = '100px';
+        icon.classList.remove('fa-chevron-down');
+        icon.classList.add('fa-chevron-up');
+    } else {
+        container.style.maxHeight = '0';
+        icon.classList.remove('fa-chevron-up');
+        icon.classList.add('fa-chevron-down');
+    }
+}
+
+/**
+ * Confirm and delete current project
+ */
+async function confirmDeleteProject() {
+    if (!currentProject) return;
+    
+    const projectName = currentProject.name;
+    const confirmed = confirm(
+        `⚠️ WARNING: Delete Project?\n\n` +
+        `This will permanently delete:\n` +
+        `• Project: #${currentProject.number} - ${projectName}\n` +
+        `• All audio files\n` +
+        `• All stems\n` +
+        `• All MIDI files\n` +
+        `• All video files\n` +
+        `• All configuration files\n\n` +
+        `This action CANNOT be undone!\n\n` +
+        `Are you absolutely sure?`
+    );
+    
+    if (!confirmed) return;
+    
+    // Second confirmation
+    const doubleConfirmed = confirm(
+        `⚠️ FINAL WARNING\n\n` +
+        `You are about to permanently delete project:\n` +
+        `"${projectName}"\n\n` +
+        `Click OK to DELETE FOREVER, or Cancel to keep the project.`
+    );
+    
+    if (!doubleConfirmed) return;
+    
+    try {
+        await api.deleteProject(currentProject.number);
+        showToast(`Project "${projectName}" deleted`, 'success');
+        
+        // Clear current project
+        currentProject = null;
+        
+        // Hide project section
+        document.getElementById('project-section').classList.add('hidden');
+        document.getElementById('upload-section').classList.remove('hidden');
+        document.getElementById('sidebar-upload-section').classList.add('hidden');
+        
+        // Reload projects list
+        await loadProjects();
+        
+        // Update header
+        updateProjectHeader();
+    } catch (error) {
+        console.error('Failed to delete project:', error);
+        showToast(`Failed to delete project: ${error.message}`, 'error');
     }
 }
 

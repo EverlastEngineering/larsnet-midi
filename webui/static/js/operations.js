@@ -14,8 +14,6 @@ async function startSeparate() {
     if (!currentProject) return;
     
     try {
-        showLoading('Starting separation...');
-        
         // Get settings from SettingsManager
         const settings = window.settingsManager.getSettingsForOperation('separate');
         
@@ -25,12 +23,10 @@ async function startSeparate() {
             eq: settings.apply_eq
         });
         
-        hideLoading();
         showToast('Separation started', 'success');
         monitorJob(result.job_id, 'separate');
         
     } catch (error) {
-        hideLoading();
         console.error('Failed to start separation:', error);
         showToast(`Separation failed: ${error.message}`, 'error');
     }
@@ -43,8 +39,6 @@ async function startCleanup() {
     if (!currentProject) return;
     
     try {
-        showLoading('Starting cleanup...');
-        
         // Get settings from SettingsManager
         const settings = window.settingsManager.getSettingsForOperation('cleanup');
         
@@ -55,12 +49,10 @@ async function startCleanup() {
             release_ms: settings.release
         });
         
-        hideLoading();
         showToast('Cleanup started', 'success');
         monitorJob(result.job_id, 'cleanup');
         
     } catch (error) {
-        hideLoading();
         console.error('Failed to start cleanup:', error);
         showToast(`Cleanup failed: ${error.message}`, 'error');
     }
@@ -73,8 +65,6 @@ async function startMidi() {
     if (!currentProject) return;
     
     try {
-        showLoading('Starting MIDI conversion...');
-        
         // Get settings from SettingsManager
         const settings = window.settingsManager.getSettingsForOperation('midi');
         
@@ -89,12 +79,10 @@ async function startMidi() {
             detect_hihat_open: settings.detect_hihat_open
         });
         
-        hideLoading();
         showToast('MIDI conversion started', 'success');
         monitorJob(result.job_id, 'stems-to-midi');
         
     } catch (error) {
-        hideLoading();
         console.error('Failed to start MIDI conversion:', error);
         showToast(`MIDI conversion failed: ${error.message}`, 'error');
     }
@@ -107,8 +95,6 @@ async function startVideo() {
     if (!currentProject) return;
     
     try {
-        showLoading('Starting video rendering...');
-        
         // Get settings from SettingsManager
         const settings = window.settingsManager.getSettingsForOperation('video');
         
@@ -126,12 +112,10 @@ async function startVideo() {
             height: height
         });
         
-        hideLoading();
         showToast('Video rendering started', 'success');
         monitorJob(result.job_id, 'render-video');
         
     } catch (error) {
-        hideLoading();
         console.error('Failed to start video rendering:', error);
         showToast(`Video rendering failed: ${error.message}`, 'error');
     }
@@ -222,7 +206,37 @@ function addJobCard(jobId, operationName) {
         </div>
     `;
     
+    // Start collapsed for animation
+    card.style.height = '0';
+    card.style.opacity = '0';
+    card.style.overflow = 'hidden';
+    card.style.marginBottom = '0';
+    card.style.paddingTop = '0';
+    card.style.paddingBottom = '0';
+    
     container.appendChild(card);
+    
+    // Get the natural height before animating
+    card.style.height = 'auto';
+    const height = card.offsetHeight;
+    card.style.height = '0';
+    
+    // Force reflow to ensure starting state is applied
+    card.offsetHeight;
+    
+    // Use requestAnimationFrame to ensure smooth animation
+    requestAnimationFrame(() => {
+        card.style.height = height + 'px';
+        card.style.opacity = '1';
+        card.style.marginBottom = '0.75rem';
+        card.style.paddingTop = '1rem';
+        card.style.paddingBottom = '1rem';
+        
+        // Remove inline height after animation so it can adapt to content
+        setTimeout(() => {
+            card.style.height = 'auto';
+        }, 300);
+    });
     
     // Attach event listener for close/cancel button
     const closeBtn = document.getElementById(`job-${jobId}-close-btn`);
@@ -290,10 +304,10 @@ function updateJobCard(job) {
             }
         }
         
-        // Auto-remove after 10 seconds
+        // Auto-remove after 2 seconds
         setTimeout(() => {
             removeJobCard(job.id);
-        }, 10000);
+        }, 2000);
     }
 }
 
@@ -323,24 +337,55 @@ async function refreshCurrentProjectFiles() {
 function removeJobCard(jobId) {
     const card = document.getElementById(`job-${jobId}`);
     if (card) {
+        // First fade out and shrink
         card.style.opacity = '0';
         card.style.transform = 'translateY(-20px)';
+        
+        // Then collapse height smoothly
         setTimeout(() => {
-            card.remove();
+            const height = card.offsetHeight;
+            card.style.height = height + 'px';
+            card.style.overflow = 'hidden';
+            card.style.marginBottom = '0.75rem';
             
-            // Hide section if no more jobs
-            const container = document.getElementById('active-jobs-list');
-            if (container.children.length === 0) {
-                document.getElementById('active-jobs-section').classList.add('hidden');
-            }
+            // Force reflow
+            card.offsetHeight;
+            
+            // Animate to zero height
+            card.style.height = '0';
+            card.style.marginBottom = '0';
+            card.style.paddingTop = '0';
+            card.style.paddingBottom = '0';
+            
+            // Remove after animation
+            setTimeout(() => {
+                card.remove();
+                
+                // Hide section if no more jobs
+                const container = document.getElementById('active-jobs-list');
+                if (container.children.length === 0) {
+                    document.getElementById('active-jobs-section').classList.add('hidden');
+                }
+            }, 300);
         }, 300);
     }
 }
 
 /**
- * Cancel a job
+ * Cancel a job (or just remove the card if already completed)
  */
 async function cancelJob(jobId) {
+    const card = document.getElementById(`job-${jobId}`);
+    
+    // Check if job is already completed by looking at status text color
+    const statusEl = document.getElementById(`job-${jobId}-status`);
+    if (statusEl && (statusEl.classList.contains('text-green-500') || statusEl.classList.contains('text-red-500') || statusEl.classList.contains('text-gray-500'))) {
+        // Job is already done, just remove the card
+        removeJobCard(jobId);
+        return;
+    }
+    
+    // Job is still running, try to cancel it
     try {
         await api.cancelJob(jobId);
         showToast('Job cancelled', 'info');
@@ -353,14 +398,16 @@ async function cancelJob(jobId) {
         }
         
         // Remove card
-        const card = document.getElementById(`job-${jobId}`);
         if (card) {
-            card.remove();
+            removeJobCard(jobId);
         }
         
     } catch (error) {
         console.error('Failed to cancel job:', error);
-        showToast('Failed to cancel job', 'error');
+        // If cancel fails but the card exists, just remove it anyway
+        if (card) {
+            removeJobCard(jobId);
+        }
     }
 }
 
@@ -371,10 +418,13 @@ function addConsoleLog(message, level = 'info') {
     const console = document.getElementById('console-output');
     const consoleSection = document.getElementById('console-section');
     
-    // Show console if hidden
+    // Show console section if hidden (but keep it collapsed)
     if (consoleSection.classList.contains('hidden')) {
         consoleSection.classList.remove('hidden');
     }
+    
+    // Update log count badge
+    updateConsoleLogCount();
     
     const colors = {
         'info': 'text-gray-400',
@@ -398,6 +448,38 @@ function addConsoleLog(message, level = 'info') {
 function clearConsole() {
     document.getElementById('console-output').innerHTML = 
         '<div class="text-gray-500">Console cleared...</div>';
+    updateConsoleLogCount();
+}
+
+/**
+ * Update console log count badge
+ */
+function updateConsoleLogCount() {
+    const console = document.getElementById('console-output');
+    const badge = document.getElementById('console-badge');
+    const logCount = console.children.length;
+    badge.textContent = `${logCount} log${logCount !== 1 ? 's' : ''}`;
+}
+
+/**
+ * Toggle console expanded/collapsed
+ */
+function toggleConsole() {
+    const container = document.getElementById('console-output-container');
+    const icon = document.getElementById('console-toggle-icon');
+    const isCollapsed = container.style.maxHeight === '0px' || container.style.maxHeight === '';
+    
+    if (isCollapsed) {
+        // Expand
+        container.style.maxHeight = '300px';
+        icon.classList.remove('fa-chevron-right');
+        icon.classList.add('fa-chevron-down');
+    } else {
+        // Collapse
+        container.style.maxHeight = '0';
+        icon.classList.remove('fa-chevron-down');
+        icon.classList.add('fa-chevron-right');
+    }
 }
 
 /**

@@ -229,3 +229,56 @@ def get_project_config(project_number, config_name):
             'error': 'Failed to get config',
             'message': str(e)
         }), 500
+
+
+@projects_bp.route('/<int:project_number>', methods=['DELETE'])
+def delete_project(project_number):
+    """
+    DELETE /api/projects/<project_number>
+    
+    Permanently delete a project and all its files.
+    
+    Path Parameters:
+        project_number (int): Project number (e.g., 1, 2, 3)
+    
+    Returns:
+        200: Project deleted successfully
+        404: Project not found
+        500: Internal error
+        
+    Response format:
+        {
+            "message": "Project deleted successfully",
+            "project_number": 1,
+            "project_name": "Song Name"
+        }
+    """
+    try:
+        import shutil
+        
+        # Get project details before deletion
+        project = get_project_by_number(project_number, USER_FILES_DIR)
+        if not project:
+            return jsonify({
+                'error': 'Not found',
+                'message': f'Project {project_number} not found'
+            }), 404
+        
+        project_name = project['name']
+        project_path = project['path']
+        
+        # Delete the entire project directory
+        if project_path.exists():
+            shutil.rmtree(project_path)
+        
+        return jsonify({
+            'message': 'Project deleted successfully',
+            'project_number': project_number,
+            'project_name': project_name
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to delete project',
+            'message': str(e)
+        }), 500
