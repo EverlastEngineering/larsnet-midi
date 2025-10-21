@@ -15,9 +15,9 @@ Usage:
 """
 
 import argparse
-import mido
-import cv2
-import numpy as np
+import  # type: ignore
+import cv2 # type: ignore
+import numpy as np # type: ignore
 from dataclasses import dataclass
 from typing import List, Tuple, Dict, Optional
 import os
@@ -76,7 +76,7 @@ class MidiVideoRenderer:
         
     def parse_midi(self, midi_path: str) -> Tuple[List[DrumNote], float]:
         """Parse MIDI file and extract drum notes with timing"""
-        midi_file = mido.MidiFile(midi_path)
+        midi_file = mido.MidiFile(midi_path) # type: ignore
         notes = []
         total_duration = 0.0
         
@@ -92,7 +92,7 @@ class MidiVideoRenderer:
             for msg in track:
                 # Update absolute time BEFORE processing the message
                 if msg.time > 0:
-                    absolute_time += mido.tick2second(msg.time, midi_file.ticks_per_beat, current_tempo)
+                    absolute_time += mido.tick2second(msg.time, midi_file.ticks_per_beat, current_tempo) # type: ignore
                 
                 if msg.type == 'set_tempo':
                     # Record this tempo change
@@ -129,7 +129,7 @@ class MidiVideoRenderer:
                 
                 # Calculate time delta and add to absolute time
                 if msg.time > 0:
-                    absolute_time += mido.tick2second(msg.time, midi_file.ticks_per_beat, current_tempo)
+                    absolute_time += mido.tick2second(msg.time, midi_file.ticks_per_beat, current_tempo) # type: ignore
                 
                 if msg.type == 'note_on' and msg.velocity > 0:
                     if msg.note in DRUM_MAP:
@@ -310,7 +310,7 @@ class MidiVideoRenderer:
             # Progress
             if frame_num % 50 == 0:
                 progress = (frame_num / total_frames) * 100
-                print(f"Progress: {progress:.1f}%", end='\r')
+                print(f"Progress: {progress:.1f}%")
         
         out.release()
         if show_preview:

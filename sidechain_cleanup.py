@@ -13,9 +13,9 @@ Usage:
 """
 
 from pathlib import Path
-import numpy as np
-import soundfile as sf
-from scipy import signal
+import numpy as np # type: ignore
+import soundfile as sf # type: ignore
+from scipy import signal # type: ignore
 import argparse
 import sys
 from typing import Union, Tuple
@@ -116,7 +116,7 @@ def sidechain_compress(
         # Every M samples, print progress converted into percentage
         if i % 1000000 == 0:
             progress = (i / len(sidechain_db)) * 100
-            print(f"Progress: {progress:.0f}%", end='\r')
+            print(f"Progress: {progress:.0f}%")
 
         if sidechain_db[i] > threshold + knee_db:
             # Above knee - full compression
