@@ -16,10 +16,13 @@ async function startSeparate() {
     try {
         showLoading('Starting separation...');
         
+        // Get settings from SettingsManager
+        const settings = window.settingsManager.getSettingsForOperation('separate');
+        
         const result = await api.separate(currentProject.number, {
-            device: 'cpu', // TODO: Make configurable in Phase 3
-            wiener: null,
-            eq: false
+            device: settings.device,
+            wiener: settings.wiener_exponent,
+            eq: settings.apply_eq
         });
         
         hideLoading();
@@ -42,11 +45,14 @@ async function startCleanup() {
     try {
         showLoading('Starting cleanup...');
         
+        // Get settings from SettingsManager
+        const settings = window.settingsManager.getSettingsForOperation('cleanup');
+        
         const result = await api.cleanup(currentProject.number, {
-            threshold_db: -30.0,
-            ratio: 10.0,
-            attack_ms: 1.0,
-            release_ms: 100.0
+            threshold_db: settings.threshold,
+            ratio: settings.ratio,
+            attack_ms: settings.attack,
+            release_ms: settings.release
         });
         
         hideLoading();
@@ -69,13 +75,18 @@ async function startMidi() {
     try {
         showLoading('Starting MIDI conversion...');
         
+        // Get settings from SettingsManager
+        const settings = window.settingsManager.getSettingsForOperation('midi');
+        
         const result = await api.stemsToMidi(currentProject.number, {
-            onset_threshold: 0.3,
-            onset_delta: 0.01,
-            onset_wait: 3,
-            hop_length: 512,
-            min_velocity: 80,
-            max_velocity: 110
+            onset_threshold: settings.onset_threshold,
+            onset_delta: settings.onset_delta,
+            onset_wait: null, // Not exposed in basic UI
+            hop_length: null, // Not exposed in basic UI
+            min_velocity: settings.min_velocity,
+            max_velocity: settings.max_velocity,
+            tempo: settings.tempo,
+            detect_hihat_open: settings.detect_hihat_open
         });
         
         hideLoading();
@@ -98,10 +109,21 @@ async function startVideo() {
     try {
         showLoading('Starting video rendering...');
         
+        // Get settings from SettingsManager
+        const settings = window.settingsManager.getSettingsForOperation('video');
+        
+        // Parse resolution
+        let width = 1920, height = 1080;
+        if (settings.resolution === '1440p') {
+            width = 2560; height = 1440;
+        } else if (settings.resolution === '4k') {
+            width = 3840; height = 2160;
+        }
+        
         const result = await api.renderVideo(currentProject.number, {
-            fps: 60,
-            width: 1920,
-            height: 1080
+            fps: parseInt(settings.fps),
+            width: width,
+            height: height
         });
         
         hideLoading();

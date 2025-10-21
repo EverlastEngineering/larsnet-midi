@@ -15,6 +15,9 @@ document.addEventListener('DOMContentLoaded', () => {
 async function initializeApp() {
     console.log('LarsNet Web UI initializing...');
     
+    // Initialize settings manager
+    window.settingsManager = new SettingsManager();
+    
     // Check API health
     await checkHealth();
     

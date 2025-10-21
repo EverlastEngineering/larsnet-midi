@@ -180,34 +180,195 @@
                             <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
                                 
                                 <!-- Separate Button -->
-                                <button id="btn-separate" class="operation-btn bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-lg transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
-                                    <i class="fas fa-divide text-2xl mb-2"></i>
-                                    <p class="font-semibold">Separate</p>
-                                    <p class="text-xs opacity-75">Split drums</p>
-                                </button>
+                                <div class="flex flex-col">
+                                    <button id="btn-separate" class="operation-btn bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-lg transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
+                                        <i class="fas fa-divide text-2xl mb-2"></i>
+                                        <p class="font-semibold">Separate</p>
+                                        <p class="text-xs opacity-75">Split drums</p>
+                                    </button>
+                                    <button class="settings-toggle text-xs text-gray-400 hover:text-gray-200 mt-2 transition-smooth" data-target="settings-separate">
+                                        <i class="fas fa-chevron-down mr-1"></i>Settings
+                                    </button>
+                                </div>
                                 
                                 <!-- Cleanup Button -->
-                                <button id="btn-cleanup" class="operation-btn bg-purple-600 hover:bg-purple-700 text-white p-4 rounded-lg transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
-                                    <i class="fas fa-broom text-2xl mb-2"></i>
-                                    <p class="font-semibold">Clean</p>
-                                    <p class="text-xs opacity-75">Reduce bleed</p>
-                                </button>
+                                <div class="flex flex-col">
+                                    <button id="btn-cleanup" class="operation-btn bg-purple-600 hover:bg-purple-700 text-white p-4 rounded-lg transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
+                                        <i class="fas fa-broom text-2xl mb-2"></i>
+                                        <p class="font-semibold">Clean</p>
+                                        <p class="text-xs opacity-75">Reduce bleed</p>
+                                    </button>
+                                    <button class="settings-toggle text-xs text-gray-400 hover:text-gray-200 mt-2 transition-smooth" data-target="settings-cleanup">
+                                        <i class="fas fa-chevron-down mr-1"></i>Settings
+                                    </button>
+                                </div>
                                 
                                 <!-- MIDI Button -->
-                                <button id="btn-midi" class="operation-btn bg-green-600 hover:bg-green-700 text-white p-4 rounded-lg transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
-                                    <i class="fas fa-music text-2xl mb-2"></i>
-                                    <p class="font-semibold">MIDI</p>
-                                    <p class="text-xs opacity-75">Convert notes</p>
-                                </button>
+                                <div class="flex flex-col">
+                                    <button id="btn-midi" class="operation-btn bg-green-600 hover:bg-green-700 text-white p-4 rounded-lg transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
+                                        <i class="fas fa-music text-2xl mb-2"></i>
+                                        <p class="font-semibold">MIDI</p>
+                                        <p class="text-xs opacity-75">Convert notes</p>
+                                    </button>
+                                    <button class="settings-toggle text-xs text-gray-400 hover:text-gray-200 mt-2 transition-smooth" data-target="settings-midi">
+                                        <i class="fas fa-chevron-down mr-1"></i>Settings
+                                    </button>
+                                </div>
                                 
                                 <!-- Video Button -->
-                                <button id="btn-video" class="operation-btn bg-orange-600 hover:bg-orange-700 text-white p-4 rounded-lg transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
-                                    <i class="fas fa-video text-2xl mb-2"></i>
-                                    <p class="font-semibold">Video</p>
-                                    <p class="text-xs opacity-75">Visualize</p>
-                                </button>
+                                <div class="flex flex-col">
+                                    <button id="btn-video" class="operation-btn bg-orange-600 hover:bg-orange-700 text-white p-4 rounded-lg transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
+                                        <i class="fas fa-video text-2xl mb-2"></i>
+                                        <p class="font-semibold">Video</p>
+                                        <p class="text-xs opacity-75">Visualize</p>
+                                    </button>
+                                    <button class="settings-toggle text-xs text-gray-400 hover:text-gray-200 mt-2 transition-smooth" data-target="settings-video">
+                                        <i class="fas fa-chevron-down mr-1"></i>Settings
+                                    </button>
+                                </div>
                                 
                             </div>
+                            
+                            <!-- Settings Panels -->
+                            
+                            <!-- Separate Settings -->
+                            <div id="settings-separate" class="settings-panel hidden mt-6 pt-6 border-t border-gray-700">
+                                <h4 class="text-sm font-semibold mb-4 text-gray-300">Separation Settings</h4>
+                                <div class="space-y-4">
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex-1">
+                                            <label class="text-sm text-gray-300">Device</label>
+                                            <p class="text-xs text-gray-500">Processing device (CPU or CUDA GPU)</p>
+                                        </div>
+                                        <select id="setting-device" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm">
+                                            <option value="cpu">CPU</option>
+                                            <option value="cuda">CUDA (GPU)</option>
+                                        </select>
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex-1">
+                                            <label class="text-sm text-gray-300">Apply EQ Cleanup</label>
+                                            <p class="text-xs text-gray-500">Apply frequency filtering to reduce bleed</p>
+                                        </div>
+                                        <label class="relative inline-flex items-center cursor-pointer">
+                                            <input type="checkbox" id="setting-apply-eq" class="sr-only peer">
+                                            <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-larsnet-primary"></div>
+                                        </label>
+                                    </div>
+                                    <div>
+                                        <label class="text-sm text-gray-300 block mb-2">Wiener Filter Exponent</label>
+                                        <p class="text-xs text-gray-500 mb-2">Higher values = more aggressive filtering (0 = disabled)</p>
+                                        <input type="number" id="setting-wiener" min="0" max="10" step="0.5" value="0" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-32">
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Cleanup Settings -->
+                            <div id="settings-cleanup" class="settings-panel hidden mt-6 pt-6 border-t border-gray-700">
+                                <h4 class="text-sm font-semibold mb-4 text-gray-300">Sidechain Compression Settings</h4>
+                                <div class="space-y-4">
+                                    <div>
+                                        <label class="text-sm text-gray-300 block mb-2">Threshold (dB)</label>
+                                        <p class="text-xs text-gray-500 mb-2">Trigger level for compression (-60 to 0)</p>
+                                        <input type="number" id="setting-threshold" min="-60" max="0" step="1" value="-30" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-32">
+                                    </div>
+                                    <div>
+                                        <label class="text-sm text-gray-300 block mb-2">Ratio</label>
+                                        <p class="text-xs text-gray-500 mb-2">Compression ratio (1-20)</p>
+                                        <input type="number" id="setting-ratio" min="1" max="20" step="0.5" value="10" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-32">
+                                    </div>
+                                    <div>
+                                        <label class="text-sm text-gray-300 block mb-2">Attack (ms)</label>
+                                        <p class="text-xs text-gray-500 mb-2">How quickly compression engages (0.1-10)</p>
+                                        <input type="number" id="setting-attack" min="0.1" max="10" step="0.1" value="1" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-32">
+                                    </div>
+                                    <div>
+                                        <label class="text-sm text-gray-300 block mb-2">Release (ms)</label>
+                                        <p class="text-xs text-gray-500 mb-2">How quickly compression releases (10-500)</p>
+                                        <input type="number" id="setting-release" min="10" max="500" step="10" value="100" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-32">
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- MIDI Settings -->
+                            <div id="settings-midi" class="settings-panel hidden mt-6 pt-6 border-t border-gray-700">
+                                <h4 class="text-sm font-semibold mb-4 text-gray-300">MIDI Conversion Settings</h4>
+                                
+                                <!-- Basic Settings -->
+                                <div class="space-y-4 mb-6">
+                                    <div>
+                                        <label class="text-sm text-gray-300 block mb-2">Onset Threshold</label>
+                                        <p class="text-xs text-gray-500 mb-2">Detection sensitivity (0-1, lower = more sensitive)</p>
+                                        <input type="number" id="setting-onset-threshold" min="0" max="1" step="0.01" value="0.3" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-32">
+                                    </div>
+                                    <div>
+                                        <label class="text-sm text-gray-300 block mb-2">Onset Delta</label>
+                                        <p class="text-xs text-gray-500 mb-2">Peak picking sensitivity (0-0.1)</p>
+                                        <input type="number" id="setting-onset-delta" min="0" max="0.1" step="0.001" value="0.01" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-32">
+                                    </div>
+                                    <div>
+                                        <label class="text-sm text-gray-300 block mb-2">Min/Max Velocity</label>
+                                        <p class="text-xs text-gray-500 mb-2">MIDI velocity range (0-127)</p>
+                                        <div class="flex gap-2">
+                                            <input type="number" id="setting-min-velocity" min="0" max="127" value="40" placeholder="Min" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-24">
+                                            <input type="number" id="setting-max-velocity" min="0" max="127" value="127" placeholder="Max" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-24">
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="text-sm text-gray-300 block mb-2">Tempo (BPM)</label>
+                                        <p class="text-xs text-gray-500 mb-2">Optional tempo for MIDI file</p>
+                                        <input type="number" id="setting-tempo" min="60" max="200" step="1" placeholder="Auto" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-32">
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex-1">
+                                            <label class="text-sm text-gray-300">Detect Open Hi-Hat</label>
+                                            <p class="text-xs text-gray-500">Distinguish open vs closed hi-hat</p>
+                                        </div>
+                                        <label class="relative inline-flex items-center cursor-pointer">
+                                            <input type="checkbox" id="setting-detect-hihat-open" class="sr-only peer">
+                                            <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-larsnet-primary"></div>
+                                        </label>
+                                    </div>
+                                </div>
+                                
+                                <!-- Advanced Settings (Stub) -->
+                                <div class="pt-4 border-t border-gray-700">
+                                    <button class="text-sm text-larsnet-primary hover:text-blue-400 transition-smooth" id="btn-advanced-midi">
+                                        <i class="fas fa-cog mr-2"></i>Advanced Per-Stem Settings (Coming Soon)
+                                    </button>
+                                    <p class="text-xs text-gray-500 mt-2">Configure spectral filtering, timing offsets, and detection parameters for each drum individually</p>
+                                </div>
+                            </div>
+                            
+                            <!-- Video Settings -->
+                            <div id="settings-video" class="settings-panel hidden mt-6 pt-6 border-t border-gray-700">
+                                <h4 class="text-sm font-semibold mb-4 text-gray-300">Video Rendering Settings</h4>
+                                <div class="space-y-4">
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex-1">
+                                            <label class="text-sm text-gray-300">Frame Rate (FPS)</label>
+                                            <p class="text-xs text-gray-500">Video frame rate</p>
+                                        </div>
+                                        <select id="setting-fps" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm">
+                                            <option value="30">30 FPS</option>
+                                            <option value="60" selected>60 FPS</option>
+                                            <option value="120">120 FPS</option>
+                                        </select>
+                                    </div>
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex-1">
+                                            <label class="text-sm text-gray-300">Resolution</label>
+                                            <p class="text-xs text-gray-500">Output video resolution</p>
+                                        </div>
+                                        <select id="setting-resolution" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm">
+                                            <option value="1080p" selected>1080p (1920×1080)</option>
+                                            <option value="1440p">1440p (2560×1440)</option>
+                                            <option value="4k">4K (3840×2160)</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                            
                         </div>
                         
                         <!-- Active Jobs -->
@@ -266,6 +427,7 @@
     
     <!-- JavaScript -->
     <script src="/static/js/api.js"></script>
+    <script src="/static/js/settings.js"></script>
     <script src="/static/js/projects.js"></script>
     <script src="/static/js/operations.js"></script>
     <script src="/static/js/app.js"></script>

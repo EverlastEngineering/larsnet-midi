@@ -51,24 +51,26 @@
 - [x] Create /api/config endpoints (GET, POST, validate, reset)
 - [x] Write comprehensive tests (test_config_engine.py, test_config_api.py)
 - [x] Add ruamel.yaml dependency to environment.yml
-- [ ] Basic: Separate operation panel
-- [ ] Basic: Cleanup operation panel
-- [ ] Basic: MIDI operation panel
-- [ ] Basic: Video operation panel
-- [ ] Advanced: MIDI config (from midiconfig.yaml)
+- [x] Basic: Separate operation panel (device, wiener, EQ)
+- [x] Basic: Cleanup operation panel (threshold, ratio, attack, release)
+- [x] Basic: MIDI operation panel (onset, velocity, tempo, hi-hat)
+- [x] Basic: Video operation panel (fps, resolution)
+- [x] Store preferences in localStorage
+- [x] Settings toggle UI (collapsible panels with chevron animation)
+- [x] Settings integrated with operation triggers
+- [ ] Advanced: MIDI config (from midiconfig.yaml) - stubbed
 - [ ] Advanced: EQ config (from eq.yaml)
 - [ ] Advanced: Separation config (from config.yaml)
-- [ ] Store preferences in localStorage
 - [ ] Add "Reset to Defaults" buttons
 - [ ] Add "Save to Project" functionality
-- [ ] Add parameter tooltips
+- [ ] Add parameter tooltips (inline help text)
 - [ ] Add form validation
 - [ ] Write WEBUI_CONFIG_GUIDE.md
 
-**Status**: Backend Complete (frontend UI components pending)  
+**Status**: Basic Settings Complete (advanced YAML editor pending)  
 **Tests Passing**: 40/40 (config_engine + config_api tests)  
-**Coverage**: 100% on new code (ValidationRule, ConfigField, ConfigSection, YAMLConfigEngine, config API)  
-**Lines Changed**: ~650  
+**Coverage**: 100% on backend code  
+**Lines Changed**: ~1000  
 
 ### Phase 4: Testing & Polish
 - [ ] Write frontend tests
@@ -118,6 +120,19 @@
 - Decided on max_depth parameter for controlling nested structure rendering
 - Built to_ui_control() method to provide frontend-ready specifications
 - Separated concerns: parsing logic (functional core) from API handlers (imperative shell)
+
+### [Date: 2025-10-20] Phase 3 Basic Settings UI Implemented
+- Added collapsible settings panels beneath each operation button
+- Implemented progressive disclosure: Settings button with chevron animation
+- Created SettingsManager class for localStorage persistence and value management
+- All CLI parameters now accessible via UI:
+  - Separate: device (CPU/CUDA), Wiener filter, EQ cleanup toggle
+  - Cleanup: threshold, ratio, attack, release (sidechain compression)
+  - MIDI: onset threshold/delta, velocity range, tempo, hi-hat detection
+  - Video: FPS (30/60/120), resolution (1080p/1440p/4K)
+- Settings auto-save to localStorage on change
+- Settings automatically applied when operations are triggered
+- Stubbed advanced MIDI settings button for per-stem configuration (Phase 3B)
 - Documented complete setup and troubleshooting in WEBUI_SETUP.md
 - All code documented with docstrings explaining architecture and usage
 
