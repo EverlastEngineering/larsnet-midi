@@ -430,6 +430,20 @@
                                             <!-- Audio files will be populated dynamically -->
                                         </select>
                                     </div>
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex-1">
+                                            <label class="text-sm text-gray-300">Note Fall Speed</label>
+                                            <p class="text-xs text-gray-500">How fast notes fall (1.0x = default)</p>
+                                        </div>
+                                        <select id="setting-fall-speed" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm">
+                                            <option value="0.5">0.5x (Slow)</option>
+                                            <option value="0.75">0.75x</option>
+                                            <option value="1.0" selected>1.0x (Default)</option>
+                                            <option value="1.25">1.25x</option>
+                                            <option value="1.5">1.5x</option>
+                                            <option value="2.0">2.0x (Fast)</option>
+                                        </select>
+                                    </div>
                                     
                                     <!-- Compact Alternate Audio Upload -->
                                     <div class="mt-4 pt-4 border-t border-gray-700">

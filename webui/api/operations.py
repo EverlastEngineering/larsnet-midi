@@ -86,7 +86,7 @@ def run_stems_to_midi(project_number: int, **kwargs):
 
 
 def run_render_video(project_number: int, fps: int = 60, width: int = 1920, height: int = 1080, 
-                     audio_source: str = None, include_audio: bool = None):
+                     audio_source: str = None, include_audio: bool = None, fall_speed_multiplier: float = 1.0):
     """
     Execute MIDI to video rendering for a project.
     
@@ -95,6 +95,7 @@ def run_render_video(project_number: int, fps: int = 60, width: int = 1920, heig
     Args:
         audio_source: Audio source - None, 'original', or 'alternate_mix/{filename}'
         include_audio: DEPRECATED - kept for backward compatibility
+        fall_speed_multiplier: Note fall speed multiplier (1.0 = default)
     """
     from render_midi_to_video import render_project_video
     from project_manager import get_project_by_number, USER_FILES_DIR
@@ -104,7 +105,8 @@ def run_render_video(project_number: int, fps: int = 60, width: int = 1920, heig
         raise ValueError(f'Project {project_number} not found')
     
     render_project_video(project, fps=fps, width=width, height=height, 
-                        audio_source=audio_source, include_audio=include_audio)
+                        audio_source=audio_source, include_audio=include_audio,
+                        fall_speed_multiplier=fall_speed_multiplier)
     
     return {'project_number': project_number, 'video_created': True}
 
@@ -354,7 +356,8 @@ def render_video():
             "width": 1920,       # optional
             "height": 1080,      # optional
             "audio_source": null # optional: null, 'original', or 'alternate_mix/{filename}'
-            "include_audio": false  # DEPRECATED: use audio_source instead
+            "include_audio": false,  # DEPRECATED: use audio_source instead
+            "fall_speed_multiplier": 1.0  # optional: 0.5-2.0, controls note fall speed
         }
         
     Returns:
@@ -388,6 +391,7 @@ def render_video():
         height = data.get('height', 1080)
         audio_source = data.get('audio_source', None)
         include_audio = data.get('include_audio', None)  # Deprecated but still supported
+        fall_speed_multiplier = data.get('fall_speed_multiplier', 1.0)
         
         # Submit job
         job_queue = get_job_queue()
@@ -400,7 +404,8 @@ def render_video():
             width=width,
             height=height,
             audio_source=audio_source,
-            include_audio=include_audio
+            include_audio=include_audio,
+            fall_speed_multiplier=fall_speed_multiplier
         )
         
         return jsonify({

@@ -129,7 +129,8 @@ async function startVideo() {
             fps: parseInt(settings.fps),
             width: width,
             height: height,
-            audio_source: audioSource
+            audio_source: audioSource,
+            fall_speed_multiplier: parseFloat(settings.fallSpeed)
         });
         
         showToast('Video rendering started', 'success');

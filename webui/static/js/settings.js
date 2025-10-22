@@ -186,6 +186,7 @@ class SettingsManager {
                 settings.fps = this.settings['fps'] || 60;
                 settings.resolution = this.settings['resolution'] || '1080p';
                 settings.audioSource = this.settings['audio-source'] || '';
+                settings.fallSpeed = this.settings['fall-speed'] || 1.0;
                 break;
         }
         
@@ -219,7 +220,8 @@ class SettingsManager {
             'video': {
                 'fps': 60,
                 'resolution': '1080p',
-                'audio-source': ''
+                'audio-source': '',
+                'fall-speed': 1.0
             }
         };
         

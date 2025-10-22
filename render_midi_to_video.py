@@ -66,15 +66,16 @@ DRUM_MAP = {
 class MidiVideoRenderer:
     """Renders MIDI drum files to Rock Band-style falling notes videos"""
     
-    def __init__(self, width: int = 1920, height: int = 1080, fps: int = 60):
+    def __init__(self, width: int = 1920, height: int = 1080, fps: int = 60, fall_speed_multiplier: float = 1.0):
         self.width = width
         self.height = height
         self.fps = fps
+        self.fall_speed_multiplier = fall_speed_multiplier
         self.num_lanes = len(set(info["lane"] for info in DRUM_MAP.values()))  
         self.note_width = width // self.num_lanes
         self.strike_line_y = int(height * 0.85)  # Where notes are "hit"
         self.note_height = 30  # Height of each note rectangle
-        self.pixels_per_second = height * 0.5  # How fast notes fall
+        self.pixels_per_second = height * 0.5 * fall_speed_multiplier  # How fast notes fall
         
     def parse_midi(self, midi_path: str) -> Tuple[List[DrumNote], float]:
         """Parse MIDI file and extract drum notes with timing"""
@@ -392,7 +393,8 @@ def render_project_video(
     fps: int = 60,
     preview: bool = False,
     audio_source: Optional[str] = None,
-    include_audio: Optional[bool] = None  # Deprecated: kept for backward compatibility
+    include_audio: Optional[bool] = None,  # Deprecated: kept for backward compatibility
+    fall_speed_multiplier: float = 1.0
 ):
     """
     Render MIDI to video for a specific project.
@@ -405,6 +407,7 @@ def render_project_video(
         preview: Show live preview while rendering
         audio_source: Audio source selection - None (no audio), 'original', or 'alternate_mix/{filename}'
         include_audio: DEPRECATED - use audio_source instead. If True, uses 'original'
+        fall_speed_multiplier: Speed multiplier for falling notes (1.0 = default, 0.5 = half speed, 2.0 = double speed)
     """
     project_dir = project["path"]
     
@@ -472,6 +475,7 @@ def render_project_video(
     
     print(f"Rendering video to: {output_file}")
     print(f"Settings: {width}x{height} @ {fps}fps")
+    print(f"Note fall speed: {fall_speed_multiplier}x")
     if audio_file:
         print(f"Including audio: {Path(audio_file).name}")
     else:
@@ -481,7 +485,7 @@ def render_project_video(
     print()
     
     # Render video
-    renderer = MidiVideoRenderer(width=width, height=height, fps=fps)
+    renderer = MidiVideoRenderer(width=width, height=height, fps=fps, fall_speed_multiplier=fall_speed_multiplier)
     renderer.render(str(midi_file), str(output_file), show_preview=preview, audio_path=audio_file)
     
     # Update project metadata
@@ -522,6 +526,8 @@ Examples:
                        help='Show live preview while rendering')
     parser.add_argument('--audio', action='store_true',
                        help='Include original audio file in the video')
+    parser.add_argument('--fall-speed', type=float, default=1.0,
+                       help='Note fall speed multiplier (default: 1.0, range: 0.5-2.0)')
     
     args = parser.parse_args()
     
@@ -554,7 +560,8 @@ Examples:
         height=args.height,
         fps=args.fps,
         preview=args.preview,
-        include_audio=args.audio
+        include_audio=args.audio,
+        fall_speed_multiplier=args.fall_speed
     )
     
     return 0
