@@ -48,6 +48,7 @@ class DrumNote:
 
 # Standard GM Drum Map - adjust based on your MIDI files
 # Each MIDI note maps to a list of lane definitions (most have 1, but some can have multiple)
+# Kick drum (36) uses lane -1 to indicate it's drawn as a screen-wide bar
 DRUM_MAP = {
     42: [{"name": "Hi-Hat Closed", "lane": 0, "color": (255, 255, 0)}],  # Cyan
     46: [{"name": "Hi-Hat Open", "lane": 0, "color": (80, 255, 30)},     # Light Blue (shows in both lanes)
@@ -59,9 +60,9 @@ DRUM_MAP = {
     47: [{"name": "Tom 1", "lane": 5, "color": (0, 255, 0)}],       # Green
     48: [{"name": "Tom 2", "lane": 6, "color": (0, 200, 0)}],       # Dark Green
     50: [{"name": "Tom 3", "lane": 7, "color": (255, 0, 255)}],     # Magenta
-    36: [{"name": "Kick", "lane": 8, "color": (0, 255, 255)}],      # Yellow
-    57: [{"name": "Right Cymbal", "lane": 9, "color": (255, 100, 0)}],     # Orange
-    54: [{"name": "Ride", "lane": 10, "color": (255, 150, 100)}],    # Light Orange
+    36: [{"name": "Kick", "lane": -1, "color": (0, 255, 255)}],     # Yellow - Special: screen-wide bar
+    57: [{"name": "Right Cymbal", "lane": 8, "color": (255, 100, 0)}],     # Orange
+    54: [{"name": "Ride", "lane": 9, "color": (255, 150, 100)}],    # Light Orange
 }
 
 
@@ -73,10 +74,12 @@ class MidiVideoRenderer:
         self.height = height
         self.fps = fps
         self.fall_speed_multiplier = fall_speed_multiplier
-        self.num_lanes = len(set(info["lane"] for lane_list in DRUM_MAP.values() for info in lane_list))  
+        # Count lanes excluding kick drum (lane -1)
+        self.num_lanes = len(set(info["lane"] for lane_list in DRUM_MAP.values() for info in lane_list if info["lane"] >= 0))  
         self.note_width = width // self.num_lanes
         self.strike_line_y = int(height * 0.85)  # Where notes are "hit"
         self.note_height = 30  # Height of each note rectangle
+        self.kick_bar_height = 15  # Height of kick drum bar
         self.pixels_per_second = height * 0.2 * fall_speed_multiplier  # How fast notes fall
         
     def parse_midi(self, midi_path: str) -> Tuple[List[DrumNote], float]:
@@ -178,12 +181,53 @@ class MidiVideoRenderer:
         """Draw a single falling note"""
         time_until_hit = note.time - current_time
         
-        if time_until_hit < -0.5:  # Note already hit and passed
-            return False
-            
         # Calculate position using float math, only round at the end for pixel coordinates
         y_pos_float = self.strike_line_y - (time_until_hit * self.pixels_per_second)
         y_pos = int(round(y_pos_float))
+        
+        # Kick drum (lane -1) is drawn as screen-wide bar
+        if note.lane == -1:
+            # Note has passed off the bottom of the screen
+            if y_pos > self.height + self.kick_bar_height:
+                return False
+            
+            if y_pos < -self.kick_bar_height:  # Note not visible yet
+                return True
+            
+            # Draw kick as screen-wide horizontal bar
+            brightness = note.velocity / 127.0
+            color = tuple(int(c * brightness) for c in note.color)
+            
+            # Main bar
+            cv2.rectangle(frame,
+                         (0, y_pos - self.kick_bar_height),
+                         (self.width, y_pos),
+                         color, -1)
+            
+            # Outline
+            cv2.rectangle(frame,
+                         (0, y_pos - self.kick_bar_height),
+                         (self.width, y_pos),
+                         (255, 255, 255), 2)
+            
+            # Highlight when at strike line
+            if abs(time_until_hit) < 0.05:
+                # Draw thicker bar when hitting
+                cv2.rectangle(frame,
+                             (0, self.strike_line_y - self.kick_bar_height - 5),
+                             (self.width, self.strike_line_y + 5),
+                             color, -1)
+                cv2.rectangle(frame,
+                             (0, self.strike_line_y - self.kick_bar_height - 5),
+                             (self.width, self.strike_line_y + 5),
+                             (255, 255, 255), 3)
+            
+            return True
+        
+        # Regular lane notes
+        # Note has passed off the bottom of the screen
+        if y_pos > self.height + self.note_height:
+            return False
         
         if y_pos < -self.note_height:  # Note not visible yet
             return True
@@ -336,6 +380,9 @@ class MidiVideoRenderer:
             
             # Draw visible notes - only check notes in the visible time window
             # Start from first note that hasn't passed completely
+            # Calculate time needed for note to pass off bottom of screen
+            passthrough_time = (self.height - self.strike_line_y + self.note_height) / self.pixels_per_second
+            
             visible_start = note_index
             for i in range(visible_start, len(notes)):
                 note = notes[i]
@@ -345,8 +392,8 @@ class MidiVideoRenderer:
                 if time_until_hit > lookahead_time:
                     break
                 
-                # Note has passed - update start index for next frame
-                if time_until_hit < -0.5 and i == note_index:
+                # Note has passed off bottom of screen - update start index for next frame
+                if time_until_hit < -passthrough_time and i == note_index:
                     note_index = i + 1
                     continue
                     
