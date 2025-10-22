@@ -18,6 +18,7 @@ import argparse
 import mido # type: ignore
 import cv2 # type: ignore
 import numpy as np # type: ignore
+from PIL import Image, ImageDraw, ImageFont, ImageFilter # type: ignore
 from dataclasses import dataclass
 from typing import List, Tuple, Dict, Optional
 import os
@@ -36,6 +37,87 @@ from project_manager import (
 )
 
 
+# ============================================================================
+# FUNCTIONAL CORE: Pure functions for calculations
+# ============================================================================
+
+def calculate_note_alpha(time_until_hit: float, y_pos: float, strike_line_y: float, height: float) -> float:
+    """Pure function to calculate note transparency based on timing and position.
+    
+    Args:
+        time_until_hit: Seconds until note reaches strike line (negative = after hit)
+        y_pos: Current y position of note (pixels)
+        strike_line_y: Y position of strike line (pixels)
+        height: Total screen height (pixels)
+    
+    Returns:
+        Alpha multiplier from 0.0 to 1.0
+    """
+    # Before strike line: always fully opaque
+    if time_until_hit >= 0:
+        return 1.0
+    
+    # After strike line: fade from 100% to 20% as note travels to bottom
+    distance_after_strike = y_pos - strike_line_y
+    max_distance = height - strike_line_y
+    fade_progress = min(distance_after_strike / max_distance, 1.0)
+    return 1.0 - (0.8 * fade_progress)  # 1.0 → 0.2
+
+
+def calculate_brightness(velocity: int) -> float:
+    """Pure function: Convert MIDI velocity to brightness factor"""
+    return velocity / 127.0
+
+
+def apply_brightness_to_color(color: Tuple[int, int, int], brightness: float) -> Tuple[int, int, int]:
+    """Pure function: Apply brightness factor to RGB color"""
+    return tuple(int(c * brightness) for c in color)
+
+
+def get_brighter_outline_color(base_color: Tuple[int, int, int], alpha: int) -> Tuple[int, int, int, int]:
+    """Pure function: Calculate brighter outline color from base color"""
+    # Brighten each channel by adding 80% of remaining headroom to 255
+    bright_color = tuple(min(255, int(c + (255 - c) * 0.8)) for c in base_color)
+    return (*bright_color, alpha)
+
+
+def pil_to_cv2(pil_image: Image.Image) -> np.ndarray:
+    """Convert PIL Image (RGBA) to OpenCV array (BGR) with proper alpha compositing"""
+    # If image has alpha channel, composite it onto black background
+    if pil_image.mode == 'RGBA':
+        # Create black background with alpha
+        background = Image.new('RGBA', pil_image.size, (0, 0, 0, 255))
+        # Composite using alpha blending
+        composited = Image.alpha_composite(background, pil_image)
+        # Convert to RGB for OpenCV
+        pil_image = composited.convert('RGB')
+    
+    return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+
+
+def cv2_to_pil(cv2_image: np.ndarray) -> Image.Image:
+    """Convert OpenCV array (BGR) to PIL Image (RGB)"""
+    return Image.fromarray(cv2.cvtColor(cv2_image, cv2.COLOR_BGR2RGB))
+
+
+def draw_rounded_rectangle(draw: ImageDraw.ImageDraw, 
+                           xy: Tuple[int, int, int, int], 
+                           radius: int,
+                           fill: Optional[Tuple[int, int, int, int]] = None,
+                           outline: Optional[Tuple[int, int, int, int]] = None,
+                           width: int = 1):
+    """Draw anti-aliased rounded rectangle using PIL"""
+    if radius <= 0:
+        if fill:
+            draw.rectangle(xy, fill=fill)
+        if outline:
+            draw.rectangle(xy, outline=outline, width=width)
+        return
+    
+    # Use PIL's built-in rounded rectangle for better anti-aliasing
+    draw.rounded_rectangle(xy, radius=radius, fill=fill, outline=outline, width=width)
+
+
 @dataclass
 class DrumNote:
     """Represents a single drum note to be rendered"""
@@ -51,8 +133,7 @@ class DrumNote:
 # Kick drum (36) uses lane -1 to indicate it's drawn as a screen-wide bar
 DRUM_MAP = {
     42: [{"name": "Hi-Hat Closed", "lane": 0, "color": (255, 255, 0)}],  # Cyan
-    46: [{"name": "Hi-Hat Open", "lane": 0, "color": (80, 255, 30)},     # Light Blue (shows in both lanes)
-         {"name": "Hi-Hat Open", "lane": 1, "color": (80, 255, 30)}],
+    46: [{"name": "Hi-Hat Open", "lane": 1, "color": (80, 255, 30)}],     # Light Blue 
     38: [{"name": "Snare", "lane": 2, "color": (0, 0, 255)}],       # Red
     40: [{"name": "Snare Rim", "lane": 2, "color": (255, 0, 255)}],   # Dark Red
     39: [{"name": "Clap", "lane": 3, "color": (128, 128, 255)}],
@@ -81,6 +162,26 @@ class MidiVideoRenderer:
         self.note_height = 30  # Height of each note rectangle
         self.kick_bar_height = 15  # Height of kick drum bar
         self.pixels_per_second = height * 0.2 * fall_speed_multiplier  # How fast notes fall
+        self.corner_radius = 8  # Rounded corners for anti-aliasing
+        self.motion_blur_strength = 2  # Pixels of motion blur
+        
+        # Load font for UI
+        self.font = self._load_font(24)
+        self.font_small = self._load_font(16)
+    
+    def _load_font(self, size: int) -> ImageFont.FreeTypeFont:
+        """Load system font or fall back to default"""
+        font_paths = [
+            '/System/Library/Fonts/Supplemental/Arial Bold.ttf',  # macOS
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',  # Linux
+            'C:\\Windows\\Fonts\\arialbd.ttf',  # Windows
+        ]
+        for font_path in font_paths:
+            try:
+                return ImageFont.truetype(font_path, size)
+            except:
+                continue
+        return ImageFont.load_default()
         
     def parse_midi(self, midi_path: str) -> Tuple[List[DrumNote], float]:
         """Parse MIDI file and extract drum notes with timing"""
@@ -161,32 +262,34 @@ class MidiVideoRenderer:
         
         return notes, total_duration
     
-    def draw_lane(self, frame: np.ndarray, lane: int, highlight: bool = False):
-        """Draw a single note lane"""
-        x = lane * self.note_width + self.note_width // 2
-        color = (100, 100, 100) if not highlight else (200, 200, 200)
-        cv2.line(frame, (x, 0), (x, self.height), color, 2)
-    
-    def draw_strike_line(self, frame: np.ndarray):
-        """Draw the line where notes are 'hit'"""
-        cv2.line(frame, (0, self.strike_line_y), (self.width, self.strike_line_y), 
-                 (255, 255, 255), 4)
+    def draw_note(self, draw: ImageDraw.ImageDraw, note: DrumNote, current_time: float, draw_kick_only: bool = False, skip_highlight: bool = False, first_kick_frame: set = None) -> bool:
+        """Draw a single falling note with anti-aliasing and motion blur
         
-        # Draw lane markers at strike line
-        for lane in range(self.num_lanes):
-            x = lane * self.note_width + self.note_width // 2
-            cv2.circle(frame, (x, self.strike_line_y), 20, (200, 200, 200), 2)
-    
-    def draw_note(self, frame: np.ndarray, note: DrumNote, current_time: float):
-        """Draw a single falling note"""
+        Args:
+            draw: ImageDraw instance to draw on
+            note: Note to draw
+            current_time: Current time in seconds
+            draw_kick_only: If True, only draw kick drum notes; if False, skip kick drum notes
+            first_kick_frame: Set tracking which kick notes are showing for first time at strike line
+        """
         time_until_hit = note.time - current_time
         
         # Calculate position using float math, only round at the end for pixel coordinates
         y_pos_float = self.strike_line_y - (time_until_hit * self.pixels_per_second)
         y_pos = int(round(y_pos_float))
         
+        # Calculate alpha and brightness using functional core
+        alpha_factor = calculate_note_alpha(time_until_hit, y_pos, self.strike_line_y, self.height)
+        brightness = calculate_brightness(note.velocity)
+        base_color = apply_brightness_to_color(note.color, brightness)
+        alpha = int(255 * alpha_factor)
+        outline_color = get_brighter_outline_color(base_color, alpha)
+        
         # Kick drum (lane -1) is drawn as screen-wide bar
         if note.lane == -1:
+            # Skip if we're not drawing kick drums
+            if not draw_kick_only:
+                return True
             # Note has passed off the bottom of the screen
             if y_pos > self.height + self.kick_bar_height:
                 return False
@@ -194,34 +297,55 @@ class MidiVideoRenderer:
             if y_pos < -self.kick_bar_height:  # Note not visible yet
                 return True
             
-            # Draw kick as screen-wide horizontal bar
-            brightness = note.velocity / 127.0
-            color = tuple(int(c * brightness) for c in note.color)
+            # Draw kick with slight motion blur
+            for i in range(self.motion_blur_strength):
+                blur_alpha = int(alpha * (1.0 - i / (self.motion_blur_strength + 1)))
+                y_offset = i * 2
+                
+                draw_rounded_rectangle(draw,
+                    (0, y_pos - self.kick_bar_height + y_offset, 
+                     self.width, y_pos + y_offset),
+                    3,
+                    fill=(*base_color, blur_alpha))
             
-            # Main bar
-            cv2.rectangle(frame,
-                         (0, y_pos - self.kick_bar_height),
-                         (self.width, y_pos),
-                         color, -1)
-            
-            # Outline
-            cv2.rectangle(frame,
-                         (0, y_pos - self.kick_bar_height),
-                         (self.width, y_pos),
-                         (255, 255, 255), 2)
+            # Main bar with rounded corners
+            draw_rounded_rectangle(draw,
+                (0, y_pos - self.kick_bar_height, self.width, y_pos),
+                3,
+                fill=(*base_color, alpha),
+                outline=outline_color,
+                width=2)
             
             # Highlight when at strike line
             if abs(time_until_hit) < 0.05:
+                # Check if this is the first frame of this kick at strike line
+                note_id = (note.time, note.lane)
+                is_first_frame = False
+                if first_kick_frame is not None:
+                    is_first_frame = note_id not in first_kick_frame
+                    if is_first_frame:
+                        first_kick_frame.add(note_id)
+                
+                # Use white on first frame, normal color after
+                if is_first_frame:
+                    highlight_color = (255, 255, 255, alpha)
+                else:
+                    highlight_color = (*base_color, alpha)
+                
                 # Draw thicker bar when hitting
-                cv2.rectangle(frame,
-                             (0, self.strike_line_y - self.kick_bar_height - 5),
-                             (self.width, self.strike_line_y + 5),
-                             color, -1)
-                cv2.rectangle(frame,
-                             (0, self.strike_line_y - self.kick_bar_height - 5),
-                             (self.width, self.strike_line_y + 5),
-                             (255, 255, 255), 3)
-            
+                bright_outline = get_brighter_outline_color(base_color, 255)
+                draw_rounded_rectangle(draw,
+                    (0, self.strike_line_y - self.kick_bar_height - 5,
+                     self.width, self.strike_line_y + 5),
+                    5,
+                    fill=highlight_color,
+                    outline=bright_outline,
+                    width=3)
+        
+            return True
+        
+        # Skip kick drums if we're drawing kick only
+        if draw_kick_only:
             return True
         
         # Regular lane notes
@@ -232,68 +356,181 @@ class MidiVideoRenderer:
         if y_pos < -self.note_height:  # Note not visible yet
             return True
         
-        # Calculate alpha based on proximity to strike line
-        if abs(time_until_hit) < 0.1:
-            alpha = 1.0  # Bright when close
-        else:
-            alpha = 0.7
-        
-        # Draw note rectangle
+        # Calculate note position
         x = note.lane * self.note_width + 10
         width = self.note_width - 20
         
-        # Draw note with velocity-based brightness
-        brightness = note.velocity / 127.0
-        color = tuple(int(c * brightness) for c in note.color)
+        # Clip the portion of note that would be behind strike line
+        note_top = y_pos - self.note_height
+        note_bottom = y_pos
         
-        cv2.rectangle(frame, 
-                     (x, y_pos - self.note_height), 
-                     (x + width, y_pos),
-                     color, -1)
+        # Hide note when it's within the highlight zone (pixel-based, independent of fall speed)
+        # Highlight zone is 1.0x note height centered on strike line
+        highlight_zone_height = int(self.note_height * 1.0)
+        highlight_zone_start = self.strike_line_y - highlight_zone_height // 2
+        highlight_zone_end = self.strike_line_y + highlight_zone_height // 2
         
-        # Draw outline
-        cv2.rectangle(frame, 
-                     (x, y_pos - self.note_height), 
-                     (x + width, y_pos),
-                     (255, 255, 255), 2)
+        # Hide note when its center is within the highlight zone
+        note_center_y = (note_top + note_bottom) // 2
+        if highlight_zone_start <= note_center_y <= highlight_zone_end:
+            return True
         
-        # Highlight when at strike line
-        if abs(time_until_hit) < 0.05:
-            cv2.circle(frame, 
-                      (x + width // 2, self.strike_line_y), 
-                      40, color, -1)
-            cv2.circle(frame, 
-                      (x + width // 2, self.strike_line_y), 
-                      40, (255, 255, 255), 3)
+        # Draw motion blur trail
+        for i in range(self.motion_blur_strength):
+            blur_alpha = int(alpha * 0.3 * (1.0 - i / (self.motion_blur_strength + 1)))
+            y_offset = i * 3
+            
+            draw_rounded_rectangle(draw,
+                (x, note_top + y_offset, x + width, note_bottom + y_offset),
+                self.corner_radius,
+                fill=(*base_color, blur_alpha))
+        
+        # Outer glow for outline (wider and more visible)
+        glow_color = get_brighter_outline_color(base_color, int(alpha * 0.6))
+        draw_rounded_rectangle(draw,
+            (x - 2, note_top - 2, x + width + 2, note_bottom + 2),
+            self.corner_radius + 2,
+            outline=glow_color,
+            width=4)
+        
+        # Main note with rounded corners and anti-aliasing
+        draw_rounded_rectangle(draw,
+            (x, note_top, x + width, note_bottom),
+            self.corner_radius,
+            fill=(*base_color, alpha),
+            outline=outline_color,
+            width=2)
         
         return True
     
-    def draw_ui(self, frame: np.ndarray, current_time: float, total_time: float):
-        """Draw UI elements like time and progress"""
-        # Time display
-        time_str = f"{current_time:.2f}s / {total_time:.2f}s"
-        cv2.putText(frame, time_str, (10, 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+    def should_draw_highlight(self, note: DrumNote, current_time: float) -> bool:
+        """Check if highlight circle should be drawn for this note (pixel-based)"""
+        time_until_hit = note.time - current_time
+        y_pos = int(round(self.strike_line_y - (time_until_hit * self.pixels_per_second)))
+        note_top = y_pos - self.note_height
+        note_bottom = y_pos
+        note_center_y = (note_top + note_bottom) // 2
         
-        # Progress bar
+        # Show highlight when note center is within 1.0x note height of strike line
+        highlight_zone_height = int(self.note_height * 1.0)
+        highlight_zone_start = self.strike_line_y - highlight_zone_height // 2
+        highlight_zone_end = self.strike_line_y + highlight_zone_height // 2
+        
+        return highlight_zone_start <= note_center_y <= highlight_zone_end
+    
+    def draw_highlight_circle(self, draw: ImageDraw.ImageDraw, note: DrumNote, current_time: float, first_highlight_frame: set):
+        """Draw the strike line highlight circle for a note
+        
+        Args:
+            draw: PIL ImageDraw object
+            note: DrumNote to draw
+            current_time: Current time in seconds
+            first_highlight_frame: Set tracking which notes are showing highlight for first time
+        """
+        if note.lane == -1:  # Skip kick drums
+            return
+        
+        time_until_hit = note.time - current_time
+        alpha_factor = calculate_note_alpha(time_until_hit, self.strike_line_y, self.strike_line_y, self.height)
+        brightness = calculate_brightness(note.velocity)
+        base_color = apply_brightness_to_color(note.color, brightness)
+        alpha = int(255 * alpha_factor)
+        
+        x = note.lane * self.note_width + 10
+        width = self.note_width - 20
+        center_x = x + width // 2
+        
+        # Create unique ID for this note (time + lane should be unique enough)
+        note_id = (note.time, note.lane)
+        
+        # Check if this is the first frame this highlight appears
+        is_first_frame = note_id not in first_highlight_frame
+        if is_first_frame:
+            first_highlight_frame.add(note_id)
+            fill_color = (255, 255, 255, alpha)  # White flash on first frame
+        else:
+            fill_color = (*base_color, alpha)  # Normal color after first frame
+        
+        bright_outline = get_brighter_outline_color(base_color, 255)
+        
+        draw.ellipse(
+            [center_x - 40, self.strike_line_y - 40,
+             center_x + 40, self.strike_line_y + 40],
+            fill=fill_color,
+            outline=bright_outline,
+            width=3)
+    
+    def draw_ui(self, draw: ImageDraw.ImageDraw, current_time: float, total_time: float):
+        """Draw UI elements with glassy transparent progress bar at top and legend at bottom"""
+        
+        # === Progress bar at top with glassy effect ===
         progress = current_time / total_time
-        bar_width = self.width - 40
-        bar_filled = int(bar_width * progress)
-        cv2.rectangle(frame, (20, self.height - 40), 
-                     (20 + bar_width, self.height - 20),
-                     (100, 100, 100), -1)
-        cv2.rectangle(frame, (20, self.height - 40), 
-                     (20 + bar_filled, self.height - 20),
-                     (0, 255, 0), -1)
+        bar_height = 50
+        bar_margin = 20
         
-        # Legend
-        legend_y = 60
-        for note_num, lane_list in sorted(DRUM_MAP.items(), key=lambda x: x[1][0]["lane"]):
-            info = lane_list[0]  # Use first lane for legend display
-            text = f"{info['name']}"
-            cv2.putText(frame, text, (10, legend_y), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, info["color"], 2)
-            legend_y += 25
+        # Glassy background (60% transparent)
+        draw_rounded_rectangle(draw,
+            (bar_margin, bar_margin, 
+             self.width - bar_margin, bar_margin + bar_height),
+            15,
+            fill=(20, 20, 20, 153))
+        
+        # Progress fill with gradient effect
+        bar_filled_width = int((self.width - 2 * bar_margin - 20) * progress)
+        if bar_filled_width > 0:
+            # Main progress bar
+            draw_rounded_rectangle(draw,
+                (bar_margin + 10, bar_margin + 10,
+                 bar_margin + 10 + bar_filled_width, bar_margin + bar_height - 10),
+                10,
+                fill=(0, 200, 255, 153))
+            
+            # Highlight on top for glassy effect
+            draw_rounded_rectangle(draw,
+                (bar_margin + 10, bar_margin + 10,
+                 bar_margin + 10 + bar_filled_width, bar_margin + 20),
+                8,
+                fill=(100, 220, 255, 100))
+        
+        # === Legend at bottom with glassy background ===
+        legend_height = 60
+        legend_y = self.height - legend_height - 10
+        
+        # Glassy background for legend
+        draw_rounded_rectangle(draw,
+            (10, legend_y, self.width - 10, self.height - 10),
+            15,
+            fill=(20, 20, 20, 180))
+        
+        # Draw legend items horizontally across the bottom
+        sorted_drums = sorted(DRUM_MAP.items(), key=lambda x: x[1][0]["lane"])
+        item_width = (self.width - 40) // len(sorted_drums)
+        
+        for idx, (note_num, lane_list) in enumerate(sorted_drums):
+            info = lane_list[0]
+            x_pos = 20 + (idx * item_width)
+            y_pos = legend_y + 15
+            
+            # Color indicator circle
+            circle_size = 12
+            draw.ellipse(
+                [x_pos, y_pos, x_pos + circle_size, y_pos + circle_size],
+                fill=(*info["color"], 255),
+                outline=(255, 255, 255, 255),
+                width=2)
+            
+            # Instrument name
+            text = info['name']
+            # Shorten long names
+            if len(text) > 12:
+                text = text[:10] + "."
+            
+            # Text shadow
+            draw.text((x_pos + circle_size + 7, y_pos - 1), text,
+                     font=self.font_small, fill=(0, 0, 0, 200))
+            # Text
+            draw.text((x_pos + circle_size + 5, y_pos - 2), text,
+                     font=self.font_small, fill=(255, 255, 255, 255))
     
     def render(self, midi_path: str, output_path: str, show_preview: bool = False, audio_path: Optional[str] = None):
         """Render MIDI file to video
@@ -363,20 +600,27 @@ class MidiVideoRenderer:
         # Time needed = distance / speed
         lookahead_time = self.strike_line_y / self.pixels_per_second
         note_index = 0  # Track which notes we need to check
+        first_highlight_frame = set()  # Track which notes are showing highlight for first time
         
         for frame_num in range(total_frames):
             # Use precise time calculation to avoid drift
             current_time = frame_num * time_step
             
-            # Create black frame
-            frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+            # Create base layer with opaque black background
+            base_layer = Image.new('RGB', (self.width, self.height), (0, 0, 0))
             
-            # Draw lanes
+            # Create kick drum layer (rendered first, below everything)
+            kick_layer = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
+            kick_draw = ImageDraw.Draw(kick_layer, 'RGBA')
+            
+            # Create notes layer with transparency
+            notes_layer = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
+            notes_draw = ImageDraw.Draw(notes_layer, 'RGBA')
+            
+            # Draw lanes on notes layer
             for lane in range(self.num_lanes):
-                self.draw_lane(frame, lane)
-            
-            # Draw strike line
-            self.draw_strike_line(frame)
+                x = lane * self.note_width + self.note_width // 2
+                notes_draw.line([(x, 0), (x, self.height)], fill=(80, 80, 80, 255), width=1)
             
             # Draw visible notes - only check notes in the visible time window
             # Start from first note that hasn't passed completely
@@ -396,11 +640,51 @@ class MidiVideoRenderer:
                 if time_until_hit < -passthrough_time and i == note_index:
                     note_index = i + 1
                     continue
-                    
-                self.draw_note(frame, note, current_time)
+                
+                # Draw kick drums on kick layer, regular notes on notes layer
+                if note.lane == -1:
+                    self.draw_note(kick_draw, note, current_time, draw_kick_only=True, first_kick_frame=first_highlight_frame)
+                else:
+                    self.draw_note(notes_draw, note, current_time, draw_kick_only=False)
             
-            # Draw UI
-            self.draw_ui(frame, current_time, total_duration)
+            # Create strike line layer (rendered on top of everything)
+            strike_layer = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
+            strike_draw = ImageDraw.Draw(strike_layer, 'RGBA')
+            
+            # Draw highlight circles for notes at strike line (before strike line itself)
+            for i in range(visible_start, len(notes)):
+                note = notes[i]
+                time_until_hit = note.time - current_time
+                
+                if time_until_hit > lookahead_time:
+                    break
+                
+                if self.should_draw_highlight(note, current_time):
+                    self.draw_highlight_circle(strike_draw, note, current_time, first_highlight_frame)
+            
+            # Draw strike line
+            strike_draw.line([(0, self.strike_line_y), (self.width, self.strike_line_y)], 
+                     fill=(255, 255, 255, 255), width=4)
+            
+            # Draw lane markers at strike line
+            for lane in range(self.num_lanes):
+                x = lane * self.note_width + self.note_width // 2
+                strike_draw.ellipse([x - 20, self.strike_line_y - 20, x + 20, self.strike_line_y + 20],
+                           outline=(200, 200, 200, 255), width=2)
+            
+            # Create UI layer with transparency
+            ui_layer = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
+            ui_draw = ImageDraw.Draw(ui_layer, 'RGBA')
+            self.draw_ui(ui_draw, current_time, total_duration)
+            
+            # Composite layers: base -> kick -> notes -> UI -> strike line (on top)
+            base_layer.paste(kick_layer, (0, 0), kick_layer)
+            base_layer.paste(notes_layer, (0, 0), notes_layer)
+            base_layer.paste(ui_layer, (0, 0), ui_layer)
+            base_layer.paste(strike_layer, (0, 0), strike_layer)
+            
+            # Convert to OpenCV for FFmpeg
+            frame = pil_to_cv2(base_layer)
             
             # Write frame to FFmpeg
             try:

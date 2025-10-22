@@ -63,3 +63,6 @@
 - **Actual Behavior**: Top and bottom of video player extend beyond visible page area
 - **Fixed in Commit**: fix: Constrain video player to viewport for portrait videos
 - **Solution**: Added `max-height: 85vh` and `object-fit: contain` CSS to video element, centered container with flexbox. Videos now scale responsively while maintaining aspect ratio.
+
+## Bug: if you reprocess files and it fails, the old file is overwriteen
+only remove old file, say, on video render, whn the new file is done
