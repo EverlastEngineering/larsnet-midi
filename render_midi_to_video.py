@@ -132,18 +132,18 @@ class DrumNote:
 # Each MIDI note maps to a list of lane definitions (most have 1, but some can have multiple)
 # Kick drum (36) uses lane -1 to indicate it's drawn as a screen-wide bar
 DRUM_MAP = {
-    42: [{"name": "Hi-Hat Closed", "lane": 0, "color": (255, 255, 0)}],  # Cyan
-    46: [{"name": "Hi-Hat Open", "lane": 1, "color": (80, 255, 30)}],     # Light Blue 
-    38: [{"name": "Snare", "lane": 2, "color": (0, 0, 255)}],       # Red
+    42: [{"name": "Hi-Hat Closed", "lane": 0, "color": (0, 255, 255)}],  # Cyan
+    46: [{"name": "Hi-Hat Open", "lane": 1, "color": (30, 255, 80)}],     # Light Blue 
+    38: [{"name": "Snare", "lane": 2, "color": (255, 0, 0)}],       # Red
     40: [{"name": "Snare Rim", "lane": 2, "color": (255, 0, 255)}],   # Dark Red
-    39: [{"name": "Clap", "lane": 3, "color": (128, 128, 255)}],
-    49: [{"name": "Left Cymbal", "lane": 4, "color": (255, 80, 0)}],     # Dark Orange
+    39: [{"name": "Clap", "lane": 3, "color": (255, 128, 128)}],
+    49: [{"name": "Left Cymbal", "lane": 4, "color": (0, 80, 255)}],     # Dark Orange
     47: [{"name": "Tom 1", "lane": 5, "color": (0, 255, 0)}],       # Green
-    48: [{"name": "Tom 2", "lane": 6, "color": (0, 200, 0)}],       # Dark Green
-    50: [{"name": "Tom 3", "lane": 7, "color": (255, 0, 255)}],     # Magenta
-    36: [{"name": "Kick", "lane": -1, "color": (0, 255, 255)}],     # Yellow - Special: screen-wide bar
-    57: [{"name": "Right Cymbal", "lane": 8, "color": (255, 100, 0)}],     # Orange
-    54: [{"name": "Ride", "lane": 9, "color": (255, 150, 100)}],    # Light Orange
+    48: [{"name": "Tom 2", "lane": 6, "color": (0, 150, 0)}],       # Dark Green
+    50: [{"name": "Tom 3", "lane": 7, "color": (140, 0, 140)}],     # Magenta
+    36: [{"name": "Kick", "lane": -1, "color": (255, 140, 90)}],     # Yellow - Special: screen-wide bar
+    57: [{"name": "Right Cymbal", "lane": 8, "color": (0, 100, 255)}],     # Orange
+    54: [{"name": "Ride", "lane": 9, "color": (100, 150, 250)}],    # Light Orange
 }
 
 
@@ -316,31 +316,41 @@ class MidiVideoRenderer:
                 outline=outline_color,
                 width=2)
             
-            # Highlight when at strike line
-            if abs(time_until_hit) < 0.05:
-                # Check if this is the first frame of this kick at strike line
-                note_id = (note.time, note.lane)
-                is_first_frame = False
-                if first_kick_frame is not None:
-                    is_first_frame = note_id not in first_kick_frame
-                    if is_first_frame:
-                        first_kick_frame.add(note_id)
+            # Smooth pulsing highlight when at strike line
+            strike_window = 0.08  # 80ms window for kick highlight
+            if abs(time_until_hit) < strike_window:
+                # Calculate pulse factor (0.0 to 1.0, peaks at center)
+                pulse_progress = 1.0 - abs(time_until_hit) / strike_window
+                pulse = abs(np.sin(pulse_progress * np.pi * 0.5))  # Smooth quarter-sine pulse
                 
-                # Use white on first frame, normal color after
-                if is_first_frame:
-                    highlight_color = (255, 255, 255, alpha)
-                else:
-                    highlight_color = (*base_color, alpha)
+                # Color transitions to brighter/whiter at peak
+                white_mix = pulse * 0.5  # Mix up to 50% white
+                highlight_color = tuple(int(c + (255 - c) * white_mix) for c in base_color)
                 
-                # Draw thicker bar when hitting
-                bright_outline = get_brighter_outline_color(base_color, 255)
+                # Size grows at peak
+                extra_height = int(8 * pulse)
+                bar_alpha = int(alpha * (0.8 + 0.2 * pulse))
+                
+                # Draw soft glow layers
+                for i in range(2, 0, -1):
+                    glow_alpha = int(bar_alpha * (0.2 / i))
+                    glow_height = extra_height + (i * 4)
+                    draw_rounded_rectangle(draw,
+                        (0, self.strike_line_y - self.kick_bar_height - glow_height,
+                         self.width, self.strike_line_y + glow_height),
+                        8,
+                        fill=(*highlight_color, glow_alpha))
+                
+                # Main highlight bar
+                bright_outline = get_brighter_outline_color(highlight_color, 255)
+                outline_width = int(2 + 2 * pulse)
                 draw_rounded_rectangle(draw,
-                    (0, self.strike_line_y - self.kick_bar_height - 5,
-                     self.width, self.strike_line_y + 5),
-                    5,
-                    fill=highlight_color,
+                    (0, self.strike_line_y - self.kick_bar_height - extra_height,
+                     self.width, self.strike_line_y + extra_height),
+                    6,
+                    fill=(*highlight_color, bar_alpha),
                     outline=bright_outline,
-                    width=3)
+                    width=outline_width)
         
             return True
         
@@ -366,14 +376,14 @@ class MidiVideoRenderer:
         
         # Hide note when it's within the highlight zone (pixel-based, independent of fall speed)
         # Highlight zone is 1.0x note height centered on strike line
-        highlight_zone_height = int(self.note_height * 1.0)
-        highlight_zone_start = self.strike_line_y - highlight_zone_height // 2
-        highlight_zone_end = self.strike_line_y + highlight_zone_height // 2
+        # highlight_zone_height = int(self.note_height * 1.0)
+        # highlight_zone_start = self.strike_line_y - highlight_zone_height // 2
+        # highlight_zone_end = self.strike_line_y + highlight_zone_height // 2
         
         # Hide note when its center is within the highlight zone
-        note_center_y = (note_top + note_bottom) // 2
-        if highlight_zone_start <= note_center_y <= highlight_zone_end:
-            return True
+        # note_center_y = (note_top + note_bottom) // 2
+        # if highlight_zone_start <= note_center_y <= highlight_zone_end:
+            # return True
         
         # Draw motion blur trail
         for i in range(self.motion_blur_strength):
@@ -411,15 +421,37 @@ class MidiVideoRenderer:
         note_bottom = y_pos
         note_center_y = (note_top + note_bottom) // 2
         
-        # Show highlight when note center is within 1.0x note height of strike line
-        highlight_zone_height = int(self.note_height * 1.0)
+        # Show highlight when note center is within 1.5x note height of strike line (longer duration)
+        highlight_zone_height = int(self.note_height * 1.5)
         highlight_zone_start = self.strike_line_y - highlight_zone_height // 2
         highlight_zone_end = self.strike_line_y + highlight_zone_height // 2
         
         return highlight_zone_start <= note_center_y <= highlight_zone_end
     
+    def calculate_strike_animation_progress(self, note: DrumNote, current_time: float) -> float:
+        """Calculate 0.0-1.0 animation progress for strike effects
+        0.0 = just entered strike zone, 1.0 = leaving strike zone
+        """
+        time_until_hit = note.time - current_time
+        y_pos = int(round(self.strike_line_y - (time_until_hit * self.pixels_per_second)))
+        note_top = y_pos - self.note_height
+        note_bottom = y_pos
+        note_center_y = (note_top + note_bottom) // 2
+        
+        highlight_zone_height = int(self.note_height * 1.5)
+        highlight_zone_start = self.strike_line_y - highlight_zone_height // 2
+        highlight_zone_end = self.strike_line_y + highlight_zone_height // 2
+        
+        # Calculate position within the zone (0.0 to 1.0)
+        if note_center_y < highlight_zone_start:
+            return 0.0
+        elif note_center_y > highlight_zone_end:
+            return 1.0
+        else:
+            return (note_center_y - highlight_zone_start) / (highlight_zone_end - highlight_zone_start)
+    
     def draw_highlight_circle(self, draw: ImageDraw.ImageDraw, note: DrumNote, current_time: float, first_highlight_frame: set):
-        """Draw the strike line highlight circle for a note
+        """Draw the strike line highlight circle for a note with smooth pulsing animation
         
         Args:
             draw: PIL ImageDraw object
@@ -434,31 +466,53 @@ class MidiVideoRenderer:
         alpha_factor = calculate_note_alpha(time_until_hit, self.strike_line_y, self.strike_line_y, self.height)
         brightness = calculate_brightness(note.velocity)
         base_color = apply_brightness_to_color(note.color, brightness)
-        alpha = int(255 * alpha_factor)
         
         x = note.lane * self.note_width + 10
         width = self.note_width - 20
         center_x = x + width // 2
         
-        # Create unique ID for this note (time + lane should be unique enough)
-        note_id = (note.time, note.lane)
+        # Get animation progress (0.0 = entering, 0.5 = peak, 1.0 = leaving)
+        progress = self.calculate_strike_animation_progress(note, current_time)
         
-        # Check if this is the first frame this highlight appears
-        is_first_frame = note_id not in first_highlight_frame
-        if is_first_frame:
-            first_highlight_frame.add(note_id)
-            fill_color = (255, 255, 255, alpha)  # White flash on first frame
-        else:
-            fill_color = (*base_color, alpha)  # Normal color after first frame
+        # Smooth pulse: peaks at center (0.5), fades at edges
+        # Use sine wave for smooth in/out
+        pulse = abs(np.sin(progress * np.pi))  # 0→1→0 across the zone
         
-        bright_outline = get_brighter_outline_color(base_color, 255)
+        # Scale and size based on pulse with velocity influence
+        velocity_factor = brightness * 0.3 + 0.7  # 0.7 to 1.0 based on velocity
+        base_size = 50
+        max_size = base_size + 20 * pulse * velocity_factor
+        
+        # Color transitions from base → bright white → base
+        # At peak (progress=0.5), color is brightest
+        white_mix = pulse * 0.7  # Mix up to 70% white at peak
+        mixed_color = tuple(int(c + (255 - c) * white_mix) for c in base_color)
+        
+        # Alpha fades in/out smoothly
+        base_alpha = int(220 * alpha_factor)
+        circle_alpha = int(base_alpha * (0.3 + 0.7 * pulse))
+        
+        # Draw multiple layers for soft glow effect
+        glow_layers = 3
+        for i in range(glow_layers, 0, -1):
+            layer_size = max_size + (i * 8)
+            layer_alpha = int(circle_alpha * (0.15 / i))  # Outer layers fainter
+            
+            draw.ellipse(
+                [center_x - layer_size, self.strike_line_y - layer_size,
+                 center_x + layer_size, self.strike_line_y + layer_size],
+                fill=(*mixed_color, layer_alpha))
+        
+        # Main circle with bright outline
+        bright_outline = get_brighter_outline_color(mixed_color, 255)
+        outline_width = int(2 + 2 * pulse)  # Thicker at peak
         
         draw.ellipse(
-            [center_x - 40, self.strike_line_y - 40,
-             center_x + 40, self.strike_line_y + 40],
-            fill=fill_color,
+            [center_x - max_size, self.strike_line_y - max_size,
+             center_x + max_size, self.strike_line_y + max_size],
+            fill=(*mixed_color, circle_alpha),
             outline=bright_outline,
-            width=3)
+            width=outline_width)
     
     def draw_ui(self, draw: ImageDraw.ImageDraw, current_time: float, total_time: float):
         """Draw UI elements with glassy transparent progress bar at top and legend at bottom"""
