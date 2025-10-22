@@ -53,3 +53,7 @@
 - **Actual Behavior**: Completed jobs never triggered special handling (button change, auto-remove timer)
 - **Fixed in Commit**: WebUI QoL improvements
 - **Solution**: Added `statusLower = job.status.toLowerCase()` conversion before all status comparisons throughout operations.js and projects.js. 
+
+## Bug: Video player doesn't conform to screen size limits
+If I play a portrait video, the top and bottom of the video player go off the page.
+It should shrink to comfortably fit the screen.

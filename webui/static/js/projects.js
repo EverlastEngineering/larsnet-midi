@@ -106,6 +106,11 @@ async function selectProject(projectNumber) {
         
         // Load active jobs for this project
         loadProjectJobs(projectNumber);
+        
+        // Load audio files for alternate audio section
+        if (typeof loadAudioFiles === 'function') {
+            await loadAudioFiles();
+        }
     } catch (error) {
         console.error('Failed to load project:', error);
         showToast('Failed to load project details', 'error');

@@ -181,6 +181,75 @@ class LarsNetAPI {
         }
     }
     
+    async getAudioFiles(projectNumber) {
+        return await this.get(`/projects/${projectNumber}/audio-files`);
+    }
+    
+    async uploadAlternateAudio(projectNumber, file, onProgress = null) {
+        return new Promise((resolve, reject) => {
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            const xhr = new XMLHttpRequest();
+            
+            // Progress tracking
+            if (onProgress) {
+                xhr.upload.addEventListener('progress', (e) => {
+                    if (e.lengthComputable) {
+                        const percent = Math.round((e.loaded / e.total) * 100);
+                        onProgress(percent);
+                    }
+                });
+            }
+            
+            // Handle completion
+            xhr.addEventListener('load', () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try {
+                        const data = JSON.parse(xhr.responseText);
+                        resolve(data);
+                    } catch (error) {
+                        reject(new Error('Invalid response format'));
+                    }
+                } else {
+                    try {
+                        const error = JSON.parse(xhr.responseText);
+                        reject(new Error(error.message || error.error || 'Upload failed'));
+                    } catch {
+                        reject(new Error(`Upload failed with status ${xhr.status}`));
+                    }
+                }
+            });
+            
+            // Handle errors
+            xhr.addEventListener('error', () => {
+                reject(new Error('Network error during upload'));
+            });
+            
+            // Send request
+            xhr.open('POST', `${API_BASE}/projects/${projectNumber}/upload-alternate-audio`);
+            xhr.send(formData);
+        });
+    }
+    
+    async deleteAudioFile(projectNumber, filename) {
+        try {
+            const response = await fetch(`${API_BASE}/projects/${projectNumber}/audio-files/${encodeURIComponent(filename)}`, {
+                method: 'DELETE'
+            });
+            const data = await response.json();
+            
+            if (!response.ok) {
+                throw new Error(data.message || data.error || 'Delete failed');
+            }
+            
+            return data;
+        } catch (error) {
+            console.error(`DELETE /projects/${projectNumber}/audio-files/${filename} failed:`, error);
+            throw error;
+        }
+    }
+    
     // ========== Operations API ==========
     
     async separate(projectNumber, options = {}) {

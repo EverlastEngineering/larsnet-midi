@@ -96,6 +96,11 @@ function setupEventListeners() {
         document.getElementById('file-input').click();
     });
     
+    // Initialize alternate audio handlers
+    if (typeof initAlternateAudioHandlers === 'function') {
+        initAlternateAudioHandlers();
+    }
+    
     document.getElementById('file-input').addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
             handleFileUpload(e.target.files[0]);

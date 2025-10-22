@@ -85,11 +85,16 @@ def run_stems_to_midi(project_number: int, **kwargs):
     return {'project_number': project_number, 'midi_created': True}
 
 
-def run_render_video(project_number: int, fps: int = 60, width: int = 1920, height: int = 1080, include_audio: bool = False):
+def run_render_video(project_number: int, fps: int = 60, width: int = 1920, height: int = 1080, 
+                     audio_source: str = None, include_audio: bool = None):
     """
     Execute MIDI to video rendering for a project.
     
     This is the actual work function that runs in the job queue.
+    
+    Args:
+        audio_source: Audio source - None, 'original', or 'alternate_mix/{filename}'
+        include_audio: DEPRECATED - kept for backward compatibility
     """
     from render_midi_to_video import render_project_video
     from project_manager import get_project_by_number, USER_FILES_DIR
@@ -98,7 +103,8 @@ def run_render_video(project_number: int, fps: int = 60, width: int = 1920, heig
     if project is None:
         raise ValueError(f'Project {project_number} not found')
     
-    render_project_video(project, fps=fps, width=width, height=height, include_audio=include_audio)
+    render_project_video(project, fps=fps, width=width, height=height, 
+                        audio_source=audio_source, include_audio=include_audio)
     
     return {'project_number': project_number, 'video_created': True}
 
@@ -347,7 +353,8 @@ def render_video():
             "fps": 60,           # optional: 30, 60, 120
             "width": 1920,       # optional
             "height": 1080,      # optional
-            "include_audio": false  # optional: include original audio
+            "audio_source": null # optional: null, 'original', or 'alternate_mix/{filename}'
+            "include_audio": false  # DEPRECATED: use audio_source instead
         }
         
     Returns:
@@ -379,7 +386,8 @@ def render_video():
         fps = data.get('fps', 60)
         width = data.get('width', 1920)
         height = data.get('height', 1080)
-        include_audio = data.get('include_audio', False)
+        audio_source = data.get('audio_source', None)
+        include_audio = data.get('include_audio', None)  # Deprecated but still supported
         
         # Submit job
         job_queue = get_job_queue()
@@ -391,6 +399,7 @@ def render_video():
             fps=fps,
             width=width,
             height=height,
+            audio_source=audio_source,
             include_audio=include_audio
         )
         

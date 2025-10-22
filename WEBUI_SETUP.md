@@ -136,8 +136,25 @@ Available in collapsible panels for each operation:
 
 **Video Rendering:**
 - FPS: 30, 60, or 120
-- Resolution: 1080p, 1440p, or 4K
-- Note Height: Visual note size
+- Resolution: 1080p, 1440p, or 4K (landscape or portrait)
+- Audio Track: Select which audio to include in video (see below)
+
+**Alternate Audio Tracks:**
+
+Upload alternative audio files to render your drum video with different backing tracks:
+
+1. **Upload Audio**: In the Video settings panel, find "Upload Alternate Mix" section
+   - Click "Choose WAV File" or drag and drop WAV files
+2. **Select Track**: Choose from the "Audio Track" dropdown:
+   - "Don't Include Audio" - Video only
+   - Original project audio
+   - Any uploaded alternate mix
+3. **Use Cases**:
+   - No-drums mix: Be the drum track in playback
+   - Mastered version: Video with final mix
+   - Practice track: Custom backing track for practice
+
+**Note:** Only WAV files are supported. Files are stored in the project's `alternate_mix/` directory and can be deleted from the settings panel.
 
 ### Advanced Configuration (Future)
 

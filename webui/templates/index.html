@@ -422,13 +422,43 @@
                                     </div>
                                     <div class="flex items-center justify-between">
                                         <div class="flex-1">
-                                            <label class="text-sm text-gray-300">Include Audio</label>
-                                            <p class="text-xs text-gray-500">Add original audio to video</p>
+                                            <label class="text-sm text-gray-300">Audio Track</label>
+                                            <p class="text-xs text-gray-500">Select audio to include in video</p>
                                         </div>
-                                        <label class="relative inline-flex items-center cursor-pointer">
-                                            <input type="checkbox" id="setting-include-audio" class="sr-only peer">
-                                            <div class="w-11 h-6 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-larsnet-primary"></div>
+                                        <select id="setting-audio-source" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm min-w-[200px]">
+                                            <option value="">Don't Include Audio</option>
+                                            <!-- Audio files will be populated dynamically -->
+                                        </select>
+                                    </div>
+                                    
+                                    <!-- Compact Alternate Audio Upload -->
+                                    <div class="mt-4 pt-4 border-t border-gray-700">
+                                        <label class="text-sm text-gray-300 mb-2 block">
+                                            <i class="fas fa-headphones mr-1"></i>Upload Alternate Mix
                                         </label>
+                                        <input type="file" id="alternate-audio-input" accept=".wav" class="hidden">
+                                        <div class="flex items-center gap-2 mb-3">
+                                            <button id="btn-browse-alternate-audio" class="bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs px-3 py-2 rounded transition-smooth flex items-center">
+                                                <i class="fas fa-upload mr-2"></i>Choose WAV File
+                                            </button>
+                                            <span class="text-xs text-gray-500">For no-drums mixes, etc.</span>
+                                        </div>
+                                        
+                                        <!-- Upload Progress (hidden by default) -->
+                                        <div id="alternate-audio-upload-progress" class="hidden mb-2">
+                                            <div class="flex items-center justify-between mb-1">
+                                                <span class="text-xs text-gray-300" id="alternate-audio-filename"></span>
+                                                <span class="text-xs text-gray-400" id="alternate-audio-progress-text">0%</span>
+                                            </div>
+                                            <div class="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
+                                                <div id="alternate-audio-progress-bar" class="bg-larsnet-primary h-full transition-smooth" style="width: 0%"></div>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Compact Uploaded Files List -->
+                                        <div id="alternate-audio-list" class="space-y-1.5">
+                                            <!-- Alternate audio files will be listed here -->
+                                        </div>
                                     </div>
                                 </div>
                             </div>

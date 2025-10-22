@@ -359,6 +359,186 @@ class TestJobQueue:
         assert job.status == JobStatus.CANCELLED
 
 
+class TestAudioFilesAPI:
+    """Test audio file management endpoints"""
+    
+    @patch('webui.api.projects.get_project_by_number')
+    def test_list_audio_files(self, mock_get_project, client, mock_project, tmp_path):
+        """Test GET /api/projects/:id/audio-files"""
+        # Setup mock project with files
+        project_path = tmp_path / "1 - Test Song"
+        project_path.mkdir()
+        
+        # Create original audio file
+        original_audio = project_path / "Test Song.wav"
+        original_audio.write_bytes(b"fake audio data")
+        
+        # Create alternate_mix directory with files
+        alternate_mix = project_path / "alternate_mix"
+        alternate_mix.mkdir()
+        (alternate_mix / "no_drums.wav").write_bytes(b"fake alternate")
+        
+        mock_project['path'] = project_path
+        mock_get_project.return_value = mock_project
+        
+        response = client.get('/api/projects/1/audio-files')
+        
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert 'audio_files' in data
+        assert len(data['audio_files']) == 2
+        
+        # Check original audio
+        original = next(f for f in data['audio_files'] if f['type'] == 'original')
+        assert original['name'] == 'Test Song.wav'
+        assert original['path'] == 'original'
+        
+        # Check alternate audio
+        alternate = next(f for f in data['audio_files'] if f['type'] == 'alternate')
+        assert alternate['name'] == 'no_drums.wav'
+        assert alternate['path'] == 'alternate_mix/no_drums.wav'
+    
+    @patch('webui.api.projects.get_project_by_number')
+    def test_list_audio_files_no_project(self, mock_get_project, client):
+        """Test GET /api/projects/:id/audio-files when project not found"""
+        mock_get_project.return_value = None
+        
+        response = client.get('/api/projects/999/audio-files')
+        
+        assert response.status_code == 404
+        data = json.loads(response.data)
+        assert 'error' in data
+    
+    @patch('webui.api.projects.get_project_by_number')
+    def test_upload_alternate_audio(self, mock_get_project, client, mock_project, tmp_path):
+        """Test POST /api/projects/:id/upload-alternate-audio"""
+        # Setup mock project
+        project_path = tmp_path / "1 - Test Song"
+        project_path.mkdir()
+        mock_project['path'] = project_path
+        mock_get_project.return_value = mock_project
+        
+        # Create test file data using BytesIO for proper file upload simulation
+        from io import BytesIO
+        data = {
+            'file': (BytesIO(b'fake wav data'), 'test_audio.wav')
+        }
+        
+        response = client.post(
+            '/api/projects/1/upload-alternate-audio',
+            data=data,
+            content_type='multipart/form-data'
+        )
+        
+        assert response.status_code == 201
+        result = json.loads(response.data)
+        assert result['filename'] == 'test_audio.wav'
+        assert result['path'] == 'alternate_mix/test_audio.wav'
+        
+        # Verify file was created
+        alternate_mix = project_path / "alternate_mix"
+        assert alternate_mix.exists()
+        uploaded_file = alternate_mix / "test_audio.wav"
+        assert uploaded_file.exists()
+    
+    @patch('webui.api.projects.get_project_by_number')
+    def test_upload_alternate_audio_invalid_format(self, mock_get_project, client, mock_project, tmp_path):
+        """Test upload with non-WAV file"""
+        project_path = tmp_path / "1 - Test Song"
+        project_path.mkdir()
+        mock_project['path'] = project_path
+        mock_get_project.return_value = mock_project
+        
+        from io import BytesIO
+        data = {
+            'file': (BytesIO(b'fake mp3 data'), 'test_audio.mp3')
+        }
+        
+        response = client.post(
+            '/api/projects/1/upload-alternate-audio',
+            data=data,
+            content_type='multipart/form-data'
+        )
+        
+        assert response.status_code == 400
+        result = json.loads(response.data)
+        assert 'error' in result
+        assert 'WAV format' in result['message']
+    
+    @patch('webui.api.projects.get_project_by_number')
+    def test_upload_alternate_audio_no_project(self, mock_get_project, client):
+        """Test upload when project doesn't exist"""
+        mock_get_project.return_value = None
+        
+        from io import BytesIO
+        data = {
+            'file': (BytesIO(b'fake wav data'), 'test_audio.wav')
+        }
+        
+        response = client.post(
+            '/api/projects/999/upload-alternate-audio',
+            data=data,
+            content_type='multipart/form-data'
+        )
+        
+        assert response.status_code == 404
+    
+    @patch('webui.api.projects.get_project_by_number')
+    def test_delete_audio_file(self, mock_get_project, client, mock_project, tmp_path):
+        """Test DELETE /api/projects/:id/audio-files/:filename"""
+        # Setup mock project with alternate audio
+        project_path = tmp_path / "1 - Test Song"
+        project_path.mkdir()
+        alternate_mix = project_path / "alternate_mix"
+        alternate_mix.mkdir()
+        
+        test_file = alternate_mix / "to_delete.wav"
+        test_file.write_bytes(b"fake audio")
+        
+        mock_project['path'] = project_path
+        mock_get_project.return_value = mock_project
+        
+        response = client.delete('/api/projects/1/audio-files/to_delete.wav')
+        
+        assert response.status_code == 200
+        result = json.loads(response.data)
+        assert result['filename'] == 'to_delete.wav'
+        
+        # Verify file was deleted
+        assert not test_file.exists()
+    
+    @patch('webui.api.projects.get_project_by_number')
+    def test_delete_audio_file_path_traversal(self, mock_get_project, client, mock_project, tmp_path):
+        """Test delete with path traversal attempt"""
+        project_path = tmp_path / "1 - Test Song"
+        project_path.mkdir()
+        mock_project['path'] = project_path
+        mock_get_project.return_value = mock_project
+        
+        # Try to delete file outside alternate_mix using path traversal
+        response = client.delete('/api/projects/1/audio-files/../../../etc/passwd')
+        
+        assert response.status_code == 400
+        result = json.loads(response.data)
+        assert 'error' in result
+        assert 'Invalid' in result['error'] or 'invalid' in result['message'].lower()
+    
+    @patch('webui.api.projects.get_project_by_number')
+    def test_delete_audio_file_not_found(self, mock_get_project, client, mock_project, tmp_path):
+        """Test delete when file doesn't exist"""
+        project_path = tmp_path / "1 - Test Song"
+        project_path.mkdir()
+        alternate_mix = project_path / "alternate_mix"
+        alternate_mix.mkdir()
+        
+        mock_project['path'] = project_path
+        mock_get_project.return_value = mock_project
+        
+        response = client.delete('/api/projects/1/audio-files/nonexistent.wav')
+        
+        assert response.status_code == 404
+
+
 class TestHealthCheck:
     """Test health check endpoint"""
     

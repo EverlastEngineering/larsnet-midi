@@ -167,6 +167,111 @@ curl -X POST http://localhost:49152/api/upload \
 
 ---
 
+### Get Audio Files
+
+List all available audio files for a project (original and alternate mixes).
+
+**Endpoint:** `GET /api/projects/:project_number/audio-files`
+
+**Response:** `200 OK`
+```json
+{
+  "audio_files": [
+    {
+      "name": "The Fate Of Ophelia.wav",
+      "path": "original",
+      "type": "original",
+      "size": 52428800,
+      "exists": true
+    },
+    {
+      "name": "no_drums_mix.wav",
+      "path": "alternate_mix/no_drums_mix.wav",
+      "type": "alternate",
+      "size": 52428800,
+      "exists": true
+    }
+  ]
+}
+```
+
+**Fields:**
+- `name`: Filename
+- `path`: Path identifier (`original` or `alternate_mix/{filename}`)
+- `type`: Either `original` or `alternate`
+- `size`: File size in bytes
+- `exists`: Whether file currently exists
+
+---
+
+### Upload Alternate Audio
+
+Upload an alternate audio file (e.g., no-drums mix, mastered version) to a project.
+
+**Endpoint:** `POST /api/projects/:project_number/upload-alternate-audio`
+
+**Content-Type:** `multipart/form-data`
+
+**Body:**
+- `file` (file): WAV audio file
+
+**Example (curl):**
+```bash
+curl -X POST http://localhost:49152/api/projects/1/upload-alternate-audio \
+  -F "file=@/path/to/no_drums.wav"
+```
+
+**Response:** `201 Created`
+```json
+{
+  "message": "Alternate audio uploaded successfully",
+  "filename": "no_drums.wav",
+  "size": 52428800,
+  "path": "alternate_mix/no_drums.wav"
+}
+```
+
+**Error Responses:**
+- `400 Bad Request`: No file, not WAV format, or file already exists
+- `404 Not Found`: Project not found
+
+**Notes:**
+- Only WAV files are accepted
+- Files are stored in `project/alternate_mix/` directory
+- Use for backing tracks, no-drums mixes, or alternative masters
+
+---
+
+### Delete Alternate Audio
+
+Delete an alternate audio file from a project.
+
+**Endpoint:** `DELETE /api/projects/:project_number/audio-files/:filename`
+
+**Example (curl):**
+```bash
+curl -X DELETE http://localhost:49152/api/projects/1/audio-files/no_drums.wav
+```
+
+**Response:** `200 OK`
+```json
+{
+  "message": "Alternate audio deleted successfully",
+  "filename": "no_drums.wav"
+}
+```
+
+**Error Responses:**
+- `400 Bad Request`: Invalid filename or path traversal attempt
+- `404 Not Found`: Project or file not found
+
+**Security:**
+- Only files in `alternate_mix/` directory can be deleted
+- Original project audio cannot be deleted via API
+- Path traversal attacks are prevented
+
+---
+
 ## Operations
 
 All operations are asynchronous and return a job ID immediately. Use the job status endpoints to track progress.
@@ -283,7 +388,7 @@ Detect drum hits in stems and convert to MIDI notes.
 
 ### Render MIDI to Video
 
-Create Rock Band-style falling notes visualization from MIDI file.
+Create Rock Band-style falling notes visualization from MIDI file with optional audio.
 
 **Endpoint:** `POST /api/render-video`
 
@@ -291,9 +396,10 @@ Create Rock Band-style falling notes visualization from MIDI file.
 ```json
 {
   "project_number": 1,
-  "fps": 60,          // optional: Frame rate (default: 60)
-  "width": 1920,      // optional: Video width (default: 1920)
-  "height": 1080      // optional: Video height (default: 1080)
+  "fps": 60,                    // optional: Frame rate (default: 60)
+  "width": 1920,                // optional: Video width (default: 1920)
+  "height": 1080,               // optional: Video height (default: 1080)
+  "audio_source": "original"    // optional: Audio selection (default: null)
 }
 ```
 
@@ -308,6 +414,27 @@ Create Rock Band-style falling notes visualization from MIDI file.
 **Parameters:**
 - `fps`: Higher = smoother but larger file (30, 60, or 120)
 - `width`/`height`: Resolution (1920x1080, 2560x1440, 3840x2160)
+- `audio_source`: Audio track selection:
+  - `null` or omitted: No audio (video only)
+  - `"original"`: Use original project audio file
+  - `"alternate_mix/{filename}"`: Use alternate audio file
+
+**Audio Examples:**
+```json
+// No audio
+{"project_number": 1, "audio_source": null}
+
+// Original audio
+{"project_number": 1, "audio_source": "original"}
+
+// Alternate audio
+{"project_number": 1, "audio_source": "alternate_mix/no_drums.wav"}
+```
+
+**Notes:**
+- Audio is automatically synced to video duration
+- If audio is shorter/longer than video, the shorter duration is used
+- Alternate audio files must be uploaded first (see Upload Alternate Audio)
 
 ---
 

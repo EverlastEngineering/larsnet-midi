@@ -122,11 +122,14 @@ async function startVideo() {
                 break;
         }
         
+        // Get audio source from dropdown (empty string means no audio)
+        const audioSource = settings.audioSource || null;
+        
         const result = await api.renderVideo(currentProject.number, {
             fps: parseInt(settings.fps),
             width: width,
             height: height,
-            include_audio: settings.includeAudio || false
+            audio_source: audioSource
         });
         
         showToast('Video rendering started', 'success');
@@ -504,4 +507,184 @@ function toggleConsole() {
  */
 function capitalize(str) {
     return str.charAt(0).toUpperCase() + str.slice(1).replace(/-/g, ' ');
+}
+
+/**
+ * Load audio files for current project and populate dropdown
+ */
+async function loadAudioFiles() {
+    if (!currentProject) return;
+    
+    try {
+        const result = await api.getAudioFiles(currentProject.number);
+        const audioFiles = result.audio_files || [];
+        
+        // Populate audio source dropdown
+        const dropdown = document.getElementById('setting-audio-source');
+        dropdown.innerHTML = '<option value="">Don\'t Include Audio</option>';
+        
+        audioFiles.forEach(file => {
+            const option = document.createElement('option');
+            if (file.type === 'original') {
+                option.value = 'original';
+                option.textContent = `${file.name} (Original)`;
+            } else {
+                option.value = file.path;
+                option.textContent = file.name;
+            }
+            dropdown.appendChild(option);
+        });
+        
+        // Update alternate audio list display
+        updateAlternateAudioList(audioFiles);
+        
+    } catch (error) {
+        console.error('Failed to load audio files:', error);
+    }
+}
+
+/**
+ * Update the alternate audio files list UI
+ */
+function updateAlternateAudioList(audioFiles) {
+    const list = document.getElementById('alternate-audio-list');
+    const alternateFiles = audioFiles.filter(f => f.type === 'alternate');
+    
+    if (alternateFiles.length === 0) {
+        list.innerHTML = '<p class="text-xs text-gray-500 italic">No alternate files yet</p>';
+        return;
+    }
+    
+    list.innerHTML = alternateFiles.map(file => {
+        const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+        return `
+            <div class="flex items-center justify-between bg-gray-700 rounded px-2 py-1.5">
+                <div class="flex items-center flex-1 min-w-0">
+                    <i class="fas fa-file-audio text-larsnet-primary mr-2 text-xs"></i>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-xs text-gray-200 truncate">${file.name}</p>
+                    </div>
+                    <span class="text-xs text-gray-500 ml-2">${sizeMB}MB</span>
+                </div>
+                <button class="text-red-400 hover:text-red-300 transition-smooth ml-2 text-xs" 
+                        onclick="deleteAlternateAudio('${file.name}')"
+                        title="Delete ${file.name}">
+                    <i class="fas fa-trash-alt"></i>
+                </button>
+            </div>
+        `;
+    }).join('');
+}
+
+/**
+ * Handle alternate audio file upload
+ */
+async function uploadAlternateAudio(file) {
+    if (!currentProject) return;
+    
+    // Validate file type
+    if (!file.name.toLowerCase().endsWith('.wav')) {
+        showToast('Only WAV files are supported', 'error');
+        return;
+    }
+    
+    // Show progress UI
+    const progressSection = document.getElementById('alternate-audio-upload-progress');
+    const progressBar = document.getElementById('alternate-audio-progress-bar');
+    const progressText = document.getElementById('alternate-audio-progress-text');
+    const filenameDisplay = document.getElementById('alternate-audio-filename');
+    
+    progressSection.classList.remove('hidden');
+    filenameDisplay.textContent = file.name;
+    progressBar.style.width = '0%';
+    progressText.textContent = '0%';
+    
+    try {
+        await api.uploadAlternateAudio(currentProject.number, file, (percent) => {
+            progressBar.style.width = `${percent}%`;
+            progressText.textContent = `${percent}%`;
+        });
+        
+        showToast('Alternate audio uploaded successfully', 'success');
+        
+        // Reload audio files list
+        await loadAudioFiles();
+        
+        // Hide progress
+        setTimeout(() => {
+            progressSection.classList.add('hidden');
+        }, 1000);
+        
+    } catch (error) {
+        console.error('Failed to upload alternate audio:', error);
+        showToast(`Upload failed: ${error.message}`, 'error');
+        progressSection.classList.add('hidden');
+    }
+}
+
+/**
+ * Delete an alternate audio file
+ */
+async function deleteAlternateAudio(filename) {
+    if (!currentProject) return;
+    
+    // Confirm deletion
+    if (!confirm(`Delete "${filename}"?`)) {
+        return;
+    }
+    
+    try {
+        await api.deleteAudioFile(currentProject.number, filename);
+        showToast('Alternate audio deleted', 'success');
+        
+        // Reload audio files list
+        await loadAudioFiles();
+        
+    } catch (error) {
+        console.error('Failed to delete alternate audio:', error);
+        showToast(`Delete failed: ${error.message}`, 'error');
+    }
+}
+
+/**
+ * Initialize alternate audio upload handlers
+ */
+function initAlternateAudioHandlers() {
+    const input = document.getElementById('alternate-audio-input');
+    const browseBtn = document.getElementById('btn-browse-alternate-audio');
+    const dropZone = browseBtn.parentElement;
+    
+    // Browse button
+    browseBtn.addEventListener('click', () => {
+        input.click();
+    });
+    
+    // File input change
+    input.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            uploadAlternateAudio(file);
+            input.value = ''; // Reset input
+        }
+    });
+    
+    // Drag and drop on button area
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        browseBtn.classList.add('bg-larsnet-primary', 'scale-105');
+    });
+    
+    dropZone.addEventListener('dragleave', () => {
+        browseBtn.classList.remove('bg-larsnet-primary', 'scale-105');
+    });
+    
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        browseBtn.classList.remove('bg-larsnet-primary', 'scale-105');
+        
+        const file = e.dataTransfer.files[0];
+        if (file) {
+            uploadAlternateAudio(file);
+        }
+    });
 }

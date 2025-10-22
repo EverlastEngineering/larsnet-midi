@@ -391,7 +391,8 @@ def render_project_video(
     height: int = 1080,
     fps: int = 60,
     preview: bool = False,
-    include_audio: bool = False
+    audio_source: Optional[str] = None,
+    include_audio: Optional[bool] = None  # Deprecated: kept for backward compatibility
 ):
     """
     Render MIDI to video for a specific project.
@@ -402,13 +403,19 @@ def render_project_video(
         height: Video height in pixels
         fps: Frames per second
         preview: Show live preview while rendering
-        include_audio: Include original audio file in video
+        audio_source: Audio source selection - None (no audio), 'original', or 'alternate_mix/{filename}'
+        include_audio: DEPRECATED - use audio_source instead. If True, uses 'original'
     """
     project_dir = project["path"]
     
     print(f"\n{'='*60}")
     print(f"Rendering Video - Project {project['number']}: {project['name']}")
     print(f"{'='*60}\n")
+    
+    # Handle backward compatibility with include_audio
+    if include_audio is not None and audio_source is None:
+        audio_source = 'original' if include_audio else None
+        print("Note: include_audio parameter is deprecated, use audio_source instead")
     
     # Find MIDI files in project/midi/ directory
     midi_dir = project_dir / "midi"
@@ -437,27 +444,38 @@ def render_project_video(
     # Generate output filename
     output_file = video_dir / f"{midi_file.stem}.mp4"
     
-    # Find original audio file if include_audio is enabled
+    # Resolve audio file path based on audio_source
     audio_file = None
-    if include_audio:
-        # Look for audio file in project root (original upload location)
-        audio_extensions = ['.wav', '.mp3', '.flac', '.aiff', '.aif']
-        for ext in audio_extensions:
-            potential_audio = project_dir / f"{project['name']}{ext}"
-            if potential_audio.exists():
-                audio_file = str(potential_audio)
-                break
+    if audio_source:
+        if audio_source == 'original':
+            # Look for original audio file in project root
+            audio_extensions = ['.wav', '.mp3', '.flac', '.aiff', '.aif']
+            for ext in audio_extensions:
+                potential_audio = project_dir / f"{project['name']}{ext}"
+                if potential_audio.exists():
+                    audio_file = str(potential_audio)
+                    break
+            
+            if not audio_file:
+                print("WARNING: Original audio requested but not found in project root")
+                print(f"Looked for: {project['name']}{{.wav,.mp3,.flac,.aiff,.aif}}")
         
-        if not audio_file:
-            print("WARNING: Audio inclusion requested but no audio file found in project root")
-            print(f"Looked for: {project['name']}{{.wav,.mp3,.flac,.aiff,.aif}}")
+        elif audio_source.startswith('alternate_mix/'):
+            # Use alternate audio file
+            alternate_audio_path = project_dir / audio_source
+            if alternate_audio_path.exists():
+                audio_file = str(alternate_audio_path)
+            else:
+                print(f"WARNING: Alternate audio '{audio_source}' not found")
+        else:
+            print(f"WARNING: Unknown audio_source value: {audio_source}")
     
     print(f"Rendering video to: {output_file}")
     print(f"Settings: {width}x{height} @ {fps}fps")
-    if include_audio and audio_file:
+    if audio_file:
         print(f"Including audio: {Path(audio_file).name}")
-    elif include_audio:
-        print("Audio: Not found, rendering without audio")
+    else:
+        print("Audio: None")
     if preview:
         print("Preview mode enabled")
     print()
