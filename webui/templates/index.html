@@ -30,7 +30,30 @@
     <!-- Font Awesome for icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
+    <!-- Google Font for SVG Logo -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@700&display=swap" rel="stylesheet">
+    
     <style>
+        /* Console TTF Font */
+        @font-face {
+            font-family: 'Glass TTY VT220';
+            src: url('/static/Glass_TTY_VT220.ttf') format('truetype');
+            font-weight: normal;
+            font-style: normal;
+        }
+        
+        /* SVG Logo Font */
+        .svg-logo-font {
+            font-family: 'Space Grotesk', sans-serif;
+        }
+        
+        /* Console Font */
+        .console-font {
+            font-family: 'Glass TTY VT220', 'Courier New', monospace;
+        }
+        
         /* Custom scrollbar */
         ::-webkit-scrollbar {
             width: 8px;
@@ -55,7 +78,7 @@
         
         /* Smooth transitions */
         .transition-smooth {
-            transition: all 0.3s ease;
+            transition: all 0.2s ease;
         }
         
         /* Progress bar animation */
@@ -63,24 +86,63 @@
             0% { width: 0%; }
         }
         .progress-bar {
-            animation: progress 0.5s ease-out;
+            animation: progress 1.0s ease;
         }
     </style>
 </head>
-<body class="bg-gray-900 text-gray-100 font-sans">
+<body class="bg-gray-900 text-gray-100 svg-logo-font">
     
     <!-- Main Container -->
     <div class="flex h-screen overflow-hidden">
         
         <!-- Left Sidebar - Projects -->
         <aside id="projects-sidebar" class="w-80 bg-larsnet-darker border-r border-gray-700 flex flex-col">
-            <!-- Sidebar Header -->
+            <!-- Sidebar Header with SVG Logo -->
             <div class="p-6 border-b border-gray-700">
-                <h1 class="text-2xl font-bold text-larsnet-primary flex items-center">
-                    <i class="fas fa-drum mr-3"></i>
-                    LarsNet MIDI
-                </h1>
-                <p class="text-sm text-gray-400 mt-1">Drum Track Processing</p>
+                <svg class="svg-logo-font w-full" viewBox="10 0 500 150" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+                    <!-- The word "LarsNet" -->
+                    <text x="250" y="70" text-anchor="end" fill="#ffffff" font-size="65" font-weight="700" letter-spacing="-2">
+                        LarsNet
+                    </text>
+
+                    <!-- The word "MIDI" -->
+                    <text x="255" y="70" text-anchor="start" fill="#00e5ff" font-size="65" font-weight="700" letter-spacing="0">
+                        MIDI
+                    </text>
+
+                    <text x="500" y="107" text-anchor="end" fill="#ffffff" opacity="0.2" font-size="25" font-weight="700" letter-spacing="10.6">
+                        Drum Track Processor
+                    </text>
+
+                    <!-- Graphic Element 2: MIDI/Sound Wave (Under "MIDI") -->
+                    <g class="pulsing-wave" transform="translate(476, 70.1), rotate(180)">
+                        <rect x="-15" y="0" width="9" height="30" fill="#00e5ff" rx="0" ry="0" opacity="0.9">
+                            <animate attributeName="height" values="30; 10; 30" dur="1.0s" repeatCount="indefinite"></animate>
+                        </rect>
+                        <rect x="0" y="0" width="9" height="20" fill="#00e5ff" rx="0" ry="0" opacity="0.8">
+                            <animate attributeName="height" values="20; 40; 20" dur="1.4s" repeatCount="indefinite"></animate>
+                        </rect>
+                        <rect x="15" y="0" width="9" height="10" fill="#00e5ff" rx="0" ry="0" opacity="0.7">
+                            <animate attributeName="height" values="10; 25; 10" dur="1.1s" repeatCount="indefinite"></animate>
+                        </rect>
+                        <rect x="30" y="0" width="9" height="25" fill="#00e5ff" rx="0" ry="0" opacity="0.6">
+                            <animate attributeName="height" values="25; 18; 25" dur="1.3s" repeatCount="indefinite"></animate>
+                        </rect>
+                        <rect x="45" y="0" width="9" height="18" fill="#00e5ff" rx="0" ry="0" opacity="0.5">
+                            <animate attributeName="height" values="18; 35; 18" dur="1.05s" repeatCount="indefinite"></animate>
+                        </rect>
+                        <rect x="60" y="0" width="9" height="35" fill="#00e5ff" rx="0" ry="0" opacity="0.4">
+                            <animate attributeName="height" values="35; 15; 35" dur="1.5s" repeatCount="indefinite"></animate>
+                        </rect>
+                        <rect x="75" y="0" width="9" height="12" fill="#00e5ff" rx="0" ry="0" opacity="0.3">
+                            <animate attributeName="height" values="12; 25; 12" dur="1.25s" repeatCount="indefinite"></animate>
+                        </rect>
+                    </g>
+                    
+                    <!-- Subtle Underline/Separator -->
+                    <line x1="150" y1="15" x2="386" y2="15" stroke="#33334d" stroke-width="2"></line>
+                    <line x1="26" y1="80" x2="492" y2="80" stroke="#33334d" stroke-width="2"></line>
+                </svg>
             </div>
             
             <!-- Projects List -->
@@ -495,7 +557,7 @@
                             </button>
                         </div>
                         <div id="console-output-container" class="overflow-hidden transition-smooth" style="max-height: 0;">
-                            <div id="console-output" class="bg-gray-900 p-4 font-mono text-sm h-64 overflow-y-auto border-t border-gray-700">
+                            <div id="console-output" class="bg-gray-900 p-4 console-font text-sm h-64 overflow-y-auto border-t border-gray-700">
                                 <div class="text-gray-500">Console initialized...</div>
                             </div>
                         </div>
