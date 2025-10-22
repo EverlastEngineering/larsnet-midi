@@ -284,7 +284,7 @@ function updateDownloads() {
             
             return `
                 <div class="bg-gray-800 rounded-lg overflow-hidden border-2 border-${dl.color}-500">
-                    <button class="w-full p-4 bg-${dl.color}-600 hover:bg-${dl.color}-700 text-white transition-smooth flex items-center justify-between font-semibold"
+                    <button class="glassy-btn w-full p-4 bg-${dl.color}-600 hover:bg-${dl.color}-700 text-white transition-smooth flex items-center justify-between font-semibold"
                             onclick="downloadFiles('${dl.type}')">
                         <div class="flex items-center">
                             <i class="fas fa-file-archive text-lg mr-3"></i>
@@ -306,7 +306,7 @@ function updateDownloads() {
         } else if (dl.type === 'midi') {
             // MIDI - just download
             return `
-                <button class="bg-${dl.color}-600 hover:bg-${dl.color}-700 text-white p-3 rounded-lg border-2 border-${dl.color}-500 transition-smooth flex items-center justify-between"
+                <button class="glassy-btn bg-${dl.color}-600 hover:bg-${dl.color}-700 text-white p-3 rounded-lg border-2 border-${dl.color}-500 transition-smooth flex items-center justify-between"
                         onclick="downloadFiles('${dl.type}')">
                     <div>
                         <i class="fas ${dl.icon} mr-2"></i>
@@ -320,7 +320,7 @@ function updateDownloads() {
             const videoFile = files.video[0];
             return `
                 <div class="bg-gray-800 rounded-lg overflow-hidden border-2 border-${dl.color}-500">
-                    <button class="w-full p-4 bg-${dl.color}-600 hover:bg-${dl.color}-700 text-white transition-smooth flex items-center justify-between font-semibold"
+                    <button class="glassy-btn w-full p-4 bg-${dl.color}-600 hover:bg-${dl.color}-700 text-white transition-smooth flex items-center justify-between font-semibold"
                             onclick="playVideo('${videoFile}')">
                         <div class="flex items-center">
                             <i class="fas fa-play-circle text-lg mr-3"></i>
