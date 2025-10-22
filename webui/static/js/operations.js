@@ -100,10 +100,26 @@ async function startVideo() {
         
         // Parse resolution
         let width = 1920, height = 1080;
-        if (settings.resolution === '1440p') {
-            width = 2560; height = 1440;
-        } else if (settings.resolution === '4k') {
-            width = 3840; height = 2160;
+        
+        switch(settings.resolution) {
+            case '1080p':
+                width = 1920; height = 1080;
+                break;
+            case '1440p':
+                width = 2560; height = 1440;
+                break;
+            case '4k':
+                width = 3840; height = 2160;
+                break;
+            case '1080p-portrait':
+                width = 1080; height = 1920;
+                break;
+            case '1440p-portrait':
+                width = 1440; height = 2560;
+                break;
+            case '4k-portrait':
+                width = 2160; height = 3840;
+                break;
         }
         
         const result = await api.renderVideo(currentProject.number, {
