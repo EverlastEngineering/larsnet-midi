@@ -604,8 +604,8 @@ function showMediaPlayer(type, url, title) {
         `;
     } else if (type === 'video') {
         content.innerHTML = `
-            <div class="relative">
-                <video id="media-player-element" controls preload="metadata" class="w-full rounded bg-black" style="min-height: 400px;">
+            <div class="relative flex items-center justify-center" style="max-height: 85vh;">
+                <video id="media-player-element" controls preload="metadata" class="rounded bg-black" style="max-height: 85vh; max-width: 100%; object-fit: contain;">
                     <source src="${url}" type="video/mp4">
                     Your browser does not support video playback or the video format is incompatible.
                 </video>

@@ -55,5 +55,11 @@
 - **Solution**: Added `statusLower = job.status.toLowerCase()` conversion before all status comparisons throughout operations.js and projects.js. 
 
 ## Bug: Video player doesn't conform to screen size limits
-If I play a portrait video, the top and bottom of the video player go off the page.
-It should shrink to comfortably fit the screen.
+- **Status**: Fixed
+- **Priority**: Medium
+- **Description**: Video player allows portrait videos to overflow viewport vertically
+- **Steps to Reproduce**: Play a portrait video (e.g., 1080×1920) in the web UI
+- **Expected Behavior**: Video should scale to fit within viewport with no scrolling required
+- **Actual Behavior**: Top and bottom of video player extend beyond visible page area
+- **Fixed in Commit**: fix: Constrain video player to viewport for portrait videos
+- **Solution**: Added `max-height: 85vh` and `object-fit: contain` CSS to video element, centered container with flexbox. Videos now scale responsively while maintaining aspect ratio.
