@@ -123,7 +123,7 @@ async function startVideo() {
         }
         
         // Get audio source from dropdown (empty string means no audio)
-        const audioSource = settings.audioSource || null;
+        const audioSource = settings.audioSource || 'original';
         
         const result = await api.renderVideo(currentProject.number, {
             fps: parseInt(settings.fps),
@@ -529,6 +529,7 @@ async function loadAudioFiles() {
             if (file.type === 'original') {
                 option.value = 'original';
                 option.textContent = `${file.name} (Original)`;
+                option.selected = true;  // Select original by default
             } else {
                 option.value = file.path;
                 option.textContent = file.name;

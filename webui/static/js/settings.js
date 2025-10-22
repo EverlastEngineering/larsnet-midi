@@ -47,6 +47,11 @@ class SettingsManager {
             p.classList.add('hidden');
         });
         
+        // Remove highlight from all operation containers
+        document.querySelectorAll('.operation-container').forEach(container => {
+            container.classList.remove('operation-container-highlight');
+        });
+        
         // Reset all toggle button icons
         document.querySelectorAll('.settings-toggle i').forEach(icon => {
             icon.className = 'fas fa-chevron-down mr-1';
@@ -56,6 +61,13 @@ class SettingsManager {
         if (!isCurrentlyOpen) {
             panel.classList.remove('hidden');
             this.currentlyOpen = panelId;
+            
+            // Highlight the operation container
+            const operationName = panelId.replace('settings-', '');
+            const container = document.querySelector(`.operation-container[data-operation="${operationName}"]`);
+            if (container) {
+                container.classList.add('operation-container-highlight');
+            }
             
             // Update button icon to chevron-up
             const button = document.querySelector(`[data-target="${panelId}"] i`);
@@ -185,7 +197,7 @@ class SettingsManager {
             case 'video':
                 settings.fps = this.settings['fps'] || 60;
                 settings.resolution = this.settings['resolution'] || '1080p';
-                settings.audioSource = this.settings['audio-source'] || '';
+                settings.audioSource = this.settings['audio-source'] || 'original';
                 settings.fallSpeed = this.settings['fall-speed'] || 1.0;
                 break;
         }

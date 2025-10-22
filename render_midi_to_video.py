@@ -47,19 +47,21 @@ class DrumNote:
 
 
 # Standard GM Drum Map - adjust based on your MIDI files
+# Each MIDI note maps to a list of lane definitions (most have 1, but some can have multiple)
 DRUM_MAP = {
-    42: {"name": "Hi-Hat Closed", "lane": 0, "color": (255, 255, 0)},  # Cyan
-    44: {"name": "Hi-Hat Pedal", "lane": 1, "color": (200, 200, 0)},   # Dark Cyan
-    46: {"name": "Hi-Hat Open", "lane": 2, "color": (255, 200, 0)},    # Light Blue
-    38: {"name": "Snare", "lane": 3, "color": (0, 0, 255)},       # Red
-    40: {"name": "Snare Rim", "lane": 4, "color": (0, 0, 200)},   # Dark Red
-    36: {"name": "Kick", "lane": 5, "color": (0, 255, 255)},      # Yellow
-    47: {"name": "Tom 1", "lane": 6, "color": (0, 255, 0)},       # Green
-    48: {"name": "Tom 2", "lane": 7, "color": (0, 200, 0)},       # Dark Green
-    50: {"name": "Tom 3", "lane": 8, "color": (255, 0, 255)},     # Magenta
-    49: {"name": "Left Cymbal", "lane": 9, "color": (255, 80, 0)},     # Dark Orange
-    57: {"name": "Right Cymbal", "lane": 10, "color": (255, 100, 0)},     # Orange
-    54: {"name": "Ride", "lane": 11, "color": (255, 150, 100)},    # Light Orange
+    42: [{"name": "Hi-Hat Closed", "lane": 0, "color": (255, 255, 0)}],  # Cyan
+    46: [{"name": "Hi-Hat Open", "lane": 0, "color": (80, 255, 30)},     # Light Blue (shows in both lanes)
+         {"name": "Hi-Hat Open", "lane": 1, "color": (80, 255, 30)}],
+    38: [{"name": "Snare", "lane": 2, "color": (0, 0, 255)}],       # Red
+    40: [{"name": "Snare Rim", "lane": 2, "color": (255, 0, 255)}],   # Dark Red
+    39: [{"name": "Clap", "lane": 3, "color": (128, 128, 255)}],
+    49: [{"name": "Left Cymbal", "lane": 4, "color": (255, 80, 0)}],     # Dark Orange
+    47: [{"name": "Tom 1", "lane": 5, "color": (0, 255, 0)}],       # Green
+    48: [{"name": "Tom 2", "lane": 6, "color": (0, 200, 0)}],       # Dark Green
+    50: [{"name": "Tom 3", "lane": 7, "color": (255, 0, 255)}],     # Magenta
+    36: [{"name": "Kick", "lane": 8, "color": (0, 255, 255)}],      # Yellow
+    57: [{"name": "Right Cymbal", "lane": 9, "color": (255, 100, 0)}],     # Orange
+    54: [{"name": "Ride", "lane": 10, "color": (255, 150, 100)}],    # Light Orange
 }
 
 
@@ -71,11 +73,11 @@ class MidiVideoRenderer:
         self.height = height
         self.fps = fps
         self.fall_speed_multiplier = fall_speed_multiplier
-        self.num_lanes = len(set(info["lane"] for info in DRUM_MAP.values()))  
+        self.num_lanes = len(set(info["lane"] for lane_list in DRUM_MAP.values() for info in lane_list))  
         self.note_width = width // self.num_lanes
         self.strike_line_y = int(height * 0.85)  # Where notes are "hit"
         self.note_height = 30  # Height of each note rectangle
-        self.pixels_per_second = height * 0.5 * fall_speed_multiplier  # How fast notes fall
+        self.pixels_per_second = height * 0.2 * fall_speed_multiplier  # How fast notes fall
         
     def parse_midi(self, midi_path: str) -> Tuple[List[DrumNote], float]:
         """Parse MIDI file and extract drum notes with timing"""
@@ -136,15 +138,16 @@ class MidiVideoRenderer:
                 
                 if msg.type == 'note_on' and msg.velocity > 0:
                     if msg.note in DRUM_MAP:
-                        drum_info = DRUM_MAP[msg.note]
-                        note = DrumNote(
-                            midi_note=msg.note,
-                            time=absolute_time,
-                            velocity=msg.velocity,
-                            lane=drum_info["lane"],
-                            color=drum_info["color"]
-                        )
-                        notes.append(note)
+                        # Create a note for each lane definition (most notes have 1, some have multiple)
+                        for drum_info in DRUM_MAP[msg.note]:
+                            note = DrumNote(
+                                midi_note=msg.note,
+                                time=absolute_time,
+                                velocity=msg.velocity,
+                                lane=drum_info["lane"],
+                                color=drum_info["color"]
+                            )
+                            notes.append(note)
                         total_duration = max(total_duration, absolute_time)
         
         # Sort by time
@@ -241,7 +244,8 @@ class MidiVideoRenderer:
         
         # Legend
         legend_y = 60
-        for note_num, info in sorted(DRUM_MAP.items(), key=lambda x: x[1]["lane"]):
+        for note_num, lane_list in sorted(DRUM_MAP.items(), key=lambda x: x[1][0]["lane"]):
+            info = lane_list[0]  # Use first lane for legend display
             text = f"{info['name']}"
             cv2.putText(frame, text, (10, legend_y), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, info["color"], 2)
@@ -309,7 +313,11 @@ class MidiVideoRenderer:
         
         # Pre-calculate time step to avoid floating point accumulation errors
         time_step = 1.0 / self.fps
-        lookahead_time = 3.0  # Show notes up to 3 seconds in advance
+        # Calculate lookahead time based on screen height and fall speed
+        # Notes should appear at top of screen (y=0) and fall to strike line
+        # Distance to travel = strike_line_y pixels
+        # Time needed = distance / speed
+        lookahead_time = self.strike_line_y / self.pixels_per_second
         note_index = 0  # Track which notes we need to check
         
         for frame_num in range(total_frames):
@@ -379,6 +387,7 @@ class MidiVideoRenderer:
             else:
                 print(f"   Encoded with H.264 video codec (no audio)")
             print(f"   Optimized for web streaming")
+            print(f"   Note: If video player shows old version, hard refresh browser (Cmd+Shift+R / Ctrl+Shift+R)")
         else:
             stderr_output = ffmpeg_process.stderr.read().decode('utf-8') if ffmpeg_process.stderr else ''
             print(f"⚠️  FFmpeg encoding completed with return code {ffmpeg_process.returncode}")
@@ -392,7 +401,7 @@ def render_project_video(
     height: int = 1080,
     fps: int = 60,
     preview: bool = False,
-    audio_source: Optional[str] = None,
+    audio_source: Optional[str] = 'original',
     include_audio: Optional[bool] = None,  # Deprecated: kept for backward compatibility
     fall_speed_multiplier: float = 1.0
 ):
@@ -524,8 +533,8 @@ Examples:
                        help='Frames per second (default: 60)')
     parser.add_argument('--preview', action='store_true',
                        help='Show live preview while rendering')
-    parser.add_argument('--audio', action='store_true',
-                       help='Include original audio file in the video')
+    parser.add_argument('--no-audio', action='store_true',
+                       help='Disable audio in the video (audio included by default)')
     parser.add_argument('--fall-speed', type=float, default=1.0,
                        help='Note fall speed multiplier (default: 1.0, range: 0.5-2.0)')
     
@@ -560,7 +569,7 @@ Examples:
         height=args.height,
         fps=args.fps,
         preview=args.preview,
-        include_audio=args.audio,
+        audio_source=None if args.no_audio else 'original',
         fall_speed_multiplier=args.fall_speed
     )
     

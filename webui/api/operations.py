@@ -86,7 +86,7 @@ def run_stems_to_midi(project_number: int, **kwargs):
 
 
 def run_render_video(project_number: int, fps: int = 60, width: int = 1920, height: int = 1080, 
-                     audio_source: str = None, include_audio: bool = None, fall_speed_multiplier: float = 1.0):
+                     audio_source: str = 'original', include_audio: bool = None, fall_speed_multiplier: float = 1.0):
     """
     Execute MIDI to video rendering for a project.
     
