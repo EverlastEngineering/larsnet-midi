@@ -243,8 +243,9 @@ class TestYAMLConfigEngine:
         config_engine.load()
         
         # Update value
-        success = config_engine.update_value(['kick', 'midi_note'], 38)
+        success, error = config_engine.update_value(['kick', 'midi_note'], 38)
         assert success is True
+        assert error == ""
         
         # Verify update
         data = config_engine.load()
@@ -254,14 +255,16 @@ class TestYAMLConfigEngine:
         """Test updating a non-existent value"""
         config_engine.load()
         
-        success = config_engine.update_value(['nonexistent', 'key'], 42)
+        success, error = config_engine.update_value(['nonexistent', 'key'], 42)
         assert success is False
+        assert error != ""
     
     def test_round_trip_save(self, config_engine, temp_yaml_file):
         """Test saving changes preserves formatting and comments"""
         # Load and modify
         config_engine.load()
-        config_engine.update_value(['kick', 'midi_note'], 38)
+        success, _ = config_engine.update_value(['kick', 'midi_note'], 38)
+        assert success
         config_engine.save()
         
         # Read raw file content
@@ -279,17 +282,20 @@ class TestYAMLConfigEngine:
         config_engine.load()
         
         # Update bool
-        config_engine.update_value(['global', 'enabled'], False)
+        success, _ = config_engine.update_value(['global', 'enabled'], False)
+        assert success
         assert config_engine._data['global']['enabled'] is False
         assert isinstance(config_engine._data['global']['enabled'], bool)
         
         # Update int
-        config_engine.update_value(['kick', 'midi_note'], 38)
+        success, _ = config_engine.update_value(['kick', 'midi_note'], 38)
+        assert success
         assert config_engine._data['kick']['midi_note'] == 38
         assert isinstance(config_engine._data['kick']['midi_note'], int)
         
         # Update float
-        config_engine.update_value(['global', 'volume'], 0.9)
+        success, _ = config_engine.update_value(['global', 'volume'], 0.9)
+        assert success
         assert config_engine._data['global']['volume'] == 0.9
         assert isinstance(config_engine._data['global']['volume'], float)
     
@@ -302,7 +308,8 @@ class TestYAMLConfigEngine:
         assert len(errors) == 0
         
         # Introduce invalid value
-        config_engine.update_value(['kick', 'midi_note'], 200)
+        success, _ = config_engine.update_value(['kick', 'midi_note'], 200)
+        assert success
         
         errors = config_engine.validate_all()
         assert 'kick' in errors

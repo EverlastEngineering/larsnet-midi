@@ -45,6 +45,32 @@
 - **Fixed in Commit**: WebUI QoL improvements
 - **Solution**: Created `refreshCurrentProjectFiles()` function that updates only file-dependent UI elements without reloading jobs section, preventing completed job cards from being hidden prematurely.
 
+## Bug: YAML config corruption on save from webui
+- **Status**: Fixed
+- **Priority**: High
+- **Description**: When saving config from webui, dictionary values (like `toms` and `midi`) were being replaced with primitive values (integers), corrupting the YAML structure and causing AttributeError when loading config
+- **Steps to Reproduce**: 
+  1. Open webui settings
+  2. Modify a nested setting (e.g., midi.min_velocity)
+  3. Save configuration
+  4. Resulting YAML had `toms: 600` or `midi: 60` instead of nested dicts
+- **Expected Behavior**: Only leaf values should be updated, preserving dictionary structure
+- **Actual Behavior**: Entire dictionary was replaced with primitive value, breaking config schema
+- **Root Causes**: 
+  1. **Frontend path bug**: `_parse_dict()` passed wrong path to ConfigField - used parent `path` instead of `current_path`, causing fields to have incomplete paths (e.g., `['midi']` instead of `['midi', 'min_velocity']`)
+  2. **No validation**: `update_value()` didn't validate that new value matched expected type (dict vs primitive)
+- **Impact**: Caused AttributeError in stems_to_midi conversion: `'int' object has no attribute 'get'`
+- **Solution**: 
+  - **Fixed path bug** in `config_engine.py` line 307: changed `path=path` to `path=current_path`
+  - Created schema validation system in `webui/config_schema.py` defining structure for each config type
+  - Updated `YAMLConfigEngine.update_value()` to reject dict→primitive replacements
+  - Added structure validation in `YAMLConfigEngine.save()` to catch corruption before writing
+  - Changed `update_value()` return type to tuple (success, error_message) for better error reporting
+  - Updated `onset_detection` schema to match current YAML structure (dict not primitive)
+  - Added comprehensive tests in `webui/test_config_schema_validation.py` (9 tests)
+  - Added frontend-focused tests in `webui/test_config_api_frontend.py` (9 tests, 3 passing - path validation)
+  - All 12 new protection tests passing
+
 ## Bug: Job status case sensitivity
 - **Status**: Fixed
 - **Priority**: High

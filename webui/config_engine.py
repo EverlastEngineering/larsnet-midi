@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass
 from ruamel.yaml import YAML # type: ignore
 from ruamel.yaml.comments import CommentedMap # type: ignore
+from .config_schema import get_schema, validate_structure, get_dict_keys
 
 
 @dataclass
@@ -209,12 +210,13 @@ class YAMLConfigEngine:
     comments, and key ordering.
     """
     
-    def __init__(self, yaml_path: Union[str, Path]):
+    def __init__(self, yaml_path: Union[str, Path], config_type: Optional[str] = None):
         """
         Initialize the config engine for a specific YAML file.
         
         Args:
             yaml_path: Path to YAML configuration file
+            config_type: Type of config ('midiconfig', 'config', 'eq') for schema validation
         """
         self.yaml_path = Path(yaml_path)
         self.yaml = YAML()
@@ -222,6 +224,19 @@ class YAMLConfigEngine:
         self.yaml.default_flow_style = False
         self.yaml.width = 4096  # Prevent line wrapping
         self._data: Optional[CommentedMap] = None
+        
+        # Infer config_type from filename if not provided
+        if config_type is None:
+            filename = self.yaml_path.stem  # Gets filename without extension
+            config_type = filename if filename in ['config', 'eq', 'midiconfig'] else 'midiconfig'
+        self.config_type = config_type
+        
+        # Load schema, with fallback to empty dict if schema not found
+        try:
+            self._schema = get_schema(config_type)
+        except ValueError:
+            # Unknown config type - use empty schema (no validation)
+            self._schema = {}
     
     def load(self) -> CommentedMap:
         """Load YAML file and return commented map"""
@@ -289,7 +304,7 @@ class YAMLConfigEngine:
                 fields.extend(nested_fields)
             elif not isinstance(value, (list, dict)):
                 # Scalar value - create field
-                field = ConfigField(key, value, comment, path=path)
+                field = ConfigField(key, value, comment, path=current_path)
                 fields.append(field)
             # Skip lists and deep nested dicts
         
@@ -320,7 +335,7 @@ class YAMLConfigEngine:
         
         return ""
     
-    def update_value(self, path: List[str], new_value: Any) -> bool:
+    def update_value(self, path: List[str], new_value: Any) -> tuple[bool, str]:
         """
         Update a value in the loaded YAML data.
         
@@ -329,7 +344,7 @@ class YAMLConfigEngine:
             new_value: New value to set
         
         Returns:
-            True if update successful, False otherwise
+            (success, error_message) tuple
         """
         data = self.load()
         
@@ -337,16 +352,36 @@ class YAMLConfigEngine:
         current = data
         for key in path[:-1]:
             if key not in current:
-                return False
+                return False, f"Path not found: {'.'.join(path[:-1])}"
             current = current[key]
         
         # Update the final key
         final_key = path[-1]
         if final_key not in current:
-            return False
+            return False, f"Key not found: {final_key}"
         
-        # Preserve type if possible
+        # CRITICAL: Prevent replacing dictionaries with primitive values
         old_value = current[final_key]
+        old_is_dict = isinstance(old_value, dict)
+        new_is_dict = isinstance(new_value, dict)
+        
+        # Check against schema if this is a top-level key
+        if len(path) == 1 and final_key in self._schema:
+            should_be_dict = self._schema[final_key]
+            if should_be_dict and not new_is_dict:
+                return False, (
+                    f"Cannot replace dictionary '{final_key}' with primitive value. "
+                    f"This key must contain nested settings."
+                )
+        
+        # General protection: don't replace dict with primitive
+        if old_is_dict and not new_is_dict:
+            return False, (
+                f"Cannot replace dictionary at '{'.'.join(path)}' with primitive value {new_value}. "
+                f"Use a more specific path to update individual settings."
+            )
+        
+        # Preserve type if possible (for primitives)
         if isinstance(old_value, bool):
             current[final_key] = bool(new_value)
         elif isinstance(old_value, int):
@@ -356,12 +391,27 @@ class YAMLConfigEngine:
         else:
             current[final_key] = new_value
         
-        return True
+        return True, ""
     
     def save(self) -> None:
-        """Save the modified YAML data back to file, preserving formatting"""
+        """
+        Save the modified YAML data back to file, preserving formatting.
+        
+        Validates structure before saving to prevent corruption.
+        
+        Raises:
+            RuntimeError: If no data loaded or validation fails
+        """
         if self._data is None:
             raise RuntimeError("No data loaded. Call load() or parse() first.")
+        
+        # Validate structure before saving
+        is_valid, error_msg = validate_structure(dict(self._data), self._schema)
+        if not is_valid:
+            raise RuntimeError(
+                f"Configuration structure validation failed: {error_msg}. "
+                f"Changes not saved to prevent corruption."
+            )
         
         with open(self.yaml_path, 'w') as f:
             self.yaml.dump(self._data, f)
@@ -419,4 +469,4 @@ def get_config_engine(project_id: int, config_type: str) -> YAMLConfigEngine:
     if not config_file.exists():
         raise ValueError(f"Config file not found: {config_file}")
     
-    return YAMLConfigEngine(config_file)
+    return YAMLConfigEngine(config_file, config_type=config_type)

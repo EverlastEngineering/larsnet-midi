@@ -224,8 +224,9 @@ kick:
         assert len(sections) > 0
         
         # 2. Update value
-        success = engine.update_value(['kick', 'midi_note'], 38)
+        success, error = engine.update_value(['kick', 'midi_note'], 38)
         assert success is True
+        assert error == ""
         
         # 3. Validate
         errors = engine.validate_all()
