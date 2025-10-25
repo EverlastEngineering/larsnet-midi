@@ -98,6 +98,26 @@ function setupEventListeners() {
         document.getElementById('file-input').click();
     });
     
+    // Landing page buttons
+    document.getElementById('landing-browse-btn').addEventListener('click', () => {
+        document.getElementById('file-input').click();
+    });
+    
+    const landingProjectsBtn = document.getElementById('landing-projects-btn');
+    if (landingProjectsBtn) {
+        landingProjectsBtn.addEventListener('click', () => {
+            const projectsSidebar = document.getElementById('projects-sidebar');
+            const mobileOverlay = document.getElementById('mobile-overlay');
+            if (projectsSidebar) {
+                projectsSidebar.classList.remove('mobile-sidebar-closed');
+                projectsSidebar.classList.add('mobile-sidebar-open');
+            }
+            if (mobileOverlay) {
+                mobileOverlay.classList.remove('hidden');
+            }
+        });
+    }
+    
     // Initialize alternate audio handlers
     if (typeof initAlternateAudioHandlers === 'function') {
         initAlternateAudioHandlers();

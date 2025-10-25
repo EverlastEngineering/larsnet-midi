@@ -99,7 +99,8 @@ async function selectProject(projectNumber) {
         updateOperationButtons();
         updateDownloads();
         
-        // Show project section, hide main upload and console
+        // Show project section, hide landing and main upload
+        document.getElementById('landing-section').classList.add('hidden');
         document.getElementById('project-section').classList.remove('hidden');
         document.getElementById('upload-section').classList.add('hidden');
         document.getElementById('console-section').classList.remove('hidden');
@@ -529,7 +530,8 @@ async function confirmDeleteProject() {
         currentProject = null;
         window.currentProject = null;
         
-        // Hide project section and console
+        // Hide project section and console, show landing
+        document.getElementById('landing-section').classList.remove('hidden');
         document.getElementById('project-section').classList.add('hidden');
         document.getElementById('upload-section').classList.add('hidden');
         document.getElementById('console-section').classList.add('hidden');
