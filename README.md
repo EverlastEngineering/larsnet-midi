@@ -1,6 +1,9 @@
-# LarsNet MIDI
+<img src="./webui/static/img/larsnetmidi.svg">
+
+---
 
 Audio-to-MIDI conversion for drum tracks using deep learning separation, time analysis, spectral frequency analysis and frequency energy analysis.
+--- 
 
 ### Before We Begin: **LarsNet**
 
