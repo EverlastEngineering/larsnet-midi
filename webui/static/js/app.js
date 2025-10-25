@@ -420,6 +420,30 @@ function toggleOperations() {
     }
 }
 
+/**
+ * Update expanded collapsible sections on resize
+ */
+function updateCollapsibleHeights() {
+    const containers = [
+        document.getElementById('downloads-container'),
+        document.getElementById('operations-container'),
+        document.getElementById('console-output-container')
+    ];
+    
+    containers.forEach(container => {
+        if (container && container.style.maxHeight && container.style.maxHeight !== '0px') {
+            container.style.maxHeight = container.scrollHeight + 'px';
+        }
+    });
+}
+
+// Add resize listener to update collapsible section heights
+let resizeTimeout;
+window.addEventListener('resize', () => {
+    clearTimeout(resizeTimeout);
+    resizeTimeout = setTimeout(updateCollapsibleHeights, 100);
+});
+
 // Add animation styles
 const style = document.createElement('style');
 style.textContent = `
