@@ -439,8 +439,8 @@ function addConsoleLog(message, level = 'info') {
     const console = document.getElementById('console-output');
     const consoleSection = document.getElementById('console-section');
     
-    // Show console section if hidden (but keep it collapsed)
-    if (consoleSection.classList.contains('hidden')) {
+    // Only show console section if a project is loaded
+    if (consoleSection.classList.contains('hidden') && window.currentProject) {
         consoleSection.classList.remove('hidden');
     }
     

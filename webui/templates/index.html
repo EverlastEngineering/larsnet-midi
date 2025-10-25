@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>LarsNet MIDI - Drum Track Processing</title>
     
     <!-- Tailwind CSS -->
@@ -114,17 +114,34 @@
         .progress-bar {
             animation: progress 1.0s ease;
         }
+        
+        /* Mobile sidebar styles */
+        @media (max-width: 768px) {
+            .mobile-sidebar-open {
+                transform: translateX(0);
+            }
+            .mobile-sidebar-closed {
+                transform: translateX(-100%);
+            }
+        }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-100 svg-logo-font">
+    
+    <!-- Mobile Overlay (when sidebar is open) -->
+    <div id="mobile-overlay" class="md:hidden fixed inset-0 bg-black bg-opacity-50 z-30 hidden"></div>
     
     <!-- Main Container -->
     <div class="flex h-screen overflow-hidden">
         
         <!-- Left Sidebar - Projects -->
-        <aside id="projects-sidebar" class="w-80 bg-larsnet-darker border-r border-gray-700 flex flex-col">
+        <aside id="projects-sidebar" class="w-80 bg-larsnet-darker border-r border-gray-700 flex flex-col md:relative fixed inset-y-0 left-0 z-40 transition-transform duration-300 mobile-sidebar-closed">
             <!-- Sidebar Header with SVG Logo -->
-            <div class="p-6 border-b border-gray-700">
+            <div class="p-4 md:p-6 border-b border-gray-700">
+                <!-- Close button for mobile -->
+                <button id="mobile-sidebar-close" class="md:hidden absolute top-4 right-4 text-gray-400 hover:text-white">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
                 <svg class="svg-logo-font w-full" viewBox="10 0 500 150" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
                     <!-- The word "LarsNet" -->
                     <text x="250" y="70" text-anchor="end" fill="#ffffff" font-size="65" font-weight="700" letter-spacing="-2">
@@ -174,7 +191,7 @@
             <!-- Projects List -->
             <div class="flex-1 overflow-y-auto p-4">
                 <!-- Upload Zone for Selected Project -->
-                <div id="sidebar-upload-section" class="hidden mb-4">
+                <div id="sidebar-upload-section" class="mb-4">
                     <div class="border-2 border-dashed border-gray-600 rounded-lg p-4 text-center hover:border-gray-500 transition-smooth">
                         <i class="fas fa-cloud-upload-alt text-3xl text-gray-500 mb-2"></i>
                         <p class="text-xs text-gray-400 mb-2">Upload new audio</p>
@@ -202,10 +219,10 @@
             </div>
             
             <!-- Sidebar Footer -->
-            <div class="p-4 border-t border-gray-700 flex items-center justify-center">
-                <a href="https://everlastengineering.com" target="_blank" rel="noopener noreferrer" class="flex items-center gap-3 hover:scale-105 transition-smooth">
-                    <img src="/static/img/large_logo_only_white_transbg_animated.svg" alt="Logo" class="h-8 opacity-60 group-hover:opacity-100 transition-smooth">
-                    <img src="/static/img/everlastengineering.png" alt="Everlast Engineering" class="h-6 opacity-60 group-hover:opacity-100 transition-smooth">
+            <div class="p-3 md:p-4 border-t border-gray-700 flex items-center justify-center">
+                <a href="https://everlastengineering.com" target="_blank" rel="noopener noreferrer" class="flex items-center gap-2 md:gap-3 hover:scale-105 transition-smooth">
+                    <img src="/static/img/large_logo_only_white_transbg_animated.svg" alt="Logo" class="h-6 md:h-8 opacity-60 group-hover:opacity-100 transition-smooth">
+                    <img src="/static/img/everlastengineering.png" alt="Everlast Engineering" class="h-5 md:h-6 opacity-60 group-hover:opacity-100 transition-smooth">
                 </a>
             </div>
         </aside>
@@ -214,52 +231,54 @@
         <main class="flex-1 flex flex-col overflow-hidden">
             
             <!-- Top Bar -->
-            <header class="bg-larsnet-dark border-b border-gray-700 px-6 py-4">
-                <div class="flex items-start justify-between">
+            <header class="bg-larsnet-dark border-b border-gray-700 px-4 md:px-6 py-3 md:py-4">
+                <div class="flex items-start">
                     <div class="flex-1 min-w-0">
-                        <div class="flex items-center gap-3">
-                            <h2 id="current-project-name" class="text-xl font-semibold text-gray-100">
+                        <div class="flex items-center gap-2 md:gap-3">
+                            <h2 id="current-project-name" class="text-base md:text-xl font-semibold text-gray-100 truncate">
                                 Select a project or upload new audio
                             </h2>
                             <button id="project-details-toggle" class="hidden text-gray-400 hover:text-gray-200 transition-smooth">
                                 <i class="fas fa-chevron-down text-sm"></i>
                             </button>
-                            <button id="delete-project-btn" class="hidden text-red-400 hover:text-red-300 transition-smooth ml-2" title="Delete Project">
-                                <i class="fas fa-trash-alt"></i>
-                            </button>
                         </div>
-                        <p id="current-project-subtitle" class="text-sm text-gray-400 mt-1">
-                            Drag and drop an audio file to get started
-                        </p>
+                        <p id="current-project-subtitle" class="text-xs md:text-sm text-gray-400 mt-1 hidden"></p>
                         
                         <!-- Project Details (Collapsible) -->
                         <div id="project-details-container" class="overflow-hidden transition-smooth" style="max-height: 0;">
-                            <div class="mt-3 p-3 bg-gray-800 rounded border border-gray-700">
-                                <div class="grid grid-cols-2 gap-3 text-xs">
-                                    <div>
-                                        <span class="text-gray-500">Created:</span>
-                                        <span id="project-created" class="text-gray-300 ml-2">-</span>
+                            <div class="mt-3 p-2 md:p-3 bg-gray-800 rounded border border-gray-700">
+                                <div class="flex items-start justify-between mb-3">
+                                    <div class="flex-1 grid grid-cols-1 md:grid-cols-2 gap-2 md:gap-3 text-xs">
+                                        <div>
+                                            <span class="text-gray-500">Created:</span>
+                                            <span id="project-created" class="text-gray-300 ml-2">-</span>
+                                        </div>
+                                        <div>
+                                            <span class="text-gray-500">Audio File:</span>
+                                            <span id="project-audio-file" class="text-gray-300 ml-2">-</span>
+                                        </div>
                                     </div>
-                                    <div>
-                                        <span class="text-gray-500">Audio File:</span>
-                                        <span id="project-audio-file" class="text-gray-300 ml-2">-</span>
-                                    </div>
+                                    <button id="delete-project-btn" class="text-red-400 hover:text-red-300 transition-smooth ml-3 flex-shrink-0" title="Delete Project">
+                                        <i class="fas fa-trash-alt"></i>
+                                    </button>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                    
-                    <!-- Health Status Indicator -->
-                    <div id="health-status" class="flex items-center flex-shrink-0 ml-4">
-                        <div class="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></div>
-                        <span class="text-sm text-gray-400">Connected</span>
                     </div>
                 </div>
             </header>
             
             <!-- Content Grid -->
-            <div class="flex-1 overflow-y-auto p-6">
-                <div class="max-w-7xl mx-auto space-y-6">
+            <div class="flex-1 overflow-y-auto p-3 md:pt-0 md:px-6 md:pb-6">
+                <div class="max-w-7xl mx-auto space-y-3 md:space-y-6">
+                    
+                    <!-- Projects Button (mobile only) -->
+                    <div class="md:hidden">
+                        <button id="mobile-projects-toggle" class="flex items-center gap-1.5 text-larsnet-primary hover:text-blue-400 transition-smooth text-sm font-medium flex-shrink-0">
+                            <i class="fas fa-chevron-left"></i>
+                            <span>Projects</span>
+                        </button>
+                    </div>
                     
                     <!-- Active Jobs (at top) -->
                     <section id="active-jobs-section" class="hidden">
@@ -269,22 +288,22 @@
                     </section>
                     
                     <!-- Upload Zone -->
-                    <section id="upload-section" class="bg-larsnet-dark rounded-lg border-2 border-dashed border-gray-600 p-8 text-center transition-smooth hover:border-gray-500">
-                        <div id="upload-zone" class="space-y-4">
+                    <section id="upload-section" class="hidden bg-larsnet-dark rounded-lg border-2 border-dashed border-gray-600 p-4 md:p-8 text-center transition-smooth hover:border-gray-500">
+                        <div id="upload-zone" class="space-y-3 md:space-y-4">
                             <div class="flex justify-center">
-                                <i class="fas fa-cloud-upload-alt text-6xl text-gray-500"></i>
+                                <i class="fas fa-cloud-upload-alt text-4xl md:text-6xl text-gray-500"></i>
                             </div>
                             <div>
-                                <h3 class="text-xl font-semibold text-gray-200 mb-2">Upload Audio File</h3>
-                                <p class="text-gray-400 mb-4">
+                                <h3 class="text-lg md:text-xl font-semibold text-gray-200 mb-2">Upload Audio File</h3>
+                                <p class="text-sm md:text-base text-gray-400 mb-3 md:mb-4">
                                     Drag and drop your drum track here, or click to browse
                                 </p>
-                                <p class="text-sm text-gray-500">
+                                <p class="text-xs md:text-sm text-gray-500">
                                     Supported formats: WAV, MP3, FLAC, AIFF (max 500MB)
                                 </p>
                             </div>
                             <input type="file" id="file-input" class="hidden" accept=".wav,.mp3,.flac,.aiff,.aif">
-                            <button id="browse-btn" class="bg-larsnet-primary hover:bg-blue-600 text-white px-6 py-2 rounded-lg font-medium transition-smooth">
+                            <button id="browse-btn" class="bg-larsnet-primary hover:bg-blue-600 text-white px-4 md:px-6 py-2 rounded-lg text-sm md:text-base font-medium transition-smooth">
                                 <i class="fas fa-folder-open mr-2"></i>
                                 Browse Files
                             </button>
@@ -306,62 +325,62 @@
                     <section id="project-section" class="hidden space-y-6">
                         
                         <!-- Downloads -->
-                        <div id="downloads-section" class="bg-larsnet-dark rounded-lg p-6">
-                            <h3 class="text-lg font-semibold mb-4">Downloads</h3>
-                            <div id="downloads-list" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div id="downloads-section" class="bg-larsnet-dark rounded-lg p-4 md:p-6">
+                            <h3 class="text-base md:text-lg font-semibold mb-3 md:mb-4">Downloads</h3>
+                            <div id="downloads-list" class="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
                                 <!-- Download buttons will be added here -->
                             </div>
                         </div>
                         
                         <!-- Operation Buttons -->
-                        <div class="bg-larsnet-dark rounded-lg p-6">
-                            <h3 class="text-lg font-semibold mb-4">Operations</h3>
-                            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div class="bg-larsnet-dark rounded-lg p-4 md:p-6">
+                            <h3 class="text-base md:text-lg font-semibold mb-3 md:mb-4">Operations</h3>
+                            <div class="grid grid-cols-2 gap-3 md:gap-4">
                                 
                                 <!-- Separate Button -->
                                 <div class="flex flex-col operation-container" data-operation="separate">
-                                    <button id="btn-separate" class="operation-btn bg-blue-600 hover:bg-blue-700 text-white p-4 rounded-lg border-2 border-blue-500 transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
-                                        <i class="fas fa-divide text-2xl mb-2"></i>
-                                        <p class="font-semibold">Separate</p>
+                                    <button id="btn-separate" class="operation-btn bg-blue-600 hover:bg-blue-700 text-white p-3 md:p-4 rounded-lg border-2 border-blue-500 transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
+                                        <i class="fas fa-divide text-xl md:text-2xl mb-1 md:mb-2"></i>
+                                        <p class="text-sm md:text-base font-semibold">Separate</p>
                                         <p class="text-xs opacity-75">Split drums</p>
                                     </button>
-                                    <button class="settings-toggle text-xs text-gray-400 hover:text-gray-200 mt-2 transition-smooth" data-target="settings-separate">
+                                    <button class="settings-toggle text-xs text-gray-400 hover:text-gray-200 mt-1 md:mt-2 transition-smooth" data-target="settings-separate">
                                         <i class="fas fa-chevron-down mr-1"></i>Settings
                                     </button>
                                 </div>
                                 
                                 <!-- Cleanup Button -->
                                 <div class="flex flex-col operation-container" data-operation="cleanup">
-                                    <button id="btn-cleanup" class="operation-btn bg-purple-600 hover:bg-purple-700 text-white p-4 rounded-lg border-2 border-purple-500 transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
-                                        <i class="fas fa-broom text-2xl mb-2"></i>
-                                        <p class="font-semibold">Clean</p>
+                                    <button id="btn-cleanup" class="operation-btn bg-purple-600 hover:bg-purple-700 text-white p-3 md:p-4 rounded-lg border-2 border-purple-500 transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
+                                        <i class="fas fa-broom text-xl md:text-2xl mb-1 md:mb-2"></i>
+                                        <p class="text-sm md:text-base font-semibold">Clean</p>
                                         <p class="text-xs opacity-75">Reduce bleed</p>
                                     </button>
-                                    <button class="settings-toggle text-xs text-gray-400 hover:text-gray-200 mt-2 transition-smooth" data-target="settings-cleanup">
+                                    <button class="settings-toggle text-xs text-gray-400 hover:text-gray-200 mt-1 md:mt-2 transition-smooth" data-target="settings-cleanup">
                                         <i class="fas fa-chevron-down mr-1"></i>Settings
                                     </button>
                                 </div>
                                 
                                 <!-- MIDI Button -->
                                 <div class="flex flex-col operation-container" data-operation="midi">
-                                    <button id="btn-midi" class="operation-btn bg-green-600 hover:bg-green-700 text-white p-4 rounded-lg border-2 border-green-500 transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
-                                        <i class="fas fa-music text-2xl mb-2"></i>
-                                        <p class="font-semibold">MIDI</p>
+                                    <button id="btn-midi" class="operation-btn bg-green-600 hover:bg-green-700 text-white p-3 md:p-4 rounded-lg border-2 border-green-500 transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
+                                        <i class="fas fa-music text-xl md:text-2xl mb-1 md:mb-2"></i>
+                                        <p class="text-sm md:text-base font-semibold">MIDI</p>
                                         <p class="text-xs opacity-75">Convert notes</p>
                                     </button>
-                                    <button class="settings-toggle text-xs text-gray-400 hover:text-gray-200 mt-2 transition-smooth" data-target="settings-midi">
+                                    <button class="settings-toggle text-xs text-gray-400 hover:text-gray-200 mt-1 md:mt-2 transition-smooth" data-target="settings-midi">
                                         <i class="fas fa-chevron-down mr-1"></i>Settings
                                     </button>
                                 </div>
                                 
                                 <!-- Video Button -->
                                 <div class="flex flex-col operation-container" data-operation="video">
-                                    <button id="btn-video" class="operation-btn bg-orange-600 hover:bg-orange-700 text-white p-4 rounded-lg border-2 border-orange-500 transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
-                                        <i class="fas fa-video text-2xl mb-2"></i>
-                                        <p class="font-semibold">Video</p>
+                                    <button id="btn-video" class="operation-btn bg-orange-600 hover:bg-orange-700 text-white p-3 md:p-4 rounded-lg border-2 border-orange-500 transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
+                                        <i class="fas fa-video text-xl md:text-2xl mb-1 md:mb-2"></i>
+                                        <p class="text-sm md:text-base font-semibold">Video</p>
                                         <p class="text-xs opacity-75">Visualize</p>
                                     </button>
-                                    <button class="settings-toggle text-xs text-gray-400 hover:text-gray-200 mt-2 transition-smooth" data-target="settings-video">
+                                    <button class="settings-toggle text-xs text-gray-400 hover:text-gray-200 mt-1 md:mt-2 transition-smooth" data-target="settings-video">
                                         <i class="fas fa-chevron-down mr-1"></i>Settings
                                     </button>
                                 </div>
@@ -371,15 +390,15 @@
                             <!-- Settings Panels -->
                             
                             <!-- Separate Settings -->
-                            <div id="settings-separate" class="settings-panel hidden mt-6 pt-6 border-t border-gray-700">
-                                <h4 class="text-sm font-semibold mb-4 text-gray-300">Separation Settings</h4>
-                                <div class="space-y-4">
-                                    <div class="flex items-center justify-between">
+                            <div id="settings-separate" class="settings-panel hidden mt-4 md:mt-6 pt-4 md:pt-6 border-t border-gray-700">
+                                <h4 class="text-sm font-semibold mb-3 md:mb-4 text-gray-300">Separation Settings</h4>
+                                <div class="space-y-3 md:space-y-4">
+                                    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                                         <div class="flex-1">
                                             <label class="text-sm text-gray-300">Device</label>
                                             <p class="text-xs text-gray-500">Processing device (CPU or CUDA GPU)</p>
                                         </div>
-                                        <select id="setting-device" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm">
+                                        <select id="setting-device" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-auto">
                                             <option value="cpu">CPU</option>
                                             <option value="cuda">CUDA (GPU)</option>
                                         </select>
@@ -389,7 +408,7 @@
                                             <label class="text-sm text-gray-300">Apply EQ Cleanup</label>
                                             <p class="text-xs text-gray-500">Apply frequency filtering to reduce bleed</p>
                                         </div>
-                                        <label class="relative inline-flex items-center cursor-pointer">
+                                        <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
                                             <input type="checkbox" id="setting-apply-eq" class="sr-only peer">
                                             <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-larsnet-primary"></div>
                                         </label>
@@ -397,73 +416,73 @@
                                     <div>
                                         <label class="text-sm text-gray-300 block mb-2">Wiener Filter Exponent</label>
                                         <p class="text-xs text-gray-500 mb-2">Higher values = more aggressive filtering (0 = disabled)</p>
-                                        <input type="number" id="setting-wiener" min="0" max="10" step="0.5" value="0" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-32">
+                                        <input type="number" id="setting-wiener" min="0" max="10" step="0.5" value="0" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-32">
                                     </div>
                                 </div>
                             </div>
                             
                             <!-- Cleanup Settings -->
-                            <div id="settings-cleanup" class="settings-panel hidden mt-6 pt-6 border-t border-gray-700">
-                                <h4 class="text-sm font-semibold mb-4 text-gray-300">Sidechain Compression Settings</h4>
-                                <div class="space-y-4">
+                            <div id="settings-cleanup" class="settings-panel hidden mt-4 md:mt-6 pt-4 md:pt-6 border-t border-gray-700">
+                                <h4 class="text-sm font-semibold mb-3 md:mb-4 text-gray-300">Sidechain Compression Settings</h4>
+                                <div class="space-y-3 md:space-y-4">
                                     <div>
                                         <label class="text-sm text-gray-300 block mb-2">Threshold (dB)</label>
                                         <p class="text-xs text-gray-500 mb-2">Trigger level for compression (-60 to 0)</p>
-                                        <input type="number" id="setting-threshold" min="-60" max="0" step="1" value="-30" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-32">
+                                        <input type="number" id="setting-threshold" min="-60" max="0" step="1" value="-30" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-32">
                                     </div>
                                     <div>
                                         <label class="text-sm text-gray-300 block mb-2">Ratio</label>
                                         <p class="text-xs text-gray-500 mb-2">Compression ratio (1-20)</p>
-                                        <input type="number" id="setting-ratio" min="1" max="20" step="0.5" value="10" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-32">
+                                        <input type="number" id="setting-ratio" min="1" max="20" step="0.5" value="10" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-32">
                                     </div>
                                     <div>
                                         <label class="text-sm text-gray-300 block mb-2">Attack (ms)</label>
                                         <p class="text-xs text-gray-500 mb-2">How quickly compression engages (0.1-10)</p>
-                                        <input type="number" id="setting-attack" min="0.1" max="10" step="0.1" value="1" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-32">
+                                        <input type="number" id="setting-attack" min="0.1" max="10" step="0.1" value="1" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-32">
                                     </div>
                                     <div>
                                         <label class="text-sm text-gray-300 block mb-2">Release (ms)</label>
                                         <p class="text-xs text-gray-500 mb-2">How quickly compression releases (10-500)</p>
-                                        <input type="number" id="setting-release" min="10" max="500" step="10" value="100" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-32">
+                                        <input type="number" id="setting-release" min="10" max="500" step="10" value="100" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-32">
                                     </div>
                                 </div>
                             </div>
                             
                             <!-- MIDI Settings -->
-                            <div id="settings-midi" class="settings-panel hidden mt-6 pt-6 border-t border-gray-700">
-                                <h4 class="text-sm font-semibold mb-4 text-gray-300">MIDI Conversion Settings</h4>
+                            <div id="settings-midi" class="settings-panel hidden mt-4 md:mt-6 pt-4 md:pt-6 border-t border-gray-700">
+                                <h4 class="text-sm font-semibold mb-3 md:mb-4 text-gray-300">MIDI Conversion Settings</h4>
                                 
                                 <!-- Basic Settings -->
-                                <div class="space-y-4 mb-6">
+                                <div class="space-y-3 md:space-y-4 mb-4 md:mb-6">
                                     <div>
                                         <label class="text-sm text-gray-300 block mb-2">Onset Threshold</label>
                                         <p class="text-xs text-gray-500 mb-2">Detection sensitivity (0-1, lower = more sensitive)</p>
-                                        <input type="number" id="setting-onset-threshold" min="0" max="1" step="0.01" value="0.3" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-32">
+                                        <input type="number" id="setting-onset-threshold" min="0" max="1" step="0.01" value="0.3" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-32">
                                     </div>
                                     <div>
                                         <label class="text-sm text-gray-300 block mb-2">Onset Delta</label>
                                         <p class="text-xs text-gray-500 mb-2">Peak picking sensitivity (0-0.1)</p>
-                                        <input type="number" id="setting-onset-delta" min="0" max="0.1" step="0.001" value="0.01" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-32">
+                                        <input type="number" id="setting-onset-delta" min="0" max="0.1" step="0.001" value="0.01" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-32">
                                     </div>
                                     <div>
                                         <label class="text-sm text-gray-300 block mb-2">Min/Max Velocity</label>
                                         <p class="text-xs text-gray-500 mb-2">MIDI velocity range (0-127)</p>
                                         <div class="flex gap-2">
-                                            <input type="number" id="setting-min-velocity" min="0" max="127" value="40" placeholder="Min" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-24">
-                                            <input type="number" id="setting-max-velocity" min="0" max="127" value="127" placeholder="Max" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-24">
+                                            <input type="number" id="setting-min-velocity" min="0" max="127" value="40" placeholder="Min" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm flex-1 md:w-24">
+                                            <input type="number" id="setting-max-velocity" min="0" max="127" value="127" placeholder="Max" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm flex-1 md:w-24">
                                         </div>
                                     </div>
                                     <div>
                                         <label class="text-sm text-gray-300 block mb-2">Tempo (BPM)</label>
                                         <p class="text-xs text-gray-500 mb-2">Optional tempo for MIDI file</p>
-                                        <input type="number" id="setting-tempo" min="60" max="200" step="1" placeholder="Auto" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-32">
+                                        <input type="number" id="setting-tempo" min="60" max="200" step="1" placeholder="Auto" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-32">
                                     </div>
                                     <div class="flex items-center justify-between">
                                         <div class="flex-1">
                                             <label class="text-sm text-gray-300">Detect Open Hi-Hat</label>
                                             <p class="text-xs text-gray-500">Distinguish open vs closed hi-hat</p>
                                         </div>
-                                        <label class="relative inline-flex items-center cursor-pointer">
+                                        <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
                                             <input type="checkbox" id="setting-detect-hihat-open" class="sr-only peer">
                                             <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-larsnet-primary"></div>
                                         </label>
@@ -480,26 +499,26 @@
                             </div>
                             
                             <!-- Video Settings -->
-                            <div id="settings-video" class="settings-panel hidden mt-6 pt-6 border-t border-gray-700">
-                                <h4 class="text-sm font-semibold mb-4 text-gray-300">Video Rendering Settings</h4>
-                                <div class="space-y-4">
-                                    <div class="flex items-center justify-between">
+                            <div id="settings-video" class="settings-panel hidden mt-4 md:mt-6 pt-4 md:pt-6 border-t border-gray-700">
+                                <h4 class="text-sm font-semibold mb-3 md:mb-4 text-gray-300">Video Rendering Settings</h4>
+                                <div class="space-y-3 md:space-y-4">
+                                    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                                         <div class="flex-1">
                                             <label class="text-sm text-gray-300">Frame Rate (FPS)</label>
                                             <p class="text-xs text-gray-500">Video frame rate</p>
                                         </div>
-                                        <select id="setting-fps" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm">
+                                        <select id="setting-fps" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-auto">
                                             <option value="30">30 FPS</option>
                                             <option value="60" selected>60 FPS</option>
                                             <option value="120">120 FPS</option>
                                         </select>
                                     </div>
-                                    <div class="flex items-center justify-between">
+                                    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                                         <div class="flex-1">
                                             <label class="text-sm text-gray-300">Resolution</label>
                                             <p class="text-xs text-gray-500">Output video resolution</p>
                                         </div>
-                                        <select id="setting-resolution" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm">
+                                        <select id="setting-resolution" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-auto">
                                             <option value="1080p" selected>1080p (1920×1080)</option>
                                             <option value="1440p">1440p (2560×1440)</option>
                                             <option value="4k">4K (3840×2160)</option>
@@ -508,22 +527,22 @@
                                             <option value="4k-portrait">4K Portrait (2160×3840)</option>
                                         </select>
                                     </div>
-                                    <div class="flex items-center justify-between">
+                                    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                                         <div class="flex-1">
                                             <label class="text-sm text-gray-300">Audio Track</label>
                                             <p class="text-xs text-gray-500">Select audio to include in video</p>
                                         </div>
-                                        <select id="setting-audio-source" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm min-w-[200px]">
+                                        <select id="setting-audio-source" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:min-w-[200px] md:w-auto">
                                             <option value="">Don't Include Audio</option>
                                             <!-- Audio files will be populated dynamically -->
                                         </select>
                                     </div>
-                                    <div class="flex items-center justify-between">
+                                    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                                         <div class="flex-1">
                                             <label class="text-sm text-gray-300">Note Fall Speed</label>
                                             <p class="text-xs text-gray-500">How fast notes fall (1.0x = default)</p>
                                         </div>
-                                        <select id="setting-fall-speed" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm">
+                                        <select id="setting-fall-speed" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-auto">
                                             <option value="0.5">0.5x (Slow)</option>
                                             <option value="0.75">0.75x</option>
                                             <option value="1.0" selected>1.0x (Default)</option>
@@ -571,19 +590,19 @@
                     
                     <!-- Console/Logs -->
                     <section id="console-section" class="bg-larsnet-dark rounded-lg border border-gray-700 hidden">
-                        <div class="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-800 transition-smooth" id="console-header">
-                            <div class="flex items-center">
-                                <i id="console-toggle-icon" class="fas fa-chevron-right text-gray-400 mr-3 transition-smooth"></i>
-                                <h3 class="text-lg font-semibold">Console</h3>
-                                <span id="console-badge" class="ml-3 text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded">0 logs</span>
+                        <div class="flex items-center justify-between p-3 md:p-4 cursor-pointer hover:bg-gray-800 transition-smooth" id="console-header">
+                            <div class="flex items-center min-w-0">
+                                <i id="console-toggle-icon" class="fas fa-chevron-right text-gray-400 mr-2 md:mr-3 transition-smooth flex-shrink-0"></i>
+                                <h3 class="text-base md:text-lg font-semibold">Console</h3>
+                                <span id="console-badge" class="ml-2 md:ml-3 text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded whitespace-nowrap">0 logs</span>
                             </div>
-                            <button id="clear-console-btn" class="text-sm text-gray-400 hover:text-gray-200 transition-smooth" onclick="event.stopPropagation();">
+                            <button id="clear-console-btn" class="text-xs md:text-sm text-gray-400 hover:text-gray-200 transition-smooth flex-shrink-0 ml-2" onclick="event.stopPropagation();">
                                 <i class="fas fa-trash-alt mr-1"></i>
-                                Clear
+                                <span class="hidden md:inline">Clear</span>
                             </button>
                         </div>
                         <div id="console-output-container" class="overflow-hidden transition-smooth" style="max-height: 0;">
-                            <div id="console-output" class="bg-gray-900 p-4 console-font text-sm h-64 overflow-y-auto border-t border-gray-700">
+                            <div id="console-output" class="bg-gray-900 p-3 md:p-4 console-font text-xs md:text-sm h-48 md:h-64 overflow-y-auto border-t border-gray-700">
                                 <div class="text-gray-500">Console initialized...</div>
                             </div>
                         </div>
@@ -596,26 +615,26 @@
     </div>
     
     <!-- Toast Notification Container -->
-    <div id="toast-container" class="fixed top-4 right-4 z-50 space-y-2">
+    <div id="toast-container" class="fixed top-2 right-2 md:top-4 md:right-4 z-50 space-y-2 max-w-[calc(100vw-1rem)] md:max-w-md">
         <!-- Toasts will be inserted here dynamically -->
     </div>
     
     <!-- Advanced MIDI Settings Modal -->
-    <div id="advanced-midi-modal" class="fixed inset-0 bg-black bg-opacity-75 z-50 hidden flex items-center justify-center p-4">
-        <div class="bg-larsnet-dark rounded-lg border border-gray-700 max-w-6xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+    <div id="advanced-midi-modal" class="fixed inset-0 bg-black bg-opacity-75 z-50 hidden flex items-center justify-center p-2 md:p-4">
+        <div class="bg-larsnet-dark rounded-lg border border-gray-700 max-w-6xl w-full max-h-[95vh] md:max-h-[90vh] overflow-hidden flex flex-col">
             <!-- Modal Header -->
-            <div class="flex items-center justify-between p-6 border-b border-gray-700">
-                <div>
-                    <h2 class="text-2xl font-bold">Advanced MIDI Settings</h2>
-                    <p class="text-sm text-gray-400 mt-1">Fine-tune per-stem detection and filtering</p>
+            <div class="flex items-center justify-between p-4 md:p-6 border-b border-gray-700">
+                <div class="flex-1 min-w-0 mr-3">
+                    <h2 class="text-lg md:text-2xl font-bold truncate">Advanced MIDI Settings</h2>
+                    <p class="text-xs md:text-sm text-gray-400 mt-1">Fine-tune per-stem detection and filtering</p>
                 </div>
-                <button id="close-advanced-midi" class="text-gray-400 hover:text-gray-200 transition-smooth">
-                    <i class="fas fa-times text-2xl"></i>
+                <button id="close-advanced-midi" class="text-gray-400 hover:text-gray-200 transition-smooth flex-shrink-0">
+                    <i class="fas fa-times text-xl md:text-2xl"></i>
                 </button>
             </div>
             
             <!-- Modal Body -->
-            <div class="flex-1 overflow-y-auto p-6">
+            <div class="flex-1 overflow-y-auto p-4 md:p-6">
                 <div id="advanced-midi-content">
                     <div class="flex items-center justify-center py-12">
                         <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-larsnet-primary"></div>
@@ -625,16 +644,16 @@
             </div>
             
             <!-- Modal Footer -->
-            <div class="flex items-center justify-between p-6 border-t border-gray-700">
-                <button id="reset-advanced-midi" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition-smooth">
+            <div class="flex flex-col md:flex-row items-stretch md:items-center justify-between p-4 md:p-6 border-t border-gray-700 gap-3">
+                <button id="reset-advanced-midi" class="px-3 md:px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm md:text-base rounded transition-smooth">
                     <i class="fas fa-undo mr-2"></i>Reset to Defaults
                 </button>
-                <div class="flex gap-3">
-                    <button id="cancel-advanced-midi" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded transition-smooth">
+                <div class="flex gap-2 md:gap-3">
+                    <button id="cancel-advanced-midi" class="flex-1 md:flex-none px-3 md:px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm md:text-base rounded transition-smooth">
                         Cancel
                     </button>
-                    <button id="save-advanced-midi" class="px-6 py-2 bg-larsnet-primary hover:bg-blue-600 text-white font-semibold rounded transition-smooth">
-                        <i class="fas fa-save mr-2"></i>Save Changes
+                    <button id="save-advanced-midi" class="flex-1 md:flex-none px-4 md:px-6 py-2 bg-larsnet-primary hover:bg-blue-600 text-white text-sm md:text-base font-semibold rounded transition-smooth">
+                        <i class="fas fa-save mr-2"></i>Save
                     </button>
                 </div>
             </div>

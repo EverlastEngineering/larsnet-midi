@@ -30,33 +30,35 @@ async function initializeApp() {
     // Setup upload zone
     setupUploadZone();
     
+    // Open sidebar on mobile by default
+    if (window.innerWidth < 768) {
+        const projectsSidebar = document.getElementById('projects-sidebar');
+        const mobileOverlay = document.getElementById('mobile-overlay');
+        if (projectsSidebar) {
+            projectsSidebar.classList.remove('mobile-sidebar-closed');
+            projectsSidebar.classList.add('mobile-sidebar-open');
+        }
+        if (mobileOverlay) {
+            mobileOverlay.classList.remove('hidden');
+        }
+    }
+    
     console.log('LarsNet Web UI ready');
     addConsoleLog('Application initialized', 'success');
 }
 
 /**
- * Check API health and update status indicator
+ * Check API health and show error if disconnected
  */
 async function checkHealth() {
-    const statusEl = document.getElementById('health-status');
-    
     try {
         const healthy = await api.checkHealth();
         
-        if (healthy) {
-            statusEl.innerHTML = `
-                <div class="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></div>
-                <span class="text-sm text-gray-400">Connected</span>
-            `;
-        } else {
+        if (!healthy) {
             throw new Error('API returned unhealthy status');
         }
     } catch (error) {
         console.error('Health check failed:', error);
-        statusEl.innerHTML = `
-            <div class="w-2 h-2 bg-red-500 rounded-full mr-2"></div>
-            <span class="text-sm text-red-400">Disconnected</span>
-        `;
         showToast('Cannot connect to API server', 'error');
     }
 }
@@ -106,6 +108,41 @@ function setupEventListeners() {
             handleFileUpload(e.target.files[0]);
         }
     });
+    
+    // Mobile projects toggle
+    const mobileProjectsToggle = document.getElementById('mobile-projects-toggle');
+    const mobileSidebarClose = document.getElementById('mobile-sidebar-close');
+    const projectsSidebar = document.getElementById('projects-sidebar');
+    const mobileOverlay = document.getElementById('mobile-overlay');
+    
+    function openMobileSidebar() {
+        projectsSidebar.classList.remove('mobile-sidebar-closed');
+        projectsSidebar.classList.add('mobile-sidebar-open');
+        if (mobileOverlay) {
+            mobileOverlay.classList.remove('hidden');
+        }
+    }
+    
+    function closeMobileSidebar() {
+        projectsSidebar.classList.remove('mobile-sidebar-open');
+        projectsSidebar.classList.add('mobile-sidebar-closed');
+        if (mobileOverlay) {
+            mobileOverlay.classList.add('hidden');
+        }
+    }
+    
+    if (mobileProjectsToggle) {
+        mobileProjectsToggle.addEventListener('click', openMobileSidebar);
+    }
+    
+    if (mobileSidebarClose) {
+        mobileSidebarClose.addEventListener('click', closeMobileSidebar);
+    }
+    
+    // Close sidebar when clicking overlay
+    if (mobileOverlay) {
+        mobileOverlay.addEventListener('click', closeMobileSidebar);
+    }
 }
 
 /**

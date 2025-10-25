@@ -99,10 +99,29 @@ async function selectProject(projectNumber) {
         updateOperationButtons();
         updateDownloads();
         
-        // Show project section and sidebar upload, hide main upload
+        // Show project section, hide main upload and console
         document.getElementById('project-section').classList.remove('hidden');
         document.getElementById('upload-section').classList.add('hidden');
-        document.getElementById('sidebar-upload-section').classList.remove('hidden');
+        document.getElementById('console-section').classList.remove('hidden');
+        
+        // Close mobile sidebar after selecting project
+        if (window.innerWidth < 768) {
+            const projectsSidebar = document.getElementById('projects-sidebar');
+            const mobileOverlay = document.getElementById('mobile-overlay');
+            if (projectsSidebar) {
+                projectsSidebar.classList.remove('mobile-sidebar-open');
+                projectsSidebar.classList.add('mobile-sidebar-closed');
+            }
+            if (mobileOverlay) {
+                mobileOverlay.classList.add('hidden');
+            }
+        }
+        
+        // Scroll to top of main content area
+        const mainContent = document.querySelector('main .flex-1.overflow-y-auto');
+        if (mainContent) {
+            mainContent.scrollTop = 0;
+        }
         
         // Load active jobs for this project
         loadProjectJobs(projectNumber);
@@ -124,11 +143,12 @@ function updateProjectHeader() {
     const detailsToggle = document.getElementById('project-details-toggle');
     const deleteBtn = document.getElementById('delete-project-btn');
     
+    const subtitleEl = document.getElementById('current-project-subtitle');
+    
     if (!currentProject) {
         document.getElementById('current-project-name').textContent = 'Select a project or upload new audio';
-        document.getElementById('current-project-subtitle').textContent = 'Drag and drop an audio file to get started';
+        subtitleEl.classList.add('hidden');
         detailsToggle.classList.add('hidden');
-        deleteBtn.classList.add('hidden');
         return;
     }
     
@@ -140,12 +160,11 @@ function updateProjectHeader() {
     if (currentProject.files.midi.length > 0) statuses.push('MIDI generated');
     if (currentProject.files.video.length > 0) statuses.push('video rendered');
     
-    document.getElementById('current-project-subtitle').textContent = 
-        statuses.length > 0 ? statuses.join(' • ') : 'Ready to process';
+    subtitleEl.textContent = statuses.length > 0 ? statuses.join(' • ') : 'Ready to process';
+    subtitleEl.classList.remove('hidden');
     
-    // Show details toggle and delete button
+    // Show details toggle (delete button is now inside the details dropdown)
     detailsToggle.classList.remove('hidden');
-    deleteBtn.classList.remove('hidden');
     
     // Update project details
     const audioFile = currentProject.files.audio[0] || 'Unknown';
@@ -312,7 +331,7 @@ function updateDownloads() {
                         <i class="fas ${dl.icon} mr-2"></i>
                         ${dl.label}
                     </div>
-                    <span class="text-xs opacity-75">${dl.count}</span>
+                    <i class="fas fa-download"></i>
                 </button>
             `;
         } else if (dl.type === 'video') {
@@ -510,10 +529,10 @@ async function confirmDeleteProject() {
         currentProject = null;
         window.currentProject = null;
         
-        // Hide project section
+        // Hide project section and console
         document.getElementById('project-section').classList.add('hidden');
-        document.getElementById('upload-section').classList.remove('hidden');
-        document.getElementById('sidebar-upload-section').classList.add('hidden');
+        document.getElementById('upload-section').classList.add('hidden');
+        document.getElementById('console-section').classList.add('hidden');
         
         // Reload projects list
         await loadProjects();
