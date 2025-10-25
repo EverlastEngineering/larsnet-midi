@@ -1,5 +1,23 @@
 # Bug Tracking
 
+## Bug: Docker container crash during EQ cleanup on large audio files
+- **Status**: Fixed
+- **Priority**: High
+- **Description**: EQ cleanup with biquad filters hangs/crashes on large audio buffers (13.7M samples, ~5min stereo audio)
+- **Steps to Reproduce**: 
+  1. Run comparison with EQ enabled on long audio file
+  2. Process reaches "Applying highpass filter at 30.0 Hz" for kick drum
+  3. Container stops with exit code 137 (SIGKILL - out of memory)
+- **Expected Behavior**: EQ filters should process audio successfully regardless of file length
+- **Actual Behavior**: torchaudio biquad filters hang or exhaust memory on large buffers with low cutoff frequencies
+- **Root Cause**: Biquad IIR filters have numerical stability and memory issues with:
+  - Very low cutoff frequencies (30 Hz highpass)
+  - Large audio buffers (>10M samples)
+  - CPU processing without chunking
+- **Solution**: Process audio in 30-second non-overlapping chunks to limit memory usage and improve filter stability
+- **Fixed in Commit**: (next commit)
+- **Tests Added**: test_eq_chunking.py with 8 comprehensive tests covering edge cases and large buffers
+
 ## Bug: Upload file box appears in project window
 - **Status**: Fixed
 - **Priority**: Medium

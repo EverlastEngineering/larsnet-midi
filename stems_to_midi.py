@@ -84,7 +84,7 @@ def stems_to_midi_for_project(
     
     # Load configuration
     try:
-        import yaml
+        import yaml # type: ignore
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
     except Exception as e:

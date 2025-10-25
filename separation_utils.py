@@ -24,42 +24,112 @@ def apply_frequency_cleanup(
     waveform: torch.Tensor, 
     sr: int, 
     stem_type: str,
-    eq_config: Optional[Dict] = None
+    eq_config: Optional[Dict] = None,
+    chunk_size: int = 44100 * 30  # 30 seconds per chunk
 ) -> torch.Tensor:
     """
     Apply frequency-specific cleanup to reduce bleed between stems.
+    
+    Processes audio in chunks to avoid memory issues with biquad filters on large buffers.
     
     Args:
         waveform: Audio tensor (channels, samples)
         sr: Sample rate
         stem_type: Type of stem ('kick', 'snare', 'toms', 'hihat', 'cymbals')
         eq_config: EQ configuration dict (if None, will load from eq.yaml)
+        chunk_size: Number of samples to process at once (default: 30s)
     
     Returns:
         Processed waveform
     """
-    if eq_config is None:
-        eq_config = load_eq_config()
+    try:
+        if eq_config is None:
+            eq_config = load_eq_config()
+        
+        # Ensure we're working with the right shape
+        if waveform.dim() == 1:
+            waveform = waveform.unsqueeze(0)
+        
+        # Get stem-specific EQ settings
+        if stem_type not in eq_config:
+            print(f"  Warning: No EQ config for {stem_type}, skipping")
+            return waveform
+        
+        stem_eq = eq_config[stem_type]
+        
+        # Validate filter parameters
+        if 'highpass' in stem_eq:
+            cutoff = stem_eq['highpass']
+            if cutoff <= 0 or cutoff >= sr / 2:
+                raise ValueError(f"Invalid highpass cutoff {cutoff} Hz (must be 0 < cutoff < {sr/2} Hz)")
+        
+        if 'lowpass' in stem_eq:
+            cutoff = stem_eq['lowpass']
+            if cutoff <= 0 or cutoff >= sr / 2:
+                raise ValueError(f"Invalid lowpass cutoff {cutoff} Hz (must be 0 < cutoff < {sr/2} Hz)")
+        
+        # Process in chunks to avoid memory issues with large buffers
+        channels, num_samples = waveform.shape
+        
+        if num_samples <= chunk_size:
+            # Small enough to process in one go
+            return _apply_filters_to_chunk(waveform, sr, stem_type, stem_eq)
+        
+        # Process in chunks - simple non-overlapping approach to maintain exact length
+        processed_chunks = []
+        
+        num_chunks = (num_samples + chunk_size - 1) // chunk_size
+        print(f"  Processing {stem_type} in {num_chunks} chunks ({num_samples} samples)")
+        
+        for i in range(0, num_samples, chunk_size):
+            end = min(i + chunk_size, num_samples)
+            chunk = waveform[:, i:end]
+            processed_chunk = _apply_filters_to_chunk(chunk, sr, stem_type, stem_eq)
+            processed_chunks.append(processed_chunk)
+        
+        result = torch.cat(processed_chunks, dim=1)
+        
+        # Verify output length matches input length
+        assert result.shape[1] == num_samples, f"Output length mismatch: {result.shape[1]} != {num_samples}"
+        
+        return result
+        
+    except Exception as e:
+        print(f"  ERROR in apply_frequency_cleanup for {stem_type}: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+
+def _apply_filters_to_chunk(
+    chunk: torch.Tensor,
+    sr: int,
+    stem_type: str,
+    stem_eq: Dict
+) -> torch.Tensor:
+    """
+    Apply highpass/lowpass filters to a single audio chunk.
     
-    # Ensure we're working with the right shape
-    if waveform.dim() == 1:
-        waveform = waveform.unsqueeze(0)
+    Args:
+        chunk: Audio chunk (channels, samples)
+        sr: Sample rate
+        stem_type: Stem type for logging
+        stem_eq: EQ config dict with 'highpass' and/or 'lowpass' keys
     
-    # Get stem-specific EQ settings
-    if stem_type not in eq_config:
-        return waveform
-    
-    stem_eq = eq_config[stem_type]
-    
+    Returns:
+        Filtered chunk
+    """
     # Apply high-pass filter if configured
     if 'highpass' in stem_eq:
-        waveform = F.highpass_biquad(waveform, sr, stem_eq['highpass'])
+        cutoff = stem_eq['highpass']
+        chunk = F.highpass_biquad(chunk, sr, cutoff)
     
     # Apply low-pass filter if configured
     if 'lowpass' in stem_eq:
-        waveform = F.lowpass_biquad(waveform, sr, stem_eq['lowpass'])
+        cutoff = stem_eq['lowpass']
+        chunk = F.lowpass_biquad(chunk, sr, cutoff)
     
-    return waveform
+    return chunk
 
 
 def process_stems(
@@ -117,26 +187,33 @@ def process_stems(
         stems = larsnet(mixture)
         print(f"Status Update: Saving Stems...")
         for stem, waveform in stems.items():
-            # Apply frequency cleanup if enabled
-            if apply_eq:
+            try:
+                # Apply frequency cleanup if enabled
+                if apply_eq:
+                    if verbose:
+                        print(f"  Applying EQ cleanup to {stem}...")
+                    waveform = apply_frequency_cleanup(waveform, larsnet.sr, stem, eq_config)
+                
+                # Save
+                save_path = output_dir.joinpath(mixture.stem, f'{mixture.stem}-{stem}.wav')
+                save_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Convert to numpy for saving
+                waveform_np = waveform.cpu().numpy()
+                if waveform_np.ndim == 1:
+                    waveform_np = waveform_np.reshape(-1, 1)
+                else:
+                    waveform_np = waveform_np.T
+                
+                sf.write(save_path, waveform_np, larsnet.sr)
                 if verbose:
-                    print(f"  Applying EQ cleanup to {stem}...")
-                waveform = apply_frequency_cleanup(waveform, larsnet.sr, stem, eq_config)
-            
-            # Save
-            save_path = output_dir.joinpath(mixture.stem, f'{mixture.stem}-{stem}.wav')
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Convert to numpy for saving
-            waveform_np = waveform.cpu().numpy()
-            if waveform_np.ndim == 1:
-                waveform_np = waveform_np.reshape(-1, 1)
-            else:
-                waveform_np = waveform_np.T
-            
-            sf.write(save_path, waveform_np, larsnet.sr)
-            if verbose:
-                print(f"  Saved: {save_path}")
+                    print(f"  Saved: {save_path}")
+                    
+            except Exception as e:
+                print(f"ERROR processing {stem}: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+                raise
 
 
 def process_stems_for_project(

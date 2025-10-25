@@ -95,10 +95,25 @@ def create_app(config_name=None):
     @app.errorhandler(500)
     def internal_error(error):
         """Handle 500 errors"""
+        import traceback
         app.logger.error(f'Internal error: {error}')
+        app.logger.error(f'Traceback: {traceback.format_exc()}')
         return {
             'error': 'Internal server error',
-            'message': 'An unexpected error occurred. Please check the logs.'
+            'message': 'An unexpected error occurred. Please check the logs.',
+            'details': str(error) if app.config['DEBUG'] else None
+        }, 500
+    
+    @app.errorhandler(Exception)
+    def handle_exception(error):
+        """Handle all uncaught exceptions"""
+        import traceback
+        app.logger.error(f'Uncaught exception: {type(error).__name__}: {error}')
+        app.logger.error(f'Traceback: {traceback.format_exc()}')
+        return {
+            'error': 'Internal server error',
+            'message': str(error) if app.config['DEBUG'] else 'An unexpected error occurred',
+            'type': type(error).__name__ if app.config['DEBUG'] else None
         }, 500
     
     # Cleanup on shutdown
