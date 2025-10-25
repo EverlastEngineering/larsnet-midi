@@ -57,6 +57,12 @@ python separate.py
 ```
 Separates drums into individual stems (kick, snare, hi-hat, cymbals, toms) using deep learning. The first time the tool encounters a specific song, it  will create a new project folder inside `user_files`, and move your track there.
 
+**Having trouble with separation quality?** Use the comparison tool to test multiple configurations:
+```bash
+python compare_separation_configs.py
+```
+See [Separation Comparison Guide](SEPARATION_COMPARISON_GUIDE.md) for details.
+
 ### 2. Clean up bleed between stems (optional)
 ```bash
 python sidechain_cleanup.py
@@ -90,6 +96,7 @@ Creates Rock Band-style falling notes visualization in an MP4 video. I view this
 For deeper details on each part of the pipeline, see:
 
 - [LarsNet research & models](LARSNET.md)
+- [Separation comparison guide (test multiple configs)](SEPARATION_COMPARISON_GUIDE.md)
 - [Sidechain cleanup guide (reduce bleed)](SIDECHAIN_CLEANUP_GUIDE.md)
 - [Stems → MIDI guide](STEMS_TO_MIDI_GUIDE.md)
 - [MIDI visualization (Rock Band-style)](MIDI_VISUALIZATION_GUIDE.md)

@@ -1,0 +1,53 @@
+# Example custom configurations for compare_separation_configs.py
+#
+# Copy this file and customize it to test specific parameter combinations
+# that work best for your audio.
+#
+# Usage:
+#   python compare_separation_configs.py --config my_configs.yaml
+
+configs:
+  # Baseline - no processing
+  - name: "baseline"
+    wiener: null
+    eq: false
+
+  # Wiener filter variations
+  - name: "wiener-2.0"
+    wiener: 2.0
+    eq: false
+  
+  - name: "wiener-1.5"
+    wiener: 1.5
+    eq: false
+  
+  - name: "wiener-1.0"
+    wiener: 1.0
+    eq: false
+  
+  - name: "wiener-0.5"
+    wiener: 0.5
+    eq: false
+
+  # EQ only
+  - name: "eq"
+    wiener: null
+    eq: true
+
+  # Combined approaches
+  - name: "wiener-2.0_eq"
+    wiener: 2.0
+    eq: true
+  
+  - name: "wiener-1.5_eq"
+    wiener: 1.5
+    eq: true
+  
+  - name: "wiener-1.0_eq"
+    wiener: 1.0
+    eq: true
+
+  # Gentle processing
+  - name: "wiener-0.3_eq"
+    wiener: 0.3
+    eq: true
