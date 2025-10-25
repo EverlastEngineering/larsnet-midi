@@ -130,7 +130,8 @@ def get_project(project_number):
             'stems': [],
             'cleaned': [],
             'midi': [],
-            'video': []
+            'video': [],
+            'comparison': {}
         }
         
         # Find audio files in root
@@ -156,6 +157,27 @@ def get_project(project_number):
         video_dir = project_path / 'video'
         if video_dir.exists():
             files['video'] = [f.name for f in video_dir.glob('*.mp4')]
+        
+        # Find comparison configurations
+        comparison_dir = project_path / 'for_comparison'
+        if comparison_dir.exists() and comparison_dir.is_dir():
+            for config_dir in comparison_dir.iterdir():
+                if config_dir.is_dir():
+                    # Find audio file name (first one found in project root)
+                    audio_name = None
+                    for ext in ['wav', 'mp3', 'flac', 'aiff', 'aif']:
+                        audio_files = list(project_path.glob(f'*.{ext}'))
+                        if audio_files:
+                            audio_name = audio_files[0].stem
+                            break
+                    
+                    # Look for stems in the comparison config directory
+                    if audio_name:
+                        audio_subdir = config_dir / audio_name
+                        if audio_subdir.exists():
+                            comparison_files = [f.name for f in audio_subdir.glob('*.wav')]
+                            if comparison_files:
+                                files['comparison'][config_dir.name] = comparison_files
         
         project_data = {
             **project,

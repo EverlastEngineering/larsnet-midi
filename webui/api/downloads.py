@@ -189,3 +189,70 @@ def download_all_files(project_number, file_type):
             'error': 'Download failed',
             'message': str(e)
         }), 500
+
+
+@downloads_bp.route('/projects/<int:project_number>/files/<path:file_path>', methods=['GET'])
+def get_file_by_path(project_number, file_path):
+    """
+    GET /api/projects/:project_number/files/:file_path
+    
+    Access a file by relative path within project directory.
+    Used for comparison files and other custom paths.
+    
+    Args:
+        project_number: Project number
+        file_path: Relative path within project (e.g., for_comparison/baseline/song/kick.wav)
+        
+    Returns:
+        200: File streaming
+        404: Project or file not found
+        400: Invalid path
+    """
+    try:
+        # Get project
+        project = get_project_by_number(project_number)
+        if not project:
+            return jsonify({
+                'error': 'Project not found',
+                'message': f'Project #{project_number} does not exist'
+            }), 404
+        
+        # Build full file path
+        project_path = Path(project['path'])
+        full_path = project_path / file_path
+        
+        # Security check: ensure file is within project directory
+        if not str(full_path.resolve()).startswith(str(project_path.resolve())):
+            return jsonify({
+                'error': 'Invalid file path',
+                'message': 'File path is outside project directory'
+            }), 400
+        
+        # Check if file exists
+        if not full_path.exists():
+            return jsonify({
+                'error': 'File not found',
+                'message': f'File not found: {file_path}'
+            }), 404
+        
+        # Stream audio files
+        if full_path.suffix.lower() in ['.wav', '.mp3', '.flac', '.aiff', '.aif']:
+            return send_file(
+                full_path,
+                mimetype='audio/wav' if full_path.suffix == '.wav' else 'audio/mpeg',
+                as_attachment=False,
+                conditional=True  # Enable range request support
+            )
+        else:
+            # Download other types
+            return send_file(
+                full_path,
+                as_attachment=True,
+                download_name=full_path.name
+            )
+        
+    except Exception as e:
+        return jsonify({
+            'error': 'File access failed',
+            'message': str(e)
+        }), 500

@@ -35,6 +35,25 @@ def run_separate(project_number: int, device: str = 'cpu', wiener: float = None,
     return {'project_number': project_number, 'stems_created': True}
 
 
+def run_comparison(project_number: int, device: str = 'cpu'):
+    """
+    Execute separation comparison with multiple configurations.
+    
+    This is the actual work function that runs in the job queue.
+    Tests various Wiener/EQ combinations and saves to for_comparison/ directory.
+    """
+    from compare_separation_configs import process_comparison, DEFAULT_CONFIGS
+    from project_manager import get_project_by_number, USER_FILES_DIR
+    
+    project = get_project_by_number(project_number, USER_FILES_DIR)
+    if project is None:
+        raise ValueError(f'Project {project_number} not found')
+    
+    process_comparison(project, DEFAULT_CONFIGS, device, cleanup=False)
+    
+    return {'project_number': project_number, 'comparison_completed': True}
+
+
 def run_cleanup(project_number: int, threshold_db: float = -30.0, ratio: float = 10.0,
                 attack_ms: float = 1.0, release_ms: float = 100.0):
     """
@@ -268,6 +287,143 @@ def cleanup():
     except Exception as e:
         return jsonify({
             'error': 'Failed to start cleanup',
+            'message': str(e)
+        }), 500
+
+
+@operations_bp.route('/compare', methods=['POST'])
+def compare():
+    """
+    POST /api/compare
+    
+    Start separation comparison with multiple configurations.
+    Tests various Wiener/EQ combinations and saves to for_comparison/ directory.
+    
+    Request body (JSON):
+        {
+            "project_number": 1,
+            "device": "cpu"        # optional: "cpu" or "cuda"
+        }
+        
+    Returns:
+        202: Job created and queued
+        400: Invalid request
+        404: Project not found
+        500: Internal error
+        
+    Response format:
+        {
+            "message": "Comparison job started",
+            "job_id": "uuid-here"
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'project_number' not in data:
+            return jsonify({
+                'error': 'Invalid request',
+                'message': 'Request body must include project_number'
+            }), 400
+        
+        project_number = data['project_number']
+        
+        # Validate project exists
+        project = get_project_by_number(project_number, USER_FILES_DIR)
+        if project is None:
+            return jsonify({
+                'error': 'Project not found',
+                'message': f'No project with number {project_number}'
+            }), 404
+        
+        # Extract optional parameters
+        device = data.get('device', 'cpu')
+        
+        # Validate device
+        if device not in ['cpu', 'cuda']:
+            return jsonify({
+                'error': 'Invalid device',
+                'message': 'Device must be "cpu" or "cuda"'
+            }), 400
+        
+        # Submit job
+        job_queue = get_job_queue()
+        job_id = job_queue.submit(
+            operation='compare',
+            func=run_comparison,
+            project_id=project_number,
+            project_number=project_number,
+            device=device
+        )
+        
+        return jsonify({
+            'message': 'Comparison job started',
+            'job_id': job_id
+        }), 202
+        
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to start comparison',
+            'message': str(e)
+        }), 500
+
+
+@operations_bp.route('/delete-comparison', methods=['POST'])
+def delete_comparison():
+    """
+    POST /api/delete-comparison
+    
+    Delete the for_comparison directory from a project.
+    
+    Request body (JSON):
+        {
+            "project_number": 1
+        }
+        
+    Returns:
+        200: Comparison folder deleted
+        400: Invalid request
+        404: Project or comparison folder not found
+        500: Internal error
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'project_number' not in data:
+            return jsonify({
+                'error': 'Invalid request',
+                'message': 'Request body must include project_number'
+            }), 400
+        
+        project_number = data['project_number']
+        
+        # Validate project exists
+        project = get_project_by_number(project_number, USER_FILES_DIR)
+        if project is None:
+            return jsonify({
+                'error': 'Project not found',
+                'message': f'No project with number {project_number}'
+            }), 404
+        
+        # Check if comparison folder exists
+        comparison_dir = Path(project['path']) / 'for_comparison'
+        if not comparison_dir.exists():
+            return jsonify({
+                'error': 'Comparison folder not found',
+                'message': 'No comparison folder exists for this project'
+            }), 404
+        
+        # Delete the comparison directory
+        import shutil
+        shutil.rmtree(comparison_dir)
+        
+        return jsonify({
+            'message': 'Comparison folder deleted successfully'
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to delete comparison folder',
             'message': str(e)
         }), 500
 

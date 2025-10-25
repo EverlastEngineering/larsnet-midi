@@ -282,6 +282,18 @@ function updateDownloads() {
         });
     }
     
+    // Comparison configurations
+    if (files.comparison && Object.keys(files.comparison).length > 0) {
+        downloads.push({
+            label: 'Comparison Results',
+            icon: 'fa-flask',
+            color: 'cyan',
+            type: 'comparison',
+            configs: files.comparison,
+            hasComparison: true
+        });
+    }
+    
     if (downloads.length === 0) {
         container.innerHTML = '<p class="text-sm text-gray-500 col-span-full text-center py-4">No files available yet</p>';
         return;
@@ -386,6 +398,67 @@ function updateDownloads() {
                     </div>
                 </div>
             `;
+        } else if (dl.type === 'comparison') {
+            // Comparison configurations - show all configs with their files
+            const configCount = Object.keys(dl.configs).length;
+            const configButtons = Object.entries(dl.configs).map(([configName, configFiles]) => {
+                const sortedFiles = sortDrumFiles(configFiles);
+                const fileButtons = sortedFiles.map(file => {
+                    const drumName = file.split('-').pop().replace('.wav', '');
+                    const drumIcon = getDrumIcon(drumName);
+                    return `
+                        <div class="flex items-center gap-1">
+                            <button class="text-xs px-2 py-1.5 bg-gray-700 hover:bg-gray-600 rounded flex items-center gap-1 transition-smooth flex-1"
+                                    onclick="event.stopPropagation(); playComparisonAudio('${configName}', '${file}')" 
+                                    title="Play ${drumName}">
+                                <i class="fas ${drumIcon} text-cyan-400 text-xs"></i>
+                                <span class="flex-1 text-left truncate text-xs">${drumName}</span>
+                                <i class="fas fa-play text-xs opacity-60"></i>
+                            </button>
+                        </div>
+                    `;
+                }).join('');
+                
+                return `
+                    <div class="bg-gray-900 rounded p-2 mb-2">
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="font-mono text-xs text-cyan-400 font-semibold">${configName}</div>
+                            <button class="text-xs px-2 py-1 bg-cyan-700 hover:bg-cyan-600 rounded transition-smooth"
+                                    onclick="downloadComparisonConfig('${configName}')"
+                                    title="Download all files for ${configName}">
+                                <i class="fas fa-download"></i>
+                            </button>
+                        </div>
+                        <div class="grid grid-cols-3 gap-1">
+                            ${fileButtons}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+            
+            return `
+                <div class="bg-gray-800 rounded-lg overflow-hidden border-2 border-${dl.color}-500 col-span-full">
+                    <div class="glassy-btn w-full p-4 bg-${dl.color}-600 text-white flex items-center justify-between">
+                        <div class="flex items-center">
+                            <i class="fas ${dl.icon} text-lg mr-3"></i>
+                            <div class="text-left">
+                                <div class="font-semibold">${dl.label}</div>
+                                <div class="text-xs font-normal opacity-75">${configCount} configurations tested</div>
+                            </div>
+                        </div>
+                        <button class="px-3 py-1.5 bg-red-600 hover:bg-red-700 rounded text-xs transition-smooth"
+                                onclick="deleteComparisonFolder()"
+                                title="Delete entire comparison folder">
+                            <i class="fas fa-trash mr-1"></i>
+                            Delete All
+                        </button>
+                    </div>
+                    <div class="bg-gray-800 p-3 border-t border-gray-700 max-h-96 overflow-y-auto">
+                        <div class="text-xs text-gray-400 mb-3 px-1 font-medium">Compare different Wiener/EQ configurations:</div>
+                        ${configButtons}
+                    </div>
+                </div>
+            `;
         }
     }).join('');
     
@@ -449,6 +522,102 @@ function downloadIndividualFile(fileType, filename) {
         console.error('Download failed:', error);
         showToast('Download failed: ' + error.message, 'error');
     }
+}
+
+/**
+ * Play comparison audio file
+ */
+function playComparisonAudio(configName, filename) {
+    if (!currentProject) return;
+    
+    try {
+        // Get first audio file name from project
+        const audioName = currentProject.files.audio[0]?.split('.')[0];
+        if (!audioName) {
+            showToast('Cannot determine audio file name', 'error');
+            return;
+        }
+        
+        // Build path: for_comparison/configName/audioName/filename
+        const path = `for_comparison/${configName}/${audioName}/${filename}`;
+        playAudioFromPath(path);
+        
+    } catch (error) {
+        console.error('Playback failed:', error);
+        showToast('Playback failed: ' + error.message, 'error');
+    }
+}
+
+/**
+ * Download all files from a comparison configuration
+ */
+function downloadComparisonConfig(configName) {
+    if (!currentProject) return;
+    
+    try {
+        showToast(`Downloading ${configName} configuration...`, 'info');
+        
+        // Get first audio file name from project
+        const audioName = currentProject.files.audio[0]?.split('.')[0];
+        if (!audioName) {
+            showToast('Cannot determine audio file name', 'error');
+            return;
+        }
+        
+        // Download as ZIP - the API will handle packaging
+        const url = `/api/projects/${currentProject.number}/download/for_comparison/${configName}/${audioName}`;
+        window.location.href = url;
+        
+    } catch (error) {
+        console.error('Download failed:', error);
+        showToast('Download failed: ' + error.message, 'error');
+    }
+}
+
+/**
+ * Delete entire comparison folder
+ */
+async function deleteComparisonFolder() {
+    if (!currentProject) return;
+    
+    if (!confirm('Delete all comparison results? This cannot be undone.')) {
+        return;
+    }
+    
+    try {
+        await api.deleteComparison(currentProject.number);
+        showToast('Comparison folder deleted', 'success');
+        
+        // Reload project to update UI
+        await loadProject(currentProject.number);
+        
+    } catch (error) {
+        console.error('Delete failed:', error);
+        showToast('Delete failed: ' + error.message, 'error');
+    }
+}
+
+/**
+ * Play audio from custom path (for comparison files)
+ */
+function playAudioFromPath(relativePath) {
+    if (!currentProject) return;
+    
+    const url = `/api/projects/${currentProject.number}/files/${relativePath}`;
+    
+    // Use existing audio player or create new one
+    let audioPlayer = document.getElementById('audio-player');
+    if (!audioPlayer) {
+        audioPlayer = new Audio();
+        audioPlayer.id = 'audio-player';
+        document.body.appendChild(audioPlayer);
+    }
+    
+    audioPlayer.src = url;
+    audioPlayer.play().catch(error => {
+        console.error('Playback failed:', error);
+        showToast('Playback failed', 'error');
+    });
 }
 
 /**
