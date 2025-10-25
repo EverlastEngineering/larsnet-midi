@@ -6,6 +6,7 @@ Use functional core, imperative shell to separate logic from side effects.
 Before refactoring, write tests to cover existing behavior.
 Use configuration files for parameters instead of hardcoding values.
 You may edit your own instruction files, and there's an instruction file for that!
+Always validate edit results: lint/compile errors reported by tools indicate actual syntax failures requiring immediate correction.
 Review the writing-documentation.instructions.md for guidance before writing documentation.
 Review the how-to-perform-testing.instructions.md when dealing with tests.
 Let user know you've read instructions for confidence in your actions.

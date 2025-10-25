@@ -124,6 +124,16 @@ async function selectProject(projectNumber) {
             mainContent.scrollTop = 0;
         }
         
+        // Ensure Downloads and Operations sections are expanded by default
+        const downloadsContainer = document.getElementById('downloads-container');
+        const operationsContainer = document.getElementById('operations-container');
+        if (downloadsContainer && !downloadsContainer.style.maxHeight) {
+            downloadsContainer.style.maxHeight = downloadsContainer.scrollHeight + 'px';
+        }
+        if (operationsContainer && !operationsContainer.style.maxHeight) {
+            operationsContainer.style.maxHeight = operationsContainer.scrollHeight + 'px';
+        }
+        
         // Load active jobs for this project
         loadProjectJobs(projectNumber);
         
@@ -302,65 +312,90 @@ function updateDownloads() {
                 `;
             }).join('');
             
+            // Add "All Files" option for ZIP download
+            const allFilesButton = `
+                <div class="flex items-center gap-1">
+                    <button class="text-xs px-2 py-2 bg-${dl.color}-700 hover:bg-${dl.color}-600 rounded flex items-center gap-1 transition-smooth flex-1 font-semibold"
+                            onclick="event.stopPropagation(); downloadFiles('${dl.type}')" 
+                            title="Download All as ZIP">
+                        <i class="fas fa-file-archive text-${dl.color}-400"></i>
+                        <span class="flex-1 text-left truncate">All Files</span>
+                        <i class="fas fa-download text-xs opacity-60"></i>
+                    </button>
+                </div>
+            `;
+            
             return `
                 <div class="bg-gray-800 rounded-lg overflow-hidden border-2 border-${dl.color}-500">
-                    <button class="glassy-btn w-full p-4 bg-${dl.color}-600 hover:bg-${dl.color}-700 text-white transition-smooth flex items-center justify-between font-semibold"
-                            onclick="downloadFiles('${dl.type}')">
-                        <div class="flex items-center">
-                            <i class="fas fa-file-archive text-lg mr-3"></i>
-                            <div class="text-left">
-                                <div>${dl.label} (ZIP)</div>
-                                <div class="text-xs font-normal opacity-75">Download all ${dl.count} files</div>
-                            </div>
+                    <div class="glassy-btn w-full p-4 bg-${dl.color}-600 text-white flex items-center">
+                        <i class="fas fa-divide text-lg mr-3"></i>
+                        <div class="text-left">
+                            <div class="font-semibold">${dl.label}</div>
+                            <div class="text-xs font-normal opacity-75">${dl.count} files available</div>
                         </div>
-                        <i class="fas fa-download text-lg"></i>
-                    </button>
+                    </div>
                     <div class="bg-gray-800 p-3 border-t border-gray-700">
                         <div class="text-xs text-gray-400 mb-2 px-1 font-medium">Click to play or download individual files:</div>
                         <div class="grid grid-cols-2 gap-1.5">
                             ${individualFiles}
+                            ${allFilesButton}
                         </div>
                     </div>
                 </div>
             `;
         } else if (dl.type === 'midi') {
-            // MIDI - just download
+            // MIDI - header with download button
             return `
-                <button class="glassy-btn bg-${dl.color}-600 hover:bg-${dl.color}-700 text-white p-3 rounded-lg border-2 border-${dl.color}-500 transition-smooth flex items-center justify-between"
-                        onclick="downloadFiles('${dl.type}')">
-                    <div>
-                        <i class="fas ${dl.icon} mr-2"></i>
-                        ${dl.label}
+                <div class="bg-gray-800 rounded-lg overflow-hidden border-2 border-${dl.color}-500">
+                    <div class="glassy-btn w-full p-4 bg-${dl.color}-600 text-white flex items-center">
+                        <i class="fas ${dl.icon} text-lg mr-3"></i>
+                        <div class="text-left">
+                            <div class="font-semibold">${dl.label}</div>
+                            <div class="text-xs font-normal opacity-75">${dl.count} file${dl.count > 1 ? 's' : ''} available</div>
+                        </div>
                     </div>
-                    <i class="fas fa-download"></i>
-                </button>
+                    <button class="w-full p-3 bg-gray-800 hover:bg-gray-700 text-white transition-smooth flex items-center justify-center border-t border-gray-700"
+                            onclick="downloadFiles('${dl.type}')">
+                        <i class="fas fa-download mr-2"></i>
+                        Download MIDI
+                    </button>
+                </div>
             `;
         } else if (dl.type === 'video') {
-            // Video - play and download
             const videoFile = files.video[0];
             return `
                 <div class="bg-gray-800 rounded-lg overflow-hidden border-2 border-${dl.color}-500">
-                    <button class="glassy-btn w-full p-4 bg-${dl.color}-600 hover:bg-${dl.color}-700 text-white transition-smooth flex items-center justify-between font-semibold"
-                            onclick="playVideo('${videoFile}')">
-                        <div class="flex items-center">
-                            <i class="fas fa-play-circle text-lg mr-3"></i>
-                            <div class="text-left">
-                                <div>${dl.label}</div>
-                                <div class="text-xs font-normal opacity-75">Click to play</div>
-                            </div>
+                    <div class="glassy-btn w-full p-4 bg-${dl.color}-600 text-white flex items-center">
+                        <i class="fas fa-video text-lg mr-3"></i>
+                        <div class="text-left">
+                            <div class="font-semibold">${dl.label}</div>
+                            <div class="text-xs font-normal opacity-75">MIDI visualization video</div>
                         </div>
-                        <i class="fas fa-play text-lg"></i>
-                    </button>
-                    <div class="bg-gray-800 p-3 border-t border-gray-700">
-                        <button class="w-full text-sm px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded transition-smooth"
+                    </div>
+                    <div class="flex border-t border-gray-700">
+                        <button class="flex-1 p-3 bg-gray-800 hover:bg-gray-700 text-white transition-smooth flex items-center justify-center border-r border-gray-700"
+                                onclick="playVideo('${videoFile}')">
+                            <i class="fas fa-play mr-2"></i>
+                            Preview
+                        </button>
+                        <button class="flex-1 p-3 bg-gray-800 hover:bg-gray-700 text-white transition-smooth flex items-center justify-center"
                                 onclick="downloadFiles('${dl.type}')">
-                            <i class="fas fa-download mr-2"></i>Download Video
+                            <i class="fas fa-download mr-2"></i>
+                            Download
                         </button>
                     </div>
                 </div>
             `;
         }
     }).join('');
+    
+    // Update Downloads container height after content changes
+    setTimeout(() => {
+        const downloadsContainer = document.getElementById('downloads-container');
+        if (downloadsContainer && downloadsContainer.style.maxHeight && downloadsContainer.style.maxHeight !== '0px') {
+            downloadsContainer.style.maxHeight = downloadsContainer.scrollHeight + 'px';
+        }
+    }, 100);
 }
 
 function getDrumIcon(drumName) {

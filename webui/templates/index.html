@@ -481,17 +481,30 @@
                     <section id="project-section" class="hidden space-y-6">
                         
                         <!-- Downloads -->
-                        <div id="downloads-section" class="bg-larsnet-dark rounded-lg p-4 md:p-6">
-                            <h3 class="text-base md:text-lg font-semibold mb-3 md:mb-4">Downloads</h3>
-                            <div id="downloads-list" class="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
-                                <!-- Download buttons will be added here -->
+                        <div id="downloads-section" class="bg-larsnet-dark rounded-lg border border-gray-700">
+                            <div class="flex items-center justify-between p-3 md:p-4 cursor-pointer hover:bg-gray-800 transition-smooth" id="downloads-header">
+                                <div class="flex items-center min-w-0">
+                                    <i id="downloads-toggle-icon" class="fas fa-chevron-down text-gray-400 mr-2 md:mr-3 transition-smooth flex-shrink-0"></i>
+                                    <h3 class="text-base md:text-lg font-semibold">Downloads</h3>
+                                </div>
+                            </div>
+                            <div id="downloads-container" class="overflow-hidden transition-smooth">
+                                <div id="downloads-list" class="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4 p-3 md:p-4 pt-0">
+                                    <!-- Download buttons will be added here -->
+                                </div>
                             </div>
                         </div>
                         
                         <!-- Operation Buttons -->
-                        <div class="bg-larsnet-dark rounded-lg p-4 md:p-6">
-                            <h3 class="text-base md:text-lg font-semibold mb-3 md:mb-4">Operations</h3>
-                            <div class="grid grid-cols-2 gap-3 md:gap-4">
+                        <div class="bg-larsnet-dark rounded-lg border border-gray-700">
+                            <div class="flex items-center justify-between p-3 md:p-4 cursor-pointer hover:bg-gray-800 transition-smooth" id="operations-header">
+                                <div class="flex items-center min-w-0">
+                                    <i id="operations-toggle-icon" class="fas fa-chevron-down text-gray-400 mr-2 md:mr-3 transition-smooth flex-shrink-0"></i>
+                                    <h3 class="text-base md:text-lg font-semibold">Operations</h3>
+                                </div>
+                            </div>
+                            <div id="operations-container" class="overflow-hidden transition-smooth">
+                                <div class="grid grid-cols-2 gap-3 md:gap-4 p-3 md:p-4 pt-0">
                                 
                                 <!-- Separate Button -->
                                 <div class="operation-container" data-operation="separate">
@@ -561,6 +574,7 @@
                                     </div>
                                 </div>
                                 
+                                </div>
                             </div>
                             
                             <!-- Settings Panels -->

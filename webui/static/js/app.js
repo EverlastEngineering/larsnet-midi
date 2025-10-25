@@ -82,6 +82,12 @@ function setupEventListeners() {
     // Console toggle
     document.getElementById('console-header').addEventListener('click', toggleConsole);
     
+    // Downloads toggle
+    document.getElementById('downloads-header').addEventListener('click', toggleDownloads);
+    
+    // Operations toggle
+    document.getElementById('operations-header').addEventListener('click', toggleOperations);
+    
     // Project details toggle
     document.getElementById('project-details-toggle').addEventListener('click', toggleProjectDetails);
     
@@ -382,6 +388,38 @@ function createJobCard(job) {
     `;
 }
 
+/**
+ * Toggle Downloads section
+ */
+function toggleDownloads() {
+    const container = document.getElementById('downloads-container');
+    const icon = document.getElementById('downloads-toggle-icon');
+    
+    if (container.style.maxHeight && container.style.maxHeight !== '0px') {
+        container.style.maxHeight = '0px';
+        icon.style.transform = 'rotate(-90deg)';
+    } else {
+        container.style.maxHeight = container.scrollHeight + 'px';
+        icon.style.transform = 'rotate(0deg)';
+    }
+}
+
+/**
+ * Toggle Operations section
+ */
+function toggleOperations() {
+    const container = document.getElementById('operations-container');
+    const icon = document.getElementById('operations-toggle-icon');
+    
+    if (container.style.maxHeight && container.style.maxHeight !== '0px') {
+        container.style.maxHeight = '0px';
+        icon.style.transform = 'rotate(-90deg)';
+    } else {
+        container.style.maxHeight = container.scrollHeight + 'px';
+        icon.style.transform = 'rotate(0deg)';
+    }
+}
+
 // Add animation styles
 const style = document.createElement('style');
 style.textContent = `
@@ -395,8 +433,4 @@ style.textContent = `
             opacity: 1;
         }
     }
-    .animate-slide-in {
-        animation: slide-in 0.3s ease-out;
-    }
 `;
-document.head.appendChild(style);
