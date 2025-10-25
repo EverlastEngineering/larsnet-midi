@@ -107,6 +107,93 @@
             pointer-events: none;
         }
         
+        /* Split button group - three button design */
+        .split-button-group {
+            display: flex;
+            overflow: hidden;
+            border-radius: 0.5rem;
+        }
+        
+        .split-button-group .run-btn {
+            width: 3.5rem;
+            border-radius: 0;
+            border-top-left-radius: 0.5rem;
+            border-bottom-left-radius: 0.5rem;
+            border-right: 1px solid rgba(255, 255, 255, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            backdrop-filter: blur(8px);
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+        
+        .split-button-group .run-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.05) 50%, rgba(255, 255, 255, 0) 100%);
+            pointer-events: none;
+        }
+        
+        .split-button-group .run-btn:hover {
+            background-color: rgba(0, 0, 0, 0.2);
+        }
+        
+        .split-button-group .operation-info {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            padding: 0.75rem 0.5rem;
+        }
+        
+        @media (min-width: 768px) {
+            .split-button-group .operation-info {
+                padding: 1rem 0.5rem;
+            }
+        }
+        
+        .split-button-group .settings-btn {
+            width: 3rem;
+            border-radius: 0;
+            border-top-right-radius: 0.5rem;
+            border-bottom-right-radius: 0.5rem;
+            border-left: 1px solid rgba(255, 255, 255, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            backdrop-filter: blur(8px);
+        }
+        
+        .split-button-group .settings-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.05) 50%, rgba(255, 255, 255, 0) 100%);
+            pointer-events: none;
+        }
+        
+        .split-button-group .settings-btn:hover {
+            background-color: rgba(0, 0, 0, 0.2);
+        }
+        
+        .split-button-group .settings-btn.active {
+            background-color: rgba(255, 255, 255, 0.15);
+        }
+        
         /* Progress bar animation */
         @keyframes progress {
             0% { width: 0%; }
@@ -407,51 +494,71 @@
                             <div class="grid grid-cols-2 gap-3 md:gap-4">
                                 
                                 <!-- Separate Button -->
-                                <div class="flex flex-col operation-container" data-operation="separate">
-                                    <button id="btn-separate" class="operation-btn bg-blue-600 hover:bg-blue-700 text-white p-3 md:p-4 rounded-lg border-2 border-blue-500 transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
-                                        <i class="fas fa-divide text-xl md:text-2xl mb-1 md:mb-2"></i>
-                                        <p class="text-sm md:text-base font-semibold">Separate</p>
-                                        <p class="text-xs opacity-75">Split drums</p>
-                                    </button>
-                                    <button class="settings-toggle text-xs text-gray-400 hover:text-gray-200 mt-1 md:mt-2 transition-smooth" data-target="settings-separate">
-                                        <i class="fas fa-chevron-down mr-1"></i>Settings
-                                    </button>
+                                <div class="operation-container" data-operation="separate">
+                                    <div class="split-button-group border-2 border-blue-500 bg-blue-600">
+                                        <button id="btn-separate" class="run-btn hover:bg-blue-700 text-white transition-smooth disabled:opacity-50 disabled:cursor-not-allowed" title="Run Separation">
+                                            <i class="fas fa-play"></i>
+                                        </button>
+                                        <div class="operation-info text-white">
+                                            <i class="fas fa-divide text-xl md:text-2xl mb-1 md:mb-2"></i>
+                                            <p class="text-sm md:text-base font-semibold">Separate</p>
+                                            <p class="text-xs opacity-75">Split drums</p>
+                                        </div>
+                                        <button class="settings-btn settings-toggle hover:bg-blue-700 text-white transition-smooth" data-target="settings-separate" title="Settings">
+                                            <i class="fas fa-cog text-lg"></i>
+                                        </button>
+                                    </div>
                                 </div>
                                 
                                 <!-- Cleanup Button -->
-                                <div class="flex flex-col operation-container" data-operation="cleanup">
-                                    <button id="btn-cleanup" class="operation-btn bg-purple-600 hover:bg-purple-700 text-white p-3 md:p-4 rounded-lg border-2 border-purple-500 transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
-                                        <i class="fas fa-broom text-xl md:text-2xl mb-1 md:mb-2"></i>
-                                        <p class="text-sm md:text-base font-semibold">Clean</p>
-                                        <p class="text-xs opacity-75">Reduce bleed</p>
-                                    </button>
-                                    <button class="settings-toggle text-xs text-gray-400 hover:text-gray-200 mt-1 md:mt-2 transition-smooth" data-target="settings-cleanup">
-                                        <i class="fas fa-chevron-down mr-1"></i>Settings
-                                    </button>
+                                <div class="operation-container" data-operation="cleanup">
+                                    <div class="split-button-group border-2 border-purple-500 bg-purple-600">
+                                        <button id="btn-cleanup" class="run-btn hover:bg-purple-700 text-white transition-smooth disabled:opacity-50 disabled:cursor-not-allowed" title="Run Cleanup">
+                                            <i class="fas fa-play"></i>
+                                        </button>
+                                        <div class="operation-info text-white">
+                                            <i class="fas fa-broom text-xl md:text-2xl mb-1 md:mb-2"></i>
+                                            <p class="text-sm md:text-base font-semibold">Clean</p>
+                                            <p class="text-xs opacity-75">Reduce bleed</p>
+                                        </div>
+                                        <button class="settings-btn settings-toggle hover:bg-purple-700 text-white transition-smooth" data-target="settings-cleanup" title="Settings">
+                                            <i class="fas fa-cog text-lg"></i>
+                                        </button>
+                                    </div>
                                 </div>
                                 
                                 <!-- MIDI Button -->
-                                <div class="flex flex-col operation-container" data-operation="midi">
-                                    <button id="btn-midi" class="operation-btn bg-green-600 hover:bg-green-700 text-white p-3 md:p-4 rounded-lg border-2 border-green-500 transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
-                                        <i class="fas fa-music text-xl md:text-2xl mb-1 md:mb-2"></i>
-                                        <p class="text-sm md:text-base font-semibold">MIDI</p>
-                                        <p class="text-xs opacity-75">Convert notes</p>
-                                    </button>
-                                    <button class="settings-toggle text-xs text-gray-400 hover:text-gray-200 mt-1 md:mt-2 transition-smooth" data-target="settings-midi">
-                                        <i class="fas fa-chevron-down mr-1"></i>Settings
-                                    </button>
+                                <div class="operation-container" data-operation="midi">
+                                    <div class="split-button-group border-2 border-green-500 bg-green-600">
+                                        <button id="btn-midi" class="run-btn hover:bg-green-700 text-white transition-smooth disabled:opacity-50 disabled:cursor-not-allowed" title="Run MIDI Conversion">
+                                            <i class="fas fa-play"></i>
+                                        </button>
+                                        <div class="operation-info text-white">
+                                            <i class="fas fa-music text-xl md:text-2xl mb-1 md:mb-2"></i>
+                                            <p class="text-sm md:text-base font-semibold">MIDI</p>
+                                            <p class="text-xs opacity-75">Convert notes</p>
+                                        </div>
+                                        <button class="settings-btn settings-toggle hover:bg-green-700 text-white transition-smooth" data-target="settings-midi" title="Settings">
+                                            <i class="fas fa-cog text-lg"></i>
+                                        </button>
+                                    </div>
                                 </div>
                                 
                                 <!-- Video Button -->
-                                <div class="flex flex-col operation-container" data-operation="video">
-                                    <button id="btn-video" class="operation-btn bg-orange-600 hover:bg-orange-700 text-white p-3 md:p-4 rounded-lg border-2 border-orange-500 transition-smooth disabled:opacity-50 disabled:cursor-not-allowed">
-                                        <i class="fas fa-video text-xl md:text-2xl mb-1 md:mb-2"></i>
-                                        <p class="text-sm md:text-base font-semibold">Video</p>
-                                        <p class="text-xs opacity-75">Visualize</p>
-                                    </button>
-                                    <button class="settings-toggle text-xs text-gray-400 hover:text-gray-200 mt-1 md:mt-2 transition-smooth" data-target="settings-video">
-                                        <i class="fas fa-chevron-down mr-1"></i>Settings
-                                    </button>
+                                <div class="operation-container" data-operation="video">
+                                    <div class="split-button-group border-2 border-orange-500 bg-orange-600">
+                                        <button id="btn-video" class="run-btn hover:bg-orange-700 text-white transition-smooth disabled:opacity-50 disabled:cursor-not-allowed" title="Run Video Rendering">
+                                            <i class="fas fa-play"></i>
+                                        </button>
+                                        <div class="operation-info text-white">
+                                            <i class="fas fa-video text-xl md:text-2xl mb-1 md:mb-2"></i>
+                                            <p class="text-sm md:text-base font-semibold">Video</p>
+                                            <p class="text-xs opacity-75">Visualize</p>
+                                        </div>
+                                        <button class="settings-btn settings-toggle hover:bg-orange-700 text-white transition-smooth" data-target="settings-video" title="Settings">
+                                            <i class="fas fa-cog text-lg"></i>
+                                        </button>
+                                    </div>
                                 </div>
                                 
                             </div>
@@ -460,7 +567,7 @@
                             
                             <!-- Separate Settings -->
                             <div id="settings-separate" class="settings-panel hidden mt-4 md:mt-6 pt-4 md:pt-6 border-t border-gray-700">
-                                <h4 class="text-sm font-semibold mb-3 md:mb-4 text-gray-300">Separation Settings</h4>
+                                <h4 class="text-sm font-semibold mb-3 md:mb-4 text-white bg-blue-600 px-3 py-2 rounded">Separation Settings</h4>
                                 <div class="space-y-3 md:space-y-4">
                                     <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                                         <div class="flex-1">
@@ -492,7 +599,7 @@
                             
                             <!-- Cleanup Settings -->
                             <div id="settings-cleanup" class="settings-panel hidden mt-4 md:mt-6 pt-4 md:pt-6 border-t border-gray-700">
-                                <h4 class="text-sm font-semibold mb-3 md:mb-4 text-gray-300">Sidechain Compression Settings</h4>
+                                <h4 class="text-sm font-semibold mb-3 md:mb-4 text-white bg-purple-600 px-3 py-2 rounded">Sidechain Compression Settings</h4>
                                 <div class="space-y-3 md:space-y-4">
                                     <div>
                                         <label class="text-sm text-gray-300 block mb-2">Threshold (dB)</label>
@@ -519,7 +626,7 @@
                             
                             <!-- MIDI Settings -->
                             <div id="settings-midi" class="settings-panel hidden mt-4 md:mt-6 pt-4 md:pt-6 border-t border-gray-700">
-                                <h4 class="text-sm font-semibold mb-3 md:mb-4 text-gray-300">MIDI Conversion Settings</h4>
+                                <h4 class="text-sm font-semibold mb-3 md:mb-4 text-white bg-green-600 px-3 py-2 rounded">MIDI Conversion Settings</h4>
                                 
                                 <!-- Basic Settings -->
                                 <div class="space-y-3 md:space-y-4 mb-4 md:mb-6">
@@ -569,7 +676,7 @@
                             
                             <!-- Video Settings -->
                             <div id="settings-video" class="settings-panel hidden mt-4 md:mt-6 pt-4 md:pt-6 border-t border-gray-700">
-                                <h4 class="text-sm font-semibold mb-3 md:mb-4 text-gray-300">Video Rendering Settings</h4>
+                                <h4 class="text-sm font-semibold mb-3 md:mb-4 text-white bg-orange-600 px-3 py-2 rounded">Video Rendering Settings</h4>
                                 <div class="space-y-3 md:space-y-4">
                                     <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                                         <div class="flex-1">

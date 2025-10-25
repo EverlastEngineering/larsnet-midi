@@ -40,48 +40,56 @@ class SettingsManager {
         const panel = document.getElementById(panelId);
         if (!panel) return;
         
-        const isCurrentlyOpen = !panel.classList.contains('hidden');
+        const wasAlreadyOpen = this.currentlyOpen === panelId;
         
-        // Close all panels first
+        // Close all panels and reset states
         document.querySelectorAll('.settings-panel').forEach(p => {
             p.classList.add('hidden');
         });
         
-        // Remove highlight from all operation containers
         document.querySelectorAll('.operation-container').forEach(container => {
             container.classList.remove('operation-container-highlight');
         });
         
-        // Reset all toggle button icons
-        document.querySelectorAll('.settings-toggle i').forEach(icon => {
-            icon.className = 'fas fa-chevron-down mr-1';
+        document.querySelectorAll('.settings-toggle').forEach(btn => {
+            btn.classList.remove('active');
+            const icon = btn.querySelector('i');
+            if (icon) {
+                icon.className = 'fas fa-cog text-lg';
+            }
         });
         
-        // If panel was closed, open it
-        if (!isCurrentlyOpen) {
-            panel.classList.remove('hidden');
-            this.currentlyOpen = panelId;
-            
-            // Highlight the operation container
-            const operationName = panelId.replace('settings-', '');
-            const container = document.querySelector(`.operation-container[data-operation="${operationName}"]`);
-            if (container) {
-                container.classList.add('operation-container-highlight');
-            }
-            
-            // Update button icon to chevron-up
-            const button = document.querySelector(`[data-target="${panelId}"] i`);
-            if (button) {
-                button.className = 'fas fa-chevron-up mr-1';
-            }
-            
-            // Smooth scroll into view
-            setTimeout(() => {
-                panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            }, 100);
-        } else {
+        // If clicking the same panel that was open, just close everything
+        if (wasAlreadyOpen) {
             this.currentlyOpen = null;
+            return;
         }
+        
+        // Open the clicked panel
+        panel.classList.remove('hidden');
+        this.currentlyOpen = panelId;
+        
+        // Highlight the operation container
+        const operationName = panelId.replace('settings-', '');
+        const container = document.querySelector(`.operation-container[data-operation="${operationName}"]`);
+        if (container) {
+            container.classList.add('operation-container-highlight');
+        }
+        
+        // Add active state to the settings button and update icon
+        const button = document.querySelector(`[data-target="${panelId}"]`);
+        if (button) {
+            button.classList.add('active');
+            const icon = button.querySelector('i');
+            if (icon) {
+                icon.className = 'fas fa-chevron-down text-lg';
+            }
+        }
+        
+        // Smooth scroll into view
+        setTimeout(() => {
+            panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 100);
     }
     
     /**
