@@ -91,11 +91,11 @@ def validate_config(project_id: int, config_type: str):
                 })
                 continue
             
-            success = engine.update_value(path, value)
+            success, error_msg = engine.update_value(path, value)
             if not success:
                 validation_errors.append({
                     'path': '.'.join(path),
-                    'error': f'Field not found: {".".join(path)}'
+                    'error': error_msg or f'Field not found: {".".join(path)}'
                 })
         
         # Validate all fields

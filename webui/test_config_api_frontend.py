@@ -165,11 +165,17 @@ class TestConfigAPIUpdate:
     @pytest.fixture
     def client(self, mock_project_dir, monkeypatch):
         """Create test client with mocked project directory"""
-        # Mock the project directory lookup
-        def mock_glob(pattern):
-            return [str(mock_project_dir)]
-        
+        # Mock the project directory lookup - only intercept user_files patterns
         import glob
+        original_glob = glob.glob
+        
+        def mock_glob(pattern):
+            # Only mock patterns looking for user_files
+            if 'user_files' in str(pattern):
+                return [str(mock_project_dir)]
+            # Use real glob for everything else (e.g., ruamel.yaml plugin loading)
+            return original_glob(pattern)
+        
         monkeypatch.setattr(glob, 'glob', mock_glob)
         
         test_app = create_app()
@@ -297,11 +303,17 @@ class TestConfigAPIGet:
     @pytest.fixture
     def client(self, mock_project_dir, monkeypatch):
         """Create test client with mocked project directory"""
-        # Mock the project directory lookup
-        def mock_glob(pattern):
-            return [str(mock_project_dir)]
-        
+        # Mock the project directory lookup - only intercept user_files patterns
         import glob
+        original_glob = glob.glob
+        
+        def mock_glob(pattern):
+            # Only mock patterns looking for user_files
+            if 'user_files' in str(pattern):
+                return [str(mock_project_dir)]
+            # Use real glob for everything else (e.g., ruamel.yaml plugin loading)
+            return original_glob(pattern)
+        
         monkeypatch.setattr(glob, 'glob', mock_glob)
         
         test_app = create_app()
