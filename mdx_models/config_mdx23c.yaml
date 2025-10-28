@@ -1,0 +1,70 @@
+audio:
+  chunk_size: 523776
+  dim_f: 1024
+  dim_t: 1024
+  hop_length: 512
+  n_fft: 2048
+  num_channels: 2
+  sample_rate: 44100
+  min_mean_abs: 0.000
+
+model:
+  act: gelu
+  bottleneck_factor: 4
+  growth: 128
+  norm: InstanceNorm
+  num_blocks_per_scale: 2
+  num_channels: 128
+  num_scales: 5
+  num_subbands: 4
+  scale:
+  - 2
+  - 2
+
+training:
+  batch_size: 2
+  gradient_accumulation_steps: 4
+  grad_clip: 0
+  instruments:
+  - kick
+  - snare
+  - toms
+  - hh
+  - cymbals
+  lr: 1.0
+  patience: 200
+  reduce_factor: 0.95
+  target_instrument: null
+  num_epochs: 1000
+  num_steps: 1533
+  q: 0.95
+  coarse_loss_clip: true
+  ema_momentum: 0.999
+  optimizer: prodigy
+  other_fix: false # it's needed for checking on multisong dataset if other is actually instrumental
+  use_amp: true # enable or disable usage of mixed precision (float16) - usually it must be true
+
+loss_multistft:
+  fft_sizes:
+  - 2048
+  hop_sizes:
+  - 1024
+  win_lengths:
+  - 2048
+  window: "hann_window"
+  sample_rate: 44100
+  perceptual_weighting: false
+  scale: "mel"
+  n_bins: 128
+  w_sc: 0.0
+  w_log_mag: 1.0
+  w_lin_mag: 0.0
+  w_phs: 0.0
+  mag_distance: "L1"
+
+inference:
+  extension: flac
+  batch_size: 2
+  dim_t: 512
+  num_overlap: 4
+  normalize: false

@@ -1,13 +1,14 @@
 """
-Separate drums into individual stems using LarsNet.
+Separate drums into individual stems using MDX23C or LarsNet.
 
 Uses project-based workflow: automatically detects projects in user_files/
 or processes new audio files dropped there.
 
 Usage:
-    python separate.py              # Auto-detect project or new file
+    python separate.py              # Auto-detect project (uses MDX23C by default)
     python separate.py 1            # Process specific project by number
     python separate.py --device cuda  # Use GPU acceleration
+    python separate.py --model larsnet  # Use LarsNet instead of MDX23C
 """
 
 from separation_utils import process_stems_for_project
@@ -29,6 +30,8 @@ import sys
 
 def separate_project(
     project: dict,
+    model: str = 'mdx23c',
+    overlap: int = 8,
     wiener_exponent: Optional[float] = None,
     device: str = 'cpu',
     apply_eq: bool = False
@@ -38,7 +41,9 @@ def separate_project(
     
     Args:
         project: Project info dictionary from project_manager
-        wiener_exponent: Wiener filter exponent (None to disable)
+        model: Separation model to use ('mdx23c' or 'larsnet')
+        overlap: Overlap value for MDX23C (2-50, higher=better quality but slower, default=8)
+        wiener_exponent: Wiener filter exponent (None to disable, LarsNet only)
         device: 'cpu' or 'cuda'
         apply_eq: Whether to apply frequency cleanup
     """
@@ -65,6 +70,8 @@ def separate_project(
         project_dir=project_dir,
         stems_dir=stems_dir,
         config_path=config_path,
+        model=model,
+        overlap=overlap,
         wiener_exponent=wiener_exponent,
         device=device,
         apply_eq=apply_eq,
@@ -100,8 +107,13 @@ Examples:
     
     parser.add_argument('project_number', type=int, nargs='?', default=None,
                        help="Project number to process (optional)")
+    parser.add_argument('-m', '--model', type=str, default='mdx23c',
+                       choices=['mdx23c', 'larsnet'],
+                       help="Separation model: 'mdx23c' or 'larsnet' (default: mdx23c)")
+    parser.add_argument('-o', '--overlap', type=int, default=8,
+                       help="MDX23C overlap (2-50): higher=better quality but slower (default: 8)")
     parser.add_argument('-w', '--wiener', type=float, default=None,
-                       help="Wiener filter exponent (default: disabled)")
+                       help="Wiener filter exponent (default: disabled, LarsNet only)")
     parser.add_argument('-d', '--device', type=str, default='cpu',
                        help="Torch device: 'cpu' or 'cuda' (default: cpu)")
     parser.add_argument('--eq', action='store_true',
@@ -110,9 +122,17 @@ Examples:
     args = parser.parse_args()
     
     # Validate
-    if args.wiener is not None and args.wiener <= 0:
-        print("ERROR: Wiener exponent must be positive")
+    if args.overlap < 2 or args.overlap > 50:
+        print("ERROR: Overlap must be between 2 and 50")
         sys.exit(1)
+    
+    if args.wiener is not None:
+        if args.wiener <= 0:
+            print("ERROR: Wiener exponent must be positive")
+            sys.exit(1)
+        if args.model == 'mdx23c':
+            print("WARNING: Wiener filter only works with LarsNet model, ignoring --wiener")
+            args.wiener = None
     
     # Check for loose files first (new audio files to process)
     loose_files = find_loose_files(USER_FILES_DIR)
@@ -129,7 +149,7 @@ Examples:
                 print(f"✓ Created project {project['number']}: {project['name']}")
                 
                 # Process the newly created project
-                separate_project(project, args.wiener, args.device, args.eq)
+                separate_project(project, args.model, args.overlap, args.wiener, args.device, args.eq)
                 
             except Exception as e:
                 print(f"ERROR: Failed to create project: {e}")
@@ -157,4 +177,4 @@ Examples:
                 sys.exit(0)
         
         # Process the selected project
-        separate_project(project, args.wiener, args.device, args.eq)
+        separate_project(project, args.model, args.overlap, args.wiener, args.device, args.eq)

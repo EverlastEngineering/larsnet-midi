@@ -1,15 +1,16 @@
-"""
+"""                                                                                                                                                                                                                       
 Shared utilities for drum separation with optional post-processing EQ.
-"""
+"""                                                                                                                                                                                                                       
 from larsnet import LarsNet
 from pathlib import Path
 from typing import Union, Optional, Dict
 import soundfile as sf # type: ignore
 import torch # type: ignore
+import torchaudio # type: ignore
 import torchaudio.functional as F # type: ignore
 import yaml # type: ignore
-
-
+import numpy as np
+from mdx23c_utils import load_mdx23c_checkpoint, get_checkpoint_hyperparameters
 def load_eq_config(config_path: Union[str, Path] = "eq.yaml") -> Dict:
     """Load EQ configuration from YAML file."""
     config_path = Path(config_path)
@@ -216,12 +217,125 @@ def process_stems(
                 raise
 
 
+def _process_with_mdx23c(
+    audio_file: Path,
+    model: torch.nn.Module,
+    chunk_size: int,
+    target_sr: int,
+    instruments: list,
+    overlap: int,
+    device: str,
+    verbose: bool = True
+) -> Dict[str, torch.Tensor]:
+    """
+    Process audio file with MDX23C model using overlap-add for long files.
+    
+    Args:
+        audio_file: Path to audio file
+        model: Loaded MDX23C model
+        chunk_size: Samples per chunk
+        target_sr: Target sample rate
+        instruments: List of instrument names in order
+        overlap: Overlap value (2-50), controls hop_length = chunk_size / overlap
+        device: Processing device
+        verbose: Print progress
+        
+    Returns:
+        Dict mapping stem names to waveforms
+    """
+    # Load audio
+    waveform, sr = torchaudio.load(str(audio_file))
+    
+    # Resample if needed
+    if sr != target_sr:
+        if verbose:
+            print(f"  Resampling from {sr}Hz to {target_sr}Hz...")
+        resampler = torchaudio.transforms.Resample(sr, target_sr)
+        waveform = resampler(waveform)
+    
+    # Convert to stereo
+    if waveform.shape[0] == 1:
+        waveform = waveform.repeat(2, 1)
+    elif waveform.shape[0] > 2:
+        waveform = waveform[:2]
+    
+    # Add batch dimension
+    waveform = waveform.unsqueeze(0).to(device)  # (1, 2, time)
+    
+    total_length = waveform.shape[-1]
+    
+    if total_length <= chunk_size:
+        # Short enough to process in one chunk
+        if verbose:
+            print(f"  Processing audio ({total_length / target_sr:.1f}s)...")
+        
+        # Pad to chunk size
+        if total_length < chunk_size:
+            pad_size = chunk_size - total_length
+            waveform = torch.nn.functional.pad(waveform, (0, pad_size))
+        
+        with torch.no_grad():
+            output = model(waveform)  # (1, instruments, 2, time)
+        
+        # Trim padding
+        output = output[:, :, :, :total_length]
+    else:
+        # Process with overlap-add
+        hop_length = chunk_size // overlap
+        num_chunks = (total_length - chunk_size) // hop_length + 1
+        
+        if verbose:
+            overlap_pct = ((chunk_size - hop_length) / chunk_size) * 100
+            print(f"  Processing {total_length / target_sr:.1f}s audio in {num_chunks} chunks (overlap={overlap}, {overlap_pct:.1f}%)...")
+        
+        # Initialize output buffer
+        output = torch.zeros(1, 5, 2, total_length, device=device)
+        overlap_count = torch.zeros(total_length, device=device)
+        
+        with torch.no_grad():
+            for i in range(num_chunks):
+                start = i * hop_length
+                end = min(start + chunk_size, total_length)
+                
+                # Extract chunk
+                chunk = waveform[:, :, start:end]
+                
+                # Pad last chunk if needed
+                if chunk.shape[-1] < chunk_size:
+                    pad_size = chunk_size - chunk.shape[-1]
+                    chunk = torch.nn.functional.pad(chunk, (0, pad_size))
+                
+                # Process chunk
+                chunk_output = model(chunk)
+                
+                # Add to output buffer
+                actual_length = min(chunk_size, total_length - start)
+                output[:, :, :, start:start+actual_length] += chunk_output[:, :, :, :actual_length]
+                overlap_count[start:start+actual_length] += 1
+                
+                if verbose and ((i + 1) % 5 == 0 or i == num_chunks - 1):
+                    progress = int(15 + ((i + 1) / num_chunks) * 75)
+                    print(f"Progress: {progress}% (chunk {i+1}/{num_chunks})")
+        
+        # Average overlapping regions
+        output = output / overlap_count.view(1, 1, 1, -1)
+    
+    # Convert to dict with instrument names
+    stems = {}
+    for i, instrument in enumerate(instruments):
+        stems[instrument] = output[0, i]  # (2, time)
+    
+    return stems
+
+
 def process_stems_for_project(
     project_dir: Path,
     stems_dir: Path,
     config_path: Union[str, Path],
-    wiener_exponent: Optional[float],
-    device: str,
+    model: str = 'mdx23c',
+    overlap: int = 8,
+    wiener_exponent: Optional[float] = None,
+    device: str = 'cpu',
     apply_eq: bool = False,
     verbose: bool = True
 ):
@@ -237,7 +351,9 @@ def process_stems_for_project(
         project_dir: Path to project directory
         stems_dir: Path to stems output directory (project/stems/)
         config_path: Path to config.yaml (project-specific or root)
-        wiener_exponent: Wiener filter exponent (None to disable)
+        model: Separation model ('mdx23c' or 'larsnet')
+        overlap: Overlap value for MDX23C (2-50, higher=better quality but slower)
+        wiener_exponent: Wiener filter exponent (None to disable, LarsNet only)
         device: 'cpu' or 'cuda'
         apply_eq: Whether to apply frequency cleanup
         verbose: Whether to print progress information
@@ -275,19 +391,47 @@ def process_stems_for_project(
             apply_eq = False
     
     if verbose:
-        print(f"Initializing LarsNet...")
-        print(f"  Config: {config_path}")
-        print(f"  Wiener filter: {'Enabled (α=' + str(wiener_exponent) + ')' if wiener_exponent else 'Disabled'}")
+        print(f"Initializing {model.upper()} separation model...")
+        if model == 'larsnet':
+            print(f"  Config: {config_path}")
+            print(f"  Wiener filter: {'Enabled (α=' + str(wiener_exponent) + ')' if wiener_exponent else 'Disabled'}")
         print(f"  Post-processing EQ: {'Enabled' if apply_eq else 'Disabled'}")
         print(f"  Device: {device}")
     
     print("Progress: 0%")
-    larsnet = LarsNet(
-        wiener_filter=wiener_exponent is not None,
-        wiener_exponent=wiener_exponent,
-        device=device,
-        config=str(config_path),
-    )
+    
+    if model == 'mdx23c':
+        # Load MDX23C model
+        mdx_checkpoint = Path("mdx_models/drumsep_5stems_mdx23c_jarredou.ckpt")
+        mdx_config = Path("mdx_models/config_mdx23c.yaml")
+        
+        if not mdx_checkpoint.exists():
+            raise RuntimeError(f"MDX23C checkpoint not found: {mdx_checkpoint}")
+        
+        separator = load_mdx23c_checkpoint(mdx_checkpoint, mdx_config, device=device)
+        mdx_params = get_checkpoint_hyperparameters(mdx_checkpoint, mdx_config)
+        chunk_size = mdx_params['audio']['chunk_size']
+        target_sr = mdx_params['audio']['sample_rate']
+        # Get instruments from config and map 'hh' to 'hihat' for consistency
+        config_instruments = mdx_params['training']['instruments']
+        instruments = [inst if inst != 'hh' else 'hihat' for inst in config_instruments]
+        
+        if verbose:
+            print(f"  Model: MDX23C (TFC_TDF_net)")
+            print(f"  Chunk size: {chunk_size} samples (~{chunk_size/target_sr:.1f}s)")
+            print(f"  Target SR: {target_sr} Hz")
+            print(f"  Overlap: {overlap} (hop={chunk_size//overlap} samples)")
+    else:
+        # Load LarsNet model
+        separator = LarsNet(
+            wiener_filter=wiener_exponent is not None,
+            wiener_exponent=wiener_exponent,
+            device=device,
+            config=str(config_path),
+        )
+        target_sr = separator.sr
+        instruments = None  # LarsNet returns dict with stem names
+    
     print("Progress: 15%")
     
     # Create stems directory
@@ -298,9 +442,14 @@ def process_stems_for_project(
         if verbose:
             print(f"\nProcessing: {audio_file.name}")
         
-        # Separation happens here - we'll report progress per stem via callback if possible
-        # For now, just report that separation is happening
-        stems = larsnet(audio_file)
+        if model == 'mdx23c':
+            # MDX23C processing with chunking
+            stems = _process_with_mdx23c(
+                audio_file, separator, chunk_size, target_sr, instruments, overlap, device, verbose
+            )
+        else:
+            # LarsNet processing
+            stems = separator(audio_file)
         
         # After all stems are separated: 15% (init) + 75% (5 stems * 15%) = 90%
         print("Progress: 90%")
@@ -313,7 +462,7 @@ def process_stems_for_project(
             if apply_eq:
                 if verbose:
                     print(f"  Applying EQ cleanup to {stem}...")
-                waveform = apply_frequency_cleanup(waveform, larsnet.sr, stem, eq_config)
+                waveform = apply_frequency_cleanup(waveform, target_sr, stem, eq_config)
             
             # Save to stems directory
             save_path = stems_dir / f'{audio_file.stem}-{stem}.wav'
@@ -325,7 +474,7 @@ def process_stems_for_project(
             else:
                 waveform_np = waveform_np.T
             
-            sf.write(save_path, waveform_np, larsnet.sr)
+            sf.write(save_path, waveform_np, target_sr)
             if verbose:
                 print(f"  Saved: {save_path}")
             
