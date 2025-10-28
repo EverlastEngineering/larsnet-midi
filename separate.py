@@ -22,6 +22,7 @@ from project_manager import (
     update_project_metadata,
     USER_FILES_DIR
 )
+from device_utils import detect_best_device
 from pathlib import Path
 from typing import Optional
 import argparse
@@ -114,12 +115,17 @@ Examples:
                        help="MDX23C overlap (2-50): higher=better quality but slower (default: 8)")
     parser.add_argument('-w', '--wiener', type=float, default=None,
                        help="Wiener filter exponent (default: disabled, LarsNet only)")
-    parser.add_argument('-d', '--device', type=str, default='cpu',
-                       help="Torch device: 'cpu' or 'cuda' (default: cpu)")
+    parser.add_argument('-d', '--device', type=str, default=None,
+                       help="Torch device: 'cpu', 'cuda', 'mps', or auto-detect (default: auto)")
     parser.add_argument('--eq', action='store_true',
                        help="Apply frequency cleanup (experimental)")
     
     args = parser.parse_args()
+    
+    # Auto-detect device if not specified
+    if args.device is None:
+        args.device = detect_best_device(verbose=False)
+        print(f"Auto-detected device: {args.device}")
     
     # Validate
     if args.overlap < 2 or args.overlap > 50:

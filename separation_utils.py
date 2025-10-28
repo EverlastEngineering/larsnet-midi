@@ -11,6 +11,7 @@ import torchaudio.functional as F # type: ignore
 import yaml # type: ignore
 import numpy as np
 from mdx23c_utils import load_mdx23c_checkpoint, get_checkpoint_hyperparameters
+from device_utils import detect_best_device
 
 # Try to import optimized MDX processor
 try:

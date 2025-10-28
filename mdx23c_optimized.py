@@ -19,6 +19,7 @@ from contextlib import contextmanager
 import time
 
 from mdx23c_utils import load_mdx23c_checkpoint, get_checkpoint_hyperparameters
+from device_utils import detect_best_device, validate_device
 
 logger = logging.getLogger(__name__)
 
@@ -51,11 +52,17 @@ class OptimizedMDX23CProcessor:
         self,
         checkpoint_path: str = "mdx_models/drumsep_5stems_mdx23c_jarredou.ckpt",
         config_path: str = "mdx_models/config_mdx23c.yaml",
-        device: str = "cpu",
+        device: Optional[str] = None,
         batch_size: int = 4,
         use_fp16: bool = False,
         optimize_for_inference: bool = True,
     ):
+        # Auto-detect device if not specified
+        if device is None:
+            device = detect_best_device(verbose=True)
+        else:
+            device = validate_device(device, fallback=True)
+        
         self.device = torch.device(device)
         self.batch_size = batch_size
         self.use_fp16 = use_fp16 and device == "cuda"

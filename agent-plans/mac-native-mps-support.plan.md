@@ -47,26 +47,30 @@ UVR achieves ~269 seconds processing time on Mac using Metal GPU acceleration (o
 
 **Completed:** 2025-10-28, Commit: 0fbaaa6
 
-### Phase 1: Add MPS Device Support
+### Phase 1: Add MPS Device Support ✅ COMPLETE
 
 #### 1.1 Device Detection
-- Add `detect_device()` function that returns best available device:
-  1. Try MPS (if available and on Mac)
-  2. Try CUDA (if available)
-  3. Fallback to CPU
-- Validate MPS availability with `torch.backends.mps.is_available()`
+- [x] Created `device_utils.py` with detect_best_device() function
+- [x] Priority: MPS (if available) → CUDA → CPU
+- [x] Validates MPS with torch.backends.mps.is_available()
+- [x] Added validate_device() for explicit device requests with fallback
+- [x] Added get_device_info() for detailed device information
+- [x] Added print_device_info() for debugging
 
 #### 1.2 Update Device Handling
-Files to modify:
-- `mdx23c_optimized.py`: Add MPS to device choices
-- `separation_utils.py`: Auto-detect device when not specified
-- `separate.py`: Add `mps` as device option
-- `test_mdx_performance.py`: Add MPS benchmarking
+- [x] `mdx23c_optimized.py`: device parameter now Optional[str], auto-detects if None
+- [x] `separation_utils.py`: imports device detection utilities
+- [x] `separate.py`: auto-detects device when --device not specified, updated help
+- [x] `device_utils.py`: NEW comprehensive module for device management
+- [ ] `test_mdx_performance.py`: Add MPS benchmarking (defer to future work)
 
 #### 1.3 MPS-Specific Optimizations
-- Test mixed precision support on MPS (may differ from CUDA)
-- Handle MPS fallbacks in STFT operations (lib_v5/tfc_tdf_v3.py already has MPS→CPU fallback)
-- Optimize batch sizes for Metal architecture
+- [x] Tested mixed precision - fp32 works, fp16 is CUDA-only in current code
+- [x] Verified STFT MPS fallbacks - working correctly
+- [x] Tested batch sizes - automatic sizing works well for MPS
+- [x] Verified explicit device override works (--device cpu/mps/cuda)
+
+**Completed:** 2025-10-28
 
 ### Phase 2: Native Mac Setup ✅ COMPLETE
 
