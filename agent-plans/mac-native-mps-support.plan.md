@@ -2,11 +2,13 @@
 
 ## Problem Statement
 
-UVR achieves ~64 seconds processing time on Mac using Metal GPU acceleration, while our Docker implementation takes ~600 seconds (10x slower). Docker Desktop on macOS **cannot access Metal Performance Shaders (MPS)**, forcing CPU-only execution.
+UVR achieves ~269 seconds processing time on Mac using Metal GPU acceleration (overlap=8), while our Docker implementation takes ~777 seconds (2.9x slower). Docker Desktop on macOS **cannot access Metal Performance Shaders (MPS)**, forcing CPU-only execution.
 
 ### Key Findings
-- **UVR on Mac**: 64s for 51.7s audio (1.24x real-time) using Metal
-- **LarsNet Docker on Mac**: 600s for 51.7s audio (11.6x real-time) using CPU only
+- **UVR on Mac (overlap=8)**: 269s for 51.7s audio (5.2x real-time) using Metal
+- **UVR on Mac (overlap=2)**: ~64s for 51.7s audio (1.24x real-time) using Metal
+- **LarsNet Docker on Mac (overlap=8, batch=4)**: 777s for 51.7s audio (15.0x real-time) using CPU only
+- **LarsNet Docker on Mac (overlap=2, batch=4)**: 200s for 51.7s audio (3.9x real-time) using CPU only
 - **Root cause**: Docker isolation prevents Metal GPU access
 - **CPU usage difference**: UVR shows lower CPU usage, confirming GPU acceleration
 
@@ -14,7 +16,7 @@ UVR achieves ~64 seconds processing time on Mac using Metal GPU acceleration, wh
 
 1. **Enable native execution on Mac** with Metal GPU acceleration via PyTorch MPS backend
 2. **Maintain Docker on Windows** with NVIDIA GPU support
-3. **Achieve UVR-comparable performance** on Mac (~1-2x real-time)
+3. **Achieve UVR-comparable performance** on Mac (3-5x real-time with overlap=8)
 4. **Preserve cross-platform compatibility** with graceful fallbacks
 
 ## Platform-Specific Requirements
@@ -22,7 +24,7 @@ UVR achieves ~64 seconds processing time on Mac using Metal GPU acceleration, wh
 ### macOS (Native Execution)
 - **GPU**: Metal Performance Shaders (MPS) via PyTorch
 - **Setup**: Conda environment outside Docker
-- **Target**: 60-120 seconds for 51.7s audio
+- **Target**: ~270 seconds for 51.7s audio (overlap=8), ~60-80s (overlap=2)
 - **Device string**: `mps`
 
 ### Windows (Docker Execution)

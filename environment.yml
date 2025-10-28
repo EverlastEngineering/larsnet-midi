@@ -56,9 +56,9 @@ dependencies:
   
   # ============================================================================
   # System Libraries (conda manages these better than pip)
+  # Note: libgomp removed - Linux/Windows only, Mac uses libomp automatically
   # ============================================================================
   - libopenblas
-  - libgomp
   
   # ============================================================================
   # Additional system dependencies
