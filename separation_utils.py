@@ -11,6 +11,13 @@ import torchaudio.functional as F # type: ignore
 import yaml # type: ignore
 import numpy as np
 from mdx23c_utils import load_mdx23c_checkpoint, get_checkpoint_hyperparameters
+
+# Try to import optimized MDX processor
+try:
+    from mdx23c_optimized import OptimizedMDX23CProcessor
+    MDX_OPTIMIZED_AVAILABLE = True
+except ImportError:
+    MDX_OPTIMIZED_AVAILABLE = False
 def load_eq_config(config_path: Union[str, Path] = "eq.yaml") -> Dict:
     """Load EQ configuration from YAML file."""
     config_path = Path(config_path)
@@ -408,19 +415,49 @@ def process_stems_for_project(
         if not mdx_checkpoint.exists():
             raise RuntimeError(f"MDX23C checkpoint not found: {mdx_checkpoint}")
         
-        separator = load_mdx23c_checkpoint(mdx_checkpoint, mdx_config, device=device)
-        mdx_params = get_checkpoint_hyperparameters(mdx_checkpoint, mdx_config)
-        chunk_size = mdx_params['audio']['chunk_size']
-        target_sr = mdx_params['audio']['sample_rate']
-        # Get instruments from config and map 'hh' to 'hihat' for consistency
-        config_instruments = mdx_params['training']['instruments']
-        instruments = [inst if inst != 'hh' else 'hihat' for inst in config_instruments]
-        
-        if verbose:
-            print(f"  Model: MDX23C (TFC_TDF_net)")
-            print(f"  Chunk size: {chunk_size} samples (~{chunk_size/target_sr:.1f}s)")
-            print(f"  Target SR: {target_sr} Hz")
-            print(f"  Overlap: {overlap} (hop={chunk_size//overlap} samples)")
+        # Use optimized processor if available
+        if MDX_OPTIMIZED_AVAILABLE:
+            # Determine batch size based on device and overlap
+            if device == "cuda":
+                # GPU: use larger batches
+                batch_size = min(8, max(2, 16 // overlap))
+            else:
+                # CPU: smaller batches to avoid memory issues
+                batch_size = min(4, max(1, 8 // overlap))
+            
+            separator = OptimizedMDX23CProcessor(
+                checkpoint_path=str(mdx_checkpoint),
+                config_path=str(mdx_config),
+                device=device,
+                batch_size=batch_size,
+                use_fp16=(device == "cuda"),
+                optimize_for_inference=True
+            )
+            target_sr = separator.target_sr
+            instruments = separator.instruments
+            
+            if verbose:
+                print(f"  Model: MDX23C (Optimized with batch_size={batch_size})")
+                print(f"  Chunk size: {separator.chunk_size} samples (~{separator.chunk_size/target_sr:.1f}s)")
+                print(f"  Target SR: {target_sr} Hz")
+                print(f"  Overlap: {overlap} (hop={separator.chunk_size//overlap} samples)")
+                if device == "cuda":
+                    print(f"  Mixed Precision: Enabled (fp16)")
+        else:
+            # Fallback to original implementation
+            separator = load_mdx23c_checkpoint(mdx_checkpoint, mdx_config, device=device)
+            mdx_params = get_checkpoint_hyperparameters(mdx_checkpoint, mdx_config)
+            chunk_size = mdx_params['audio']['chunk_size']
+            target_sr = mdx_params['audio']['sample_rate']
+            # Get instruments from config and map 'hh' to 'hihat' for consistency
+            config_instruments = mdx_params['training']['instruments']
+            instruments = [inst if inst != 'hh' else 'hihat' for inst in config_instruments]
+            
+            if verbose:
+                print(f"  Model: MDX23C (TFC_TDF_net)")
+                print(f"  Chunk size: {chunk_size} samples (~{chunk_size/target_sr:.1f}s)")
+                print(f"  Target SR: {target_sr} Hz")
+                print(f"  Overlap: {overlap} (hop={chunk_size//overlap} samples)")
     else:
         # Load LarsNet model
         separator = LarsNet(
@@ -443,10 +480,21 @@ def process_stems_for_project(
             print(f"\nProcessing: {audio_file.name}")
         
         if model == 'mdx23c':
-            # MDX23C processing with chunking
-            stems = _process_with_mdx23c(
-                audio_file, separator, chunk_size, target_sr, instruments, overlap, device, verbose
-            )
+            # MDX23C processing
+            if MDX_OPTIMIZED_AVAILABLE and isinstance(separator, OptimizedMDX23CProcessor):
+                # Use optimized processor
+                stems = separator.process_audio(
+                    str(audio_file), 
+                    overlap=overlap, 
+                    verbose=verbose
+                )
+            else:
+                # Fallback to original implementation
+                mdx_params = get_checkpoint_hyperparameters(mdx_checkpoint, mdx_config)
+                chunk_size = mdx_params['audio']['chunk_size']
+                stems = _process_with_mdx23c(
+                    audio_file, separator, chunk_size, target_sr, instruments, overlap, device, verbose
+                )
         else:
             # LarsNet processing
             stems = separator(audio_file)
