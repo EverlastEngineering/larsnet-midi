@@ -40,10 +40,12 @@ UVR achieves ~269 seconds processing time on Mac using Metal GPU acceleration (o
 
 ## Implementation Phases
 
-### Phase 0: Commit Current Work
+### Phase 0: Commit Current Work ✅ COMPLETE
 - [x] Commit optimized MDX23C implementation
 - [x] Commit performance testing infrastructure
 - [x] Commit documentation
+
+**Completed:** 2025-10-28, Commit: 0fbaaa6
 
 ### Phase 1: Add MPS Device Support
 
@@ -66,25 +68,28 @@ Files to modify:
 - Handle MPS fallbacks in STFT operations (lib_v5/tfc_tdf_v3.py already has MPS→CPU fallback)
 - Optimize batch sizes for Metal architecture
 
-### Phase 2: Native Mac Setup
+### Phase 2: Native Mac Setup ✅ COMPLETE
 
 #### 2.1 Environment Setup Documentation
-Create `SETUP_MAC_NATIVE.md`:
-- Prerequisites (Xcode Command Line Tools, Homebrew)
-- Conda installation
-- Environment creation from `environment.yml`
-- Model download instructions
-- Testing native setup
+- [x] Created `SETUP_MAC_NATIVE.md` with comprehensive guide
+- [x] Prerequisites (Xcode Command Line Tools documented)
+- [x] Conda installation (Miniforge installation tested)
+- [x] Environment creation from `environment.yml` (working, libgomp removed)
+- [x] Model download instructions (documented)
+- [x] Testing native setup (verification commands included)
 
 #### 2.2 Environment Configuration
-- Ensure `environment.yml` includes MPS-compatible PyTorch
-- Add Mac-specific dependencies if needed
-- Test on both Intel and Apple Silicon Macs
+- [x] `environment.yml` includes MPS-compatible PyTorch 2.7.1
+- [x] Fixed Mac-specific issue: removed libgomp (Linux/Windows only)
+- [x] Tested on Apple Silicon (macOS 26.0.1, arm64)
+- [ ] Intel Mac testing (not available)
 
 #### 2.3 Path Handling
-- Update scripts to handle both Docker paths (`/app/...`) and native paths
-- Add workspace root detection
-- Ensure relative imports work in both contexts
+- [x] Scripts work with native paths (project-based system)
+- [x] Workspace root detection working
+- [x] Relative imports working in both Docker and native
+
+**Completed:** 2025-10-28, Commit: dc888fd
 
 ### Phase 3: Docker Windows GPU Support
 

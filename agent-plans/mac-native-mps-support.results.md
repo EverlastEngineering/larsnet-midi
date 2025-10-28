@@ -10,55 +10,61 @@
 
 ## Phase 1: Add MPS Device Support
 
+**Status:** PARTIALLY COMPLETE - MPS works via CLI `--device mps`, automatic detection pending
+
 ### 1.1 Device Detection
-- [ ] Implement `detect_device()` function
-- [ ] Add MPS availability check
-- [ ] Test device priority: MPS → CUDA → CPU
+- [ ] Implement `detect_device()` function (NOT YET - manual `--device mps` works)
+- [x] Add MPS availability check (PyTorch built-in works)
+- [ ] Test device priority: MPS → CUDA → CPU (manual selection only)
 - [ ] Add logging for device selection
 
 ### 1.2 Update Device Handling
-- [ ] Update `mdx23c_optimized.py`
-- [ ] Update `separation_utils.py`
-- [ ] Update `separate.py`
-- [ ] Update `test_mdx_performance.py`
+- [x] `mdx23c_optimized.py` - Already supports MPS via device parameter
+- [x] `separation_utils.py` - Already supports MPS passthrough
+- [x] `separate.py` - Already has `--device` CLI argument
+- [ ] `test_mdx_performance.py` - Need to add MPS benchmarking script
 
-**Files to modify:**
-- mdx23c_optimized.py
-- separation_utils.py
-- separate.py
-- test_mdx_performance.py
-- lib_v5/tfc_tdf_v3.py (verify MPS handling)
+**Files working:**
+- mdx23c_optimized.py - MPS support confirmed working
+- separation_utils.py - Passes device through correctly
+- separate.py - CLI accepts `--device mps`
+- lib_v5/tfc_tdf_v3.py - MPS fallbacks working
 
 ### 1.3 MPS-Specific Optimizations
-- [ ] Test mixed precision on MPS
-- [ ] Verify STFT MPS fallbacks
-- [ ] Determine optimal batch sizes
+- [x] Test mixed precision on MPS - Using fp32 (fp16 not tested)
+- [x] Verify STFT MPS fallbacks - Working (UserWarning observed but functional)
+- [x] Determine optimal batch sizes - batch_size=4 for overlap=2, batch_size=1 for overlap=8
 - [ ] Profile memory usage
 
-**Metrics:**
-- MPS batch=2: TBD
-- MPS batch=4: TBD
-- MPS batch=8: TBD
+**Metrics (Apple Silicon, macOS 26.0.1):**
+- MPS overlap=2, batch=4: 13.8s (0.27x RT)
+- MPS overlap=8, batch=1: 38.2s (0.74x RT)
+- Automatic batch sizing works correctly for MPS
 
 ## Phase 2: Native Mac Setup
 
+**Status:** COMPLETE ✅
+
 ### 2.1 Environment Setup Documentation
-- [ ] Create SETUP_MAC_NATIVE.md
-- [ ] Document prerequisites
-- [ ] Conda setup instructions
-- [ ] Model download steps
-- [ ] Testing procedures
+- [x] Create SETUP_MAC_NATIVE.md - Complete with step-by-step guide
+- [x] Document prerequisites - Xcode tools, Miniforge installation
+- [x] Conda setup instructions - Full walkthrough tested
+- [x] Model download steps - Documented (models already present)
+- [x] Testing procedures - Verification commands included
 
 ### 2.2 Environment Configuration
-- [ ] Verify environment.yml for MPS
-- [ ] Test on Apple Silicon
-- [ ] Test on Intel Mac (if available)
-- [ ] Add Mac-specific dependencies
+- [x] Verify environment.yml for MPS - Fixed libgomp issue
+- [x] Test on Apple Silicon - Tested on macOS 26.0.1 arm64
+- [ ] Test on Intel Mac (not available)
+- [x] Add Mac-specific dependencies - libgomp removed, libomp auto-installed
 
 ### 2.3 Path Handling
-- [ ] Update path detection
-- [ ] Test relative imports
-- [ ] Verify Docker vs native execution
+- [x] Update path detection - Project-based system works natively
+- [x] Test relative imports - All imports working
+- [x] Verify Docker vs native execution - Both working correctly
+
+**Completed:** 2025-10-28
+**Commit:** dc888fd - "feat(native-mac): Native Mac setup with MPS - 7x faster than UVR"
 
 ## Phase 3: Docker Windows GPU Support
 
@@ -83,9 +89,9 @@
 
 | Platform | Environment | Device | Expected RTF | Actual RTF | Status |
 |----------|-------------|--------|--------------|------------|--------|
-| Mac M1/M2 | Native | MPS | 1-2x | TBD | ⏳ |
+| Mac M1/M2 | Native | MPS | 1-2x | **0.27-0.74x** | ✅ TESTED |
 | Mac Intel | Native | MPS | 1-2x | TBD | ⏳ |
-| Mac | Docker | CPU | 8-12x | 11.6x | ✅ |
+| Mac | Docker | CPU | 8-12x | 3.9-15.0x | ✅ |
 | Windows | Docker | CUDA | 1-2x | TBD | ⏳ |
 | Windows | Docker | CPU | 8-12x | TBD | ⏳ |
 | Linux | Docker | CUDA | 1-2x | TBD | ⏳ |
@@ -172,11 +178,12 @@
 
 **Next Steps:**
 - ✅ Phase 0: Commit optimization work - COMPLETE
-- ✅ Phase 1: Native Mac setup - COMPLETE
-- ⏳ Phase 2: Tune batch sizes for MPS
-- ⏳ Phase 3: Implement automatic device detection
-- ⏳ Phase 4: Document setup process
-- ⏳ Phase 5: Test Docker on Windows with CUDA
+- ✅ Phase 2: Native Mac setup and documentation - COMPLETE
+- ✅ Phase 2: Environment setup and testing - COMPLETE
+- ⏳ Phase 1: Implement automatic device detection (manual `--device mps` works)
+- ⏳ Phase 3: Docker Windows GPU support
+- ⏳ Phase 4: Cross-platform testing (Windows/Linux)
+- ⏳ Phase 5: Documentation polish and installation guides
 
 **Root Cause:**
 Docker Desktop on macOS cannot access Metal Performance Shaders. The only solution is native execution with PyTorch MPS backend.
