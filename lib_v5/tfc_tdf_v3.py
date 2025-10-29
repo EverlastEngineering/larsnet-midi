@@ -11,9 +11,12 @@ class STFT:
         self.device = device
 
     def __call__(self, x):
+        # PyTorch 2.0+ supports STFT on MPS natively - no CPU fallback needed
+        # Keep fallback only for truly unsupported devices (if any)
+        x_needs_cpu = x.device.type not in ["cuda", "cpu", "mps"]
+        original_device = x.device
         
-        x_is_mps = not x.device.type in ["cuda", "cpu"]
-        if x_is_mps:
+        if x_needs_cpu:
             x = x.cpu()
 
         window = self.window.to(x.device)
@@ -24,15 +27,18 @@ class STFT:
         x = x.permute([0, 3, 1, 2])
         x = x.reshape([*batch_dims, c, 2, -1, x.shape[-1]]).reshape([*batch_dims, c * 2, -1, x.shape[-1]])
 
-        if x_is_mps:
-            x = x.to(self.device)
+        if x_needs_cpu:
+            x = x.to(original_device)
 
         return x[..., :self.dim_f, :]
 
     def inverse(self, x):
+        # PyTorch 2.0+ supports iSTFT on MPS natively - no CPU fallback needed
+        # Keep fallback only for truly unsupported devices (if any)
+        x_needs_cpu = x.device.type not in ["cuda", "cpu", "mps"]
+        original_device = x.device
         
-        x_is_mps = not x.device.type in ["cuda", "cpu"]
-        if x_is_mps:
+        if x_needs_cpu:
             x = x.cpu()
 
         window = self.window.to(x.device)
@@ -47,8 +53,8 @@ class STFT:
         x = torch.istft(x, n_fft=self.n_fft, hop_length=self.hop_length, window=window, center=True)
         x = x.reshape([*batch_dims, 2, -1])
 
-        if x_is_mps:
-            x = x.to(self.device)
+        if x_needs_cpu:
+            x = x.to(original_device)
 
         return x
 

@@ -65,7 +65,9 @@ class OptimizedMDX23CProcessor:
         
         self.device = torch.device(device)
         self.batch_size = batch_size
-        self.use_fp16 = use_fp16 and device == "cuda"
+        # Enable fp16 for both CUDA and MPS (PyTorch 2.0+ supports MPS fp16)
+        # self.use_fp16 = use_fp16 and (device == "cuda" or device == "mps")
+        self.use_fp16 = use_fp16 and (device == "cuda")
         
         # Load model
         logger.info(f"Loading MDX23C model from {checkpoint_path}")
@@ -97,18 +99,20 @@ class OptimizedMDX23CProcessor:
         for param in self.model.parameters():
             param.requires_grad = False
         
-        # Enable cudnn benchmarking for optimal convolution algorithms
+        # Enable backend-specific optimizations
         if self.device.type == "cuda":
             torch.backends.cudnn.benchmark = True
+        # Note: MPS doesn't have equivalent to cudnn.benchmark, but PyTorch handles MPS optimizations internally
         
         # Try to compile model with torch.compile if available (PyTorch 2.0+)
-        # Note: torch.compile requires a C++ compiler which may not be available in containers
-        if hasattr(torch, 'compile') and False:  # Disabled by default due to compiler requirements
+        # NOTE: torch.compile on MPS is still experimental and can fail with complex models
+        # Disabled for now due to "welford_reduce" errors on MPS
+        if hasattr(torch, 'compile') and self.device.type == "cuda":
             try:
                 logger.info("Compiling model with torch.compile for faster inference")
                 self.model = torch.compile(self.model, mode="reduce-overhead")
             except Exception as e:
-                logger.warning(f"torch.compile failed (may not be supported): {e}")
+                logger.warning(f"torch.compile failed (continuing without compilation): {e}")
     
     def _init_buffers(self):
         """Pre-allocate reusable buffers for batch processing."""
@@ -150,11 +154,23 @@ class OptimizedMDX23CProcessor:
             
             # Process with batching
             with timer("Model inference"):
-                if self.use_fp16:
-                    with torch.cuda.amp.autocast():
+                try:
+                    if self.use_fp16:
+                        # MPS doesn't support torch.cuda.amp, use native fp16
+                        if self.device.type == "cuda":
+                            with torch.cuda.amp.autocast():
+                                output = self._process_batched(waveform, overlap, verbose)
+                        else:
+                            # MPS or other devices: already converted to fp16 in _load_and_prepare_audio
+                            output = self._process_batched(waveform, overlap, verbose)
+                    else:
                         output = self._process_batched(waveform, overlap, verbose)
-                else:
-                    output = self._process_batched(waveform, overlap, verbose)
+                except RuntimeError as e:
+                    if self.device.type == "mps":
+                        logger.error(f"MPS inference failed: {e}")
+                        logger.error("Possible causes: out of unified memory, unsupported operation")
+                        logger.error("Try reducing batch size or using --device cpu")
+                    raise
             
             # Convert to instrument dict
             stems = {}
@@ -249,6 +265,10 @@ class OptimizedMDX23CProcessor:
                     batch_input = self.input_buffer[:batch_size]
                 else:
                     batch_input = self.input_buffer
+                
+                # Ensure contiguous tensor for MPS compatibility
+                if self.device.type == "mps":
+                    batch_input = batch_input.contiguous()
                 
                 batch_output = self.model(batch_input)
                 

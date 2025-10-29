@@ -419,9 +419,19 @@ def process_stems_for_project(
         # Use optimized processor if available
         if MDX_OPTIMIZED_AVAILABLE:
             # Determine batch size based on device and overlap
+            # MPS has different memory characteristics than CUDA
             if device == "cuda":
-                # GPU: use larger batches
+                # CUDA: use larger batches
                 batch_size = min(8, max(2, 16 // overlap))
+            elif device == "mps":
+                # MPS: moderate batches, unified memory means different tradeoffs
+                # Based on benchmarks: batch_size=4 for overlap=2, batch_size=1 for overlap=8
+                if overlap <= 2:
+                    batch_size = 4
+                elif overlap <= 4:
+                    batch_size = 2
+                else:
+                    batch_size = 1
             else:
                 # CPU: smaller batches to avoid memory issues
                 batch_size = min(4, max(1, 8 // overlap))
@@ -431,7 +441,7 @@ def process_stems_for_project(
                 config_path=str(mdx_config),
                 device=device,
                 batch_size=batch_size,
-                use_fp16=(device == "cuda"),
+                use_fp16=(device == "cuda" or device == "mps"),
                 optimize_for_inference=True
             )
             target_sr = separator.target_sr
@@ -442,7 +452,7 @@ def process_stems_for_project(
                 print(f"  Chunk size: {separator.chunk_size} samples (~{separator.chunk_size/target_sr:.1f}s)")
                 print(f"  Target SR: {target_sr} Hz")
                 print(f"  Overlap: {overlap} (hop={separator.chunk_size//overlap} samples)")
-                if device == "cuda":
+                if device == "cuda" or device == "mps":
                     print(f"  Mixed Precision: Enabled (fp16)")
         else:
             # Fallback to original implementation

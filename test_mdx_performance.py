@@ -47,7 +47,7 @@ def benchmark_original(audio_path: str, overlap: int = 8, device: str = "cpu"):
     print(f"Overlap: {overlap} ({100*(1-1/overlap):.1f}% overlap)")
     print(f"Device: {device}")
     
-    # Warm-up run
+    # Warm-up run (important for MPS to pre-compile kernels)
     print("\nWarm-up run...")
     _ = _process_with_mdx23c(
         Path(audio_path), model, chunk_size, target_sr, instruments, 
@@ -57,6 +57,8 @@ def benchmark_original(audio_path: str, overlap: int = 8, device: str = "cpu"):
     # Clear cache
     if device == "cuda":
         torch.cuda.empty_cache()
+    elif device == "mps":
+        torch.mps.empty_cache()
     
     # Timed runs
     times = []
@@ -64,11 +66,24 @@ def benchmark_original(audio_path: str, overlap: int = 8, device: str = "cpu"):
     print(f"\nPerforming {num_runs} timed runs...")
     
     for i in range(num_runs):
+        # Synchronize before timing for accurate MPS benchmarks
+        if device == "mps":
+            torch.mps.synchronize()
+        elif device == "cuda":
+            torch.cuda.synchronize()
+        
         start = time.perf_counter()
         _ = _process_with_mdx23c(
             Path(audio_path), model, chunk_size, target_sr, instruments,
             overlap, device, verbose=False
         )
+        
+        # Synchronize after to ensure completion
+        if device == "mps":
+            torch.mps.synchronize()
+        elif device == "cuda":
+            torch.cuda.synchronize()
+        
         end = time.perf_counter()
         elapsed = end - start
         times.append(elapsed)
@@ -76,6 +91,8 @@ def benchmark_original(audio_path: str, overlap: int = 8, device: str = "cpu"):
         
         if device == "cuda":
             torch.cuda.empty_cache()
+        elif device == "mps":
+            torch.mps.empty_cache()
     
     avg_time = np.mean(times)
     std_time = np.std(times)
@@ -112,7 +129,7 @@ def benchmark_optimized(
     processor = OptimizedMDX23CProcessor(
         device=device,
         batch_size=batch_size,
-        use_fp16=(device == "cuda"),
+        use_fp16=(device == "cuda" or device == "mps"),
         optimize_for_inference=True
     )
     
@@ -124,16 +141,18 @@ def benchmark_optimized(
     print(f"Overlap: {overlap} ({100*(1-1/overlap):.1f}% overlap)")
     print(f"Batch size: {batch_size}")
     print(f"Device: {device}")
-    if device == "cuda":
+    if device == "cuda" or device == "mps":
         print(f"Mixed precision: Enabled (fp16)")
     
-    # Warm-up run
+    # Warm-up run (important for MPS to pre-compile kernels)
     print("\nWarm-up run...")
     _ = processor.process_audio(audio_path, overlap=overlap, verbose=False)
     
     # Clear cache
     if device == "cuda":
         torch.cuda.empty_cache()
+    elif device == "mps":
+        torch.mps.empty_cache()
     
     # Timed runs
     times = []
@@ -141,8 +160,21 @@ def benchmark_optimized(
     print(f"\nPerforming {num_runs} timed runs...")
     
     for i in range(num_runs):
+        # Synchronize before timing for accurate MPS benchmarks
+        if device == "mps":
+            torch.mps.synchronize()
+        elif device == "cuda":
+            torch.cuda.synchronize()
+        
         start = time.perf_counter()
         _ = processor.process_audio(audio_path, overlap=overlap, verbose=False)
+        
+        # Synchronize after to ensure completion
+        if device == "mps":
+            torch.mps.synchronize()
+        elif device == "cuda":
+            torch.cuda.synchronize()
+        
         end = time.perf_counter()
         elapsed = end - start
         times.append(elapsed)
@@ -150,6 +182,8 @@ def benchmark_optimized(
         
         if device == "cuda":
             torch.cuda.empty_cache()
+        elif device == "mps":
+            torch.mps.empty_cache()
     
     avg_time = np.mean(times)
     std_time = np.std(times)
@@ -281,7 +315,7 @@ def main():
     parser.add_argument(
         "--device",
         default="cpu",
-        choices=["cpu", "cuda"],
+        choices=["cpu", "cuda", "mps"],
         help="Processing device"
     )
     parser.add_argument(

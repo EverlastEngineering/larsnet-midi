@@ -9,6 +9,9 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Cache for device properties to avoid repeated queries
+_device_info_cache = {}
+
 
 def detect_best_device(prefer_gpu: bool = True, verbose: bool = True) -> str:
     """
@@ -35,6 +38,12 @@ def detect_best_device(prefer_gpu: bool = True, verbose: bool = True) -> str:
     if torch.backends.mps.is_available() and torch.backends.mps.is_built():
         if verbose:
             logger.info("✅ MPS (Metal) available - using GPU acceleration on macOS")
+            # Log PyTorch version for MPS capability reference
+            pytorch_version = torch.__version__
+            logger.info(f"   PyTorch version: {pytorch_version}")
+            # MPS support improved significantly in PyTorch 2.0+
+            if pytorch_version.startswith("1."):
+                logger.warning("   ⚠️  PyTorch 1.x has limited MPS support. Consider upgrading to 2.0+")
         return 'mps'
     
     # Check for CUDA (NVIDIA GPU)
@@ -53,18 +62,23 @@ def detect_best_device(prefer_gpu: bool = True, verbose: bool = True) -> str:
     return 'cpu'
 
 
-def get_device_info(device: Optional[str] = None) -> dict:
+def get_device_info(device: Optional[str] = None, use_cache: bool = True) -> dict:
     """
     Get detailed information about a device.
     
     Args:
         device: Device string ('mps', 'cuda', 'cpu', or None for auto-detect)
+        use_cache: If True, use cached device properties (recommended for performance)
         
     Returns:
         Dictionary with device information
     """
     if device is None:
         device = detect_best_device(verbose=False)
+    
+    # Check cache first
+    if use_cache and device in _device_info_cache:
+        return _device_info_cache[device]
     
     info = {
         'device': device,
@@ -80,8 +94,31 @@ def get_device_info(device: Optional[str] = None) -> dict:
         info['name'] = 'Apple Metal Performance Shaders'
         info['properties'] = {
             'built': torch.backends.mps.is_built(),
-            'platform': 'macOS'
+            'platform': 'macOS',
+            'pytorch_version': torch.__version__
         }
+        # Add MPS memory tracking (limited compared to CUDA, but useful)
+        if info['available']:
+            try:
+                # MPS uses unified memory, so we report system memory as approximate limit
+                import psutil
+                vm = psutil.virtual_memory()
+                info['properties']['system_memory'] = vm.total
+                info['properties']['available_memory'] = vm.available
+                info['properties']['memory_percent_used'] = vm.percent
+            except ImportError:
+                # psutil not available, skip memory info
+                pass
+            
+            # Check for known MPS capability milestones
+            pytorch_major = int(torch.__version__.split('.')[0])
+            pytorch_minor = int(torch.__version__.split('.')[1].split('+')[0])
+            if pytorch_major >= 2:
+                info['properties']['fp16_support'] = True
+                info['properties']['stft_support'] = True
+            else:
+                info['properties']['fp16_support'] = False
+                info['properties']['stft_support'] = False
     elif device == 'cuda':
         info['type'] = 'GPU'
         info['available'] = torch.cuda.is_available()
@@ -99,6 +136,10 @@ def get_device_info(device: Optional[str] = None) -> dict:
         info['properties'] = {
             'threads': torch.get_num_threads()
         }
+    
+    # Cache the result for future calls
+    if use_cache:
+        _device_info_cache[device] = info
     
     return info
 
