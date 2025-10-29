@@ -17,7 +17,7 @@ from webui.api import operations_bp
 from webui.jobs import get_job_queue
 
 
-def run_separate(project_number: int, device: str = 'cpu', wiener: float = None, eq: bool = False):
+def run_separate(project_number: int, device: str = 'cpu', wiener: float = None):
     """
     Execute stem separation for a project.
     
@@ -30,7 +30,7 @@ def run_separate(project_number: int, device: str = 'cpu', wiener: float = None,
     if project is None:
         raise ValueError(f'Project {project_number} not found')
     
-    separate_project(project, wiener, device, eq)
+    separate_project(project, wiener, device)
     
     return {'project_number': project_number, 'stems_created': True}
 
@@ -121,9 +121,8 @@ def separate():
     Request body (JSON):
         {
             "project_number": 1,
-            "device": "cpu",        # optional: "cpu" or "cuda"
-            "wiener": 2.0,          # optional: Wiener filter exponent
-            "eq": false             # optional: Apply EQ cleanup
+            "device": "cpu",        # optional: "cpu", "cuda", or "mps"
+            "wiener": 2.0           # optional: Wiener filter exponent
         }
         
     Returns:
@@ -160,7 +159,6 @@ def separate():
         # Extract optional parameters
         device = data.get('device', 'cpu')
         wiener = data.get('wiener', None)
-        eq = data.get('eq', False)
         
         # Validate device
         if device not in ['cpu', 'cuda', 'mps']:
@@ -184,8 +182,7 @@ def separate():
             project_id=project_number,
             project_number=project_number,
             device=device,
-            wiener=wiener,
-            eq=eq
+            wiener=wiener
         )
         
         return jsonify({

@@ -133,11 +133,11 @@ def main():
     print("\n" + "="*60)
     print(f"LarsNet Web UI v{app.config['APP_VERSION']}")
     print("="*60)
-    print(f"\nStarting server at http://0.0.0.0:5000")
+    print(f"\nStarting server at http://0.0.0.0:4915")
     print("\nPress Ctrl+C to stop\n")
     
     try:
-        app.run(host='0.0.0.0', port=5000, debug=app.config['DEBUG'])
+        app.run(host='0.0.0.0', port=4915, debug=app.config['DEBUG'])
     except KeyboardInterrupt:
         print("\n\nShutting down...")
         shutdown_job_queue()

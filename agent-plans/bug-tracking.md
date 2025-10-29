@@ -1,4 +1,7 @@
 # Bug Tracking
 
-BATCH size of 1 works faster than 2 or 4 even on overlap of 2. Symptoms of problem?
+Device dropdown should have and default to Auto in separation ui.
+
+The new model is added to normal git, it needs to be added as a large file.
+
 

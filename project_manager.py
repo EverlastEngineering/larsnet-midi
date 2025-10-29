@@ -13,9 +13,8 @@ Project Structure:
     user_files/
     └── 1 - song name/
         ├── .larsnet_project.json    # Metadata
-        ├── config.yaml              # Project-specific LarsNet config
-        ├── midiconfig.yaml          # Project-specific MIDI config
-        ├── eq.yaml                  # Project-specific EQ config (optional)
+        ├── config.yaml              # Project-specific model config (optional)
+        ├── midiconfig.yaml          # Project-specific MIDI config (optional)
         ├── song name.wav            # Original audio
         ├── stems/                   # Separated stems
         ├── cleaned/                 # Cleaned stems
@@ -39,11 +38,10 @@ import shutil
 USER_FILES_DIR = Path(__file__).parent / "user_files"
 PROJECT_METADATA_FILE = ".larsnet_project.json"
 
-# Root config files to copy to projects
-ROOT_CONFIGS = {
-    "config.yaml": "config.yaml",
-    "midiconfig.yaml": "midiconfig.yaml",
-    "eq.yaml": "eq.yaml"  # Optional
+# Config file resolution order (project-specific then root)
+CONFIG_FILES = {
+    "config.yaml": "config.yaml",  # LarsNet model config
+    "midiconfig.yaml": "midiconfig.yaml"  # MIDI generation config
 }
 
 

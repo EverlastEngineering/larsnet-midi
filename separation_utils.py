@@ -1,14 +1,11 @@
-"""                                                                                                                                                                                                                       
-Shared utilities for drum separation with optional post-processing EQ.
-"""                                                                                                                                                                                                                       
+"""
+Shared utilities for drum separation.
+"""
 from larsnet import LarsNet
 from pathlib import Path
 from typing import Union, Optional, Dict
 import soundfile as sf # type: ignore
 import torch # type: ignore
-import torchaudio # type: ignore
-import torchaudio.functional as F # type: ignore
-import yaml # type: ignore
 import numpy as np
 from mdx23c_utils import load_mdx23c_checkpoint, get_checkpoint_hyperparameters
 from device_utils import detect_best_device
@@ -19,126 +16,6 @@ try:
     MDX_OPTIMIZED_AVAILABLE = True
 except ImportError:
     MDX_OPTIMIZED_AVAILABLE = False
-def load_eq_config(config_path: Union[str, Path] = "eq.yaml") -> Dict:
-    """Load EQ configuration from YAML file."""
-    config_path = Path(config_path)
-    if not config_path.exists():
-        raise FileNotFoundError(f"EQ config file not found: {config_path}")
-    
-    with open(config_path, 'r') as f:
-        return yaml.safe_load(f)
-
-
-def apply_frequency_cleanup(
-    waveform: torch.Tensor, 
-    sr: int, 
-    stem_type: str,
-    eq_config: Optional[Dict] = None,
-    chunk_size: int = 44100 * 30  # 30 seconds per chunk
-) -> torch.Tensor:
-    """
-    Apply frequency-specific cleanup to reduce bleed between stems.
-    
-    Processes audio in chunks to avoid memory issues with biquad filters on large buffers.
-    
-    Args:
-        waveform: Audio tensor (channels, samples)
-        sr: Sample rate
-        stem_type: Type of stem ('kick', 'snare', 'toms', 'hihat', 'cymbals')
-        eq_config: EQ configuration dict (if None, will load from eq.yaml)
-        chunk_size: Number of samples to process at once (default: 30s)
-    
-    Returns:
-        Processed waveform
-    """
-    try:
-        if eq_config is None:
-            eq_config = load_eq_config()
-        
-        # Ensure we're working with the right shape
-        if waveform.dim() == 1:
-            waveform = waveform.unsqueeze(0)
-        
-        # Get stem-specific EQ settings
-        if stem_type not in eq_config:
-            print(f"  Warning: No EQ config for {stem_type}, skipping")
-            return waveform
-        
-        stem_eq = eq_config[stem_type]
-        
-        # Validate filter parameters
-        if 'highpass' in stem_eq:
-            cutoff = stem_eq['highpass']
-            if cutoff <= 0 or cutoff >= sr / 2:
-                raise ValueError(f"Invalid highpass cutoff {cutoff} Hz (must be 0 < cutoff < {sr/2} Hz)")
-        
-        if 'lowpass' in stem_eq:
-            cutoff = stem_eq['lowpass']
-            if cutoff <= 0 or cutoff >= sr / 2:
-                raise ValueError(f"Invalid lowpass cutoff {cutoff} Hz (must be 0 < cutoff < {sr/2} Hz)")
-        
-        # Process in chunks to avoid memory issues with large buffers
-        channels, num_samples = waveform.shape
-        
-        if num_samples <= chunk_size:
-            # Small enough to process in one go
-            return _apply_filters_to_chunk(waveform, sr, stem_type, stem_eq)
-        
-        # Process in chunks - simple non-overlapping approach to maintain exact length
-        processed_chunks = []
-        
-        num_chunks = (num_samples + chunk_size - 1) // chunk_size
-        print(f"  Processing {stem_type} in {num_chunks} chunks ({num_samples} samples)")
-        
-        for i in range(0, num_samples, chunk_size):
-            end = min(i + chunk_size, num_samples)
-            chunk = waveform[:, i:end]
-            processed_chunk = _apply_filters_to_chunk(chunk, sr, stem_type, stem_eq)
-            processed_chunks.append(processed_chunk)
-        
-        result = torch.cat(processed_chunks, dim=1)
-        
-        # Verify output length matches input length
-        assert result.shape[1] == num_samples, f"Output length mismatch: {result.shape[1]} != {num_samples}"
-        
-        return result
-        
-    except Exception as e:
-        print(f"  ERROR in apply_frequency_cleanup for {stem_type}: {type(e).__name__}: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
-
-
-def _apply_filters_to_chunk(
-    chunk: torch.Tensor,
-    sr: int,
-    stem_type: str,
-    stem_eq: Dict
-) -> torch.Tensor:
-    """
-    Apply highpass/lowpass filters to a single audio chunk.
-    
-    Args:
-        chunk: Audio chunk (channels, samples)
-        sr: Sample rate
-        stem_type: Stem type for logging
-        stem_eq: EQ config dict with 'highpass' and/or 'lowpass' keys
-    
-    Returns:
-        Filtered chunk
-    """
-    # Apply high-pass filter if configured
-    if 'highpass' in stem_eq:
-        cutoff = stem_eq['highpass']
-        chunk = F.highpass_biquad(chunk, sr, cutoff)
-    
-    # Apply low-pass filter if configured
-    if 'lowpass' in stem_eq:
-        cutoff = stem_eq['lowpass']
-        chunk = F.lowpass_biquad(chunk, sr, cutoff)
-    
-    return chunk
 
 
 def process_stems(
@@ -146,20 +23,16 @@ def process_stems(
     output_dir: Union[str, Path],
     wiener_exponent: Optional[float],
     device: str,
-    apply_eq: bool = False,
-    eq_config_path: str = "eq.yaml",
     verbose: bool = True
 ):
     """
-    Separate drums with optional post-processing EQ to reduce bleed.
+    Separate drums into individual stems.
     
     Args:
         input_dir: Directory containing drum mixes
         output_dir: Directory to save separated stems
         wiener_exponent: Wiener filter exponent (None to disable)
-        device: 'cpu' or 'cuda'
-        apply_eq: Whether to apply frequency cleanup
-        eq_config_path: Path to EQ configuration file
+        device: 'cpu', 'cuda', or 'mps'
         verbose: Whether to print progress information
     """
     input_dir = Path(input_dir)
@@ -171,15 +44,9 @@ def process_stems(
     if wiener_exponent is not None and wiener_exponent <= 0:
         raise ValueError(f'α-Wiener filter exponent should be positive.')
 
-    # Load EQ config if needed
-    eq_config = None
-    if apply_eq:
-        eq_config = load_eq_config(eq_config_path)
-
     if verbose:
         print(f"Initializing LarsNet...")
         print(f"  Wiener filter: {'Enabled (α=' + str(wiener_exponent) + ')' if wiener_exponent else 'Disabled'}")
-        print(f"  Post-processing EQ: {'Enabled' if apply_eq else 'Disabled'}")
         print(f"  Device: {device}")
     
     larsnet = LarsNet(
@@ -197,12 +64,6 @@ def process_stems(
         print(f"Status Update: Saving Stems...")
         for stem, waveform in stems.items():
             try:
-                # Apply frequency cleanup if enabled
-                if apply_eq:
-                    if verbose:
-                        print(f"  Applying EQ cleanup to {stem}...")
-                    waveform = apply_frequency_cleanup(waveform, larsnet.sr, stem, eq_config)
-                
                 # Save
                 save_path = output_dir.joinpath(mixture.stem, f'{mixture.stem}-{stem}.wav')
                 save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -346,7 +207,6 @@ def process_stems_for_project(
     overlap: int = 8,
     wiener_exponent: Optional[float] = None,
     device: str = 'cpu',
-    apply_eq: bool = False,
     batch_size: Optional[int] = None,
     verbose: bool = True
 ):
@@ -365,8 +225,8 @@ def process_stems_for_project(
         model: Separation model ('mdx23c' or 'larsnet')
         overlap: Overlap value for MDX23C (2-50, higher=better quality but slower)
         wiener_exponent: Wiener filter exponent (None to disable, LarsNet only)
-        device: 'cpu' or 'cuda'
-        apply_eq: Whether to apply frequency cleanup
+        device: 'cpu', 'cuda', or 'mps'
+        batch_size: Batch size for MDX23C (None=auto-detect)
         verbose: Whether to print progress information
     """
     project_dir = Path(project_dir)
@@ -389,24 +249,11 @@ def process_stems_for_project(
     if not audio_files:
         raise RuntimeError(f'No audio files found in {project_dir}')
     
-    # Load EQ config if needed
-    eq_config = None
-    if apply_eq:
-        eq_config_path = project_dir / "eq.yaml"
-        if not eq_config_path.exists():
-            eq_config_path = Path("eq.yaml")  # Fall back to root
-        if eq_config_path.exists():
-            eq_config = load_eq_config(eq_config_path)
-        else:
-            print("Warning: EQ requested but eq.yaml not found, skipping EQ")
-            apply_eq = False
-    
     if verbose:
         print(f"Initializing {model.upper()} separation model...")
         if model == 'larsnet':
             print(f"  Config: {config_path}")
             print(f"  Wiener filter: {'Enabled (α=' + str(wiener_exponent) + ')' if wiener_exponent else 'Disabled'}")
-        print(f"  Post-processing EQ: {'Enabled' if apply_eq else 'Disabled'}")
         print(f"  Device: {device}")
     
     print("Progress: 0%")
@@ -524,12 +371,6 @@ def process_stems_for_project(
         total_stems = len(stems)
         print(f"Status Update: Saving Stems...")
         for stem_idx, (stem, waveform) in enumerate(stems.items(), 1):
-            # Apply frequency cleanup if enabled
-            if apply_eq:
-                if verbose:
-                    print(f"  Applying EQ cleanup to {stem}...")
-                waveform = apply_frequency_cleanup(waveform, target_sr, stem, eq_config)
-            
             # Save to stems directory
             save_path = stems_dir / f'{audio_file.stem}-{stem}.wav'
             

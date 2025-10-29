@@ -35,7 +35,6 @@ def separate_project(
     overlap: int = 4,
     wiener_exponent: Optional[float] = None,
     device: str = 'cpu',
-    apply_eq: bool = False,
     batch_size: Optional[int] = None
 ):
     """
@@ -46,8 +45,7 @@ def separate_project(
         model: Separation model to use ('mdx23c' or 'larsnet')
         overlap: Overlap value for MDX23C (2-50, higher=better quality but slower, default=4)
         wiener_exponent: Wiener filter exponent (None to disable, LarsNet only)
-        device: 'cpu' or 'cuda'
-        apply_eq: Whether to apply frequency cleanup
+        device: 'cpu', 'cuda', or 'mps'
         batch_size: Batch size for MDX23C (None=auto, override for testing)
     """
     project_dir = project["path"]
@@ -77,7 +75,6 @@ def separate_project(
         overlap=overlap,
         wiener_exponent=wiener_exponent,
         device=device,
-        apply_eq=apply_eq,
         batch_size=batch_size,
         verbose=True
     )
@@ -122,8 +119,6 @@ Examples:
                        help="Torch device: 'cpu', 'cuda', 'mps', or auto-detect (default: auto)")
     parser.add_argument('-b', '--batch-size', type=int, default=None,
                        help="MDX23C batch size (default: auto-detect based on device/overlap)")
-    parser.add_argument('--eq', action='store_true',
-                       help="Apply frequency cleanup (experimental)")
     
     args = parser.parse_args()
     
@@ -188,4 +183,4 @@ Examples:
                 sys.exit(0)
         
         # Process the selected project
-        separate_project(project, args.model, args.overlap, args.wiener, args.device, args.eq, args.batch_size)
+        separate_project(project, args.model, args.overlap, args.wiener, args.device, args.batch_size)

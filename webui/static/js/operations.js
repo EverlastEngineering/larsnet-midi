@@ -20,8 +20,7 @@ async function startSeparate() {
         // Run separation
         const result = await api.separate(currentProject.number, {
             device: settings.device,
-            wiener: settings.wiener_exponent,
-            eq: settings.apply_eq
+            wiener: settings.wiener_exponent
         });
         
         showToast('Separation started', 'success');

@@ -146,7 +146,6 @@ class TestImperativeShell:
         """Create mock root config files."""
         (temp_dir / "config.yaml").write_text("# Mock config")
         (temp_dir / "midiconfig.yaml").write_text("# Mock MIDI config")
-        (temp_dir / "eq.yaml").write_text("# Mock EQ config")
         return temp_dir
     
     def test_discover_projects_empty(self, user_files_dir):
@@ -228,11 +227,9 @@ class TestImperativeShell:
         
         assert results["config.yaml"] is True
         assert results["midiconfig.yaml"] is True
-        assert results["eq.yaml"] is True
         
         assert (project_dir / "config.yaml").exists()
         assert (project_dir / "midiconfig.yaml").exists()
-        assert (project_dir / "eq.yaml").exists()
     
     def test_copy_configs_skips_existing(self, temp_dir, root_configs):
         project_dir = temp_dir / "project"
@@ -435,9 +432,8 @@ class TestIntegration:
         user_files.mkdir()
         
         # Create root configs
-        (tmp_path / "config.yaml").write_text("# LarsNet config")
+        (tmp_path / "config.yaml").write_text("# Config")
         (tmp_path / "midiconfig.yaml").write_text("# MIDI config")
-        (tmp_path / "eq.yaml").write_text("# EQ config")
         
         return {
             "root": tmp_path,
