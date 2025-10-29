@@ -347,6 +347,7 @@ def process_stems_for_project(
     wiener_exponent: Optional[float] = None,
     device: str = 'cpu',
     apply_eq: bool = False,
+    batch_size: Optional[int] = None,
     verbose: bool = True
 ):
     """
@@ -421,23 +422,24 @@ def process_stems_for_project(
         
         # Use optimized processor if available
         if MDX_OPTIMIZED_AVAILABLE:
-            # Determine batch size based on device and overlap
-            # MPS has different memory characteristics than CUDA
-            if device == "cuda":
-                # CUDA: use larger batches
-                batch_size = min(8, max(2, 16 // overlap))
-            elif device == "mps":
-                # MPS: moderate batches, unified memory means different tradeoffs
-                # Based on benchmarks: batch_size=4 for overlap=2, batch_size=1 for overlap=8
-                if overlap <= 2:
-                    batch_size = 4
-                elif overlap <= 4:
-                    batch_size = 2
+            # Determine batch size based on device and overlap (unless overridden)
+            if batch_size is None:
+                # MPS has different memory characteristics than CUDA
+                if device == "cuda":
+                    # CUDA: use larger batches
+                    batch_size = min(8, max(2, 16 // overlap))
+                elif device == "mps":
+                    # MPS: moderate batches, unified memory means different tradeoffs
+                    # Based on benchmarks: batch_size=4 for overlap=2, batch_size=1 for overlap=8
+                    if overlap <= 2:
+                        batch_size = 4
+                    elif overlap <= 4:
+                        batch_size = 2
+                    else:
+                        batch_size = 1
                 else:
-                    batch_size = 1
-            else:
-                # CPU: smaller batches to avoid memory issues
-                batch_size = min(4, max(1, 8 // overlap))
+                    # CPU: smaller batches to avoid memory issues
+                    batch_size = min(4, max(1, 8 // overlap))
             
             separator = OptimizedMDX23CProcessor(
                 checkpoint_path=str(mdx_checkpoint),

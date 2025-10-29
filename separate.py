@@ -35,7 +35,8 @@ def separate_project(
     overlap: int = 4,
     wiener_exponent: Optional[float] = None,
     device: str = 'cpu',
-    apply_eq: bool = False
+    apply_eq: bool = False,
+    batch_size: Optional[int] = None
 ):
     """
     Separate drums for a specific project.
@@ -47,6 +48,7 @@ def separate_project(
         wiener_exponent: Wiener filter exponent (None to disable, LarsNet only)
         device: 'cpu' or 'cuda'
         apply_eq: Whether to apply frequency cleanup
+        batch_size: Batch size for MDX23C (None=auto, override for testing)
     """
     project_dir = project["path"]
     
@@ -76,6 +78,7 @@ def separate_project(
         wiener_exponent=wiener_exponent,
         device=device,
         apply_eq=apply_eq,
+        batch_size=batch_size,
         verbose=True
     )
     
@@ -117,6 +120,8 @@ Examples:
                        help="Wiener filter exponent (default: disabled, LarsNet only)")
     parser.add_argument('-d', '--device', type=str, default=None,
                        help="Torch device: 'cpu', 'cuda', 'mps', or auto-detect (default: auto)")
+    parser.add_argument('-b', '--batch-size', type=int, default=None,
+                       help="MDX23C batch size (default: auto-detect based on device/overlap)")
     parser.add_argument('--eq', action='store_true',
                        help="Apply frequency cleanup (experimental)")
     
@@ -155,7 +160,7 @@ Examples:
                 print(f"✓ Created project {project['number']}: {project['name']}")
                 
                 # Process the newly created project
-                separate_project(project, args.model, args.overlap, args.wiener, args.device, args.eq)
+                separate_project(project, args.model, args.overlap, args.wiener, args.device, args.eq, args.batch_size)
                 
             except Exception as e:
                 print(f"ERROR: Failed to create project: {e}")
@@ -183,4 +188,4 @@ Examples:
                 sys.exit(0)
         
         # Process the selected project
-        separate_project(project, args.model, args.overlap, args.wiener, args.device, args.eq)
+        separate_project(project, args.model, args.overlap, args.wiener, args.device, args.eq, args.batch_size)
