@@ -157,14 +157,19 @@ def separate():
             }), 404
         
         # Extract optional parameters
-        device = data.get('device', 'cpu')
+        device = data.get('device', 'auto')
         wiener = data.get('wiener', None)
+        
+        # Auto-detect device if requested
+        if device == 'auto':
+            from device_utils import detect_best_device
+            device = detect_best_device(verbose=False)
         
         # Validate device
         if device not in ['cpu', 'cuda', 'mps']:
             return jsonify({
                 'error': 'Invalid device',
-                'message': 'Device must be "cpu", "cuda", or "mps"'
+                'message': 'Device must be "cpu", "cuda", "mps", or "auto"'
             }), 400
         
         # Validate wiener

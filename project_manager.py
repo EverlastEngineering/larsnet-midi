@@ -38,10 +38,10 @@ import shutil
 USER_FILES_DIR = Path(__file__).parent / "user_files"
 PROJECT_METADATA_FILE = ".larsnet_project.json"
 
-# Config file resolution order (project-specific then root)
-CONFIG_FILES = {
-    "config.yaml": "config.yaml",  # LarsNet model config
-    "midiconfig.yaml": "midiconfig.yaml"  # MIDI generation config
+# Root config files to copy to projects
+ROOT_CONFIGS = {
+    "config.yaml": "config.yaml",
+    "midiconfig.yaml": "midiconfig.yaml"
 }
 
 

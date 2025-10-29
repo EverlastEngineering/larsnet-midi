@@ -64,9 +64,13 @@ def test_load_mdx23c_checkpoint():
     assert hasattr(model, 'stft')
 
 
-@pytest.mark.slow
+@pytest.mark.slow  # Skipped by default (10s runtime), run with: pytest -m slow
 def test_mdx23c_inference():
-    """Test model inference (slow test - full chunk processing)."""
+    """Test model inference (slow test - full chunk processing).
+    
+    This test is marked as slow and skipped by default to speed up the test suite.
+    Run explicitly with: pytest -m slow test_mdx23c_utils.py
+    """
     ckpt_path = Path("mdx_models/drumsep_5stems_mdx23c_jarredou.ckpt")
     config_path = Path("mdx_models/config_mdx23c.yaml")
     

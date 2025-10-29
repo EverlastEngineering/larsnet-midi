@@ -178,7 +178,7 @@ class SettingsManager {
         
         switch (operation) {
             case 'separate':
-                settings.device = this.settings['device'] || 'cpu';
+                settings.device = this.settings['device'] || 'auto';
                 settings.wiener_exponent = this.settings['wiener'] || null;
                 if (settings.wiener_exponent === 0) {
                     settings.wiener_exponent = null; // 0 means disabled
@@ -218,7 +218,7 @@ class SettingsManager {
     resetOperation(operation) {
         const defaults = {
             'separate': {
-                'device': 'cpu',
+                'device': 'auto',
                 'wiener': 0
             },
             'cleanup': {
