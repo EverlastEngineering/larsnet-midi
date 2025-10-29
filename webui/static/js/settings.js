@@ -179,6 +179,7 @@ class SettingsManager {
         switch (operation) {
             case 'separate':
                 settings.device = this.settings['device'] || 'auto';
+                settings.overlap = parseInt(this.settings['overlap']) || 4;
                 settings.wiener_exponent = this.settings['wiener'] || null;
                 if (settings.wiener_exponent === 0) {
                     settings.wiener_exponent = null; // 0 means disabled
@@ -219,6 +220,7 @@ class SettingsManager {
         const defaults = {
             'separate': {
                 'device': 'auto',
+                'overlap': 4,
                 'wiener': 0
             },
             'cleanup': {

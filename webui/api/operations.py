@@ -17,7 +17,7 @@ from webui.api import operations_bp
 from webui.jobs import get_job_queue
 
 
-def run_separate(project_number: int, device: str = 'cpu', wiener: float = None):
+def run_separate(project_number: int, device: str = 'cpu', overlap: int = 4, wiener: float = None):
     """
     Execute stem separation for a project.
     
@@ -30,7 +30,7 @@ def run_separate(project_number: int, device: str = 'cpu', wiener: float = None)
     if project is None:
         raise ValueError(f'Project {project_number} not found')
     
-    separate_project(project, wiener, device)
+    separate_project(project, overlap=overlap, wiener_exponent=wiener, device=device)
     
     return {'project_number': project_number, 'stems_created': True}
 
@@ -121,7 +121,8 @@ def separate():
     Request body (JSON):
         {
             "project_number": 1,
-            "device": "cpu",        # optional: "cpu", "cuda", or "mps"
+            "device": "auto",       # optional: "auto", "cpu", "cuda", or "mps"
+            "overlap": 4,           # optional: MDX23C overlap (2-8, default: 4)
             "wiener": 2.0           # optional: Wiener filter exponent
         }
         
@@ -158,7 +159,15 @@ def separate():
         
         # Extract optional parameters
         device = data.get('device', 'auto')
+        overlap = data.get('overlap', 4)
         wiener = data.get('wiener', None)
+        
+        # Validate overlap
+        if overlap < 2 or overlap > 8:
+            return jsonify({
+                'error': 'Invalid overlap',
+                'message': 'Overlap must be between 2 and 8'
+            }), 400
         
         # Auto-detect device if requested
         if device == 'auto':
@@ -187,6 +196,7 @@ def separate():
             project_id=project_number,
             project_number=project_number,
             device=device,
+            overlap=overlap,
             wiener=wiener
         )
         

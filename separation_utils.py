@@ -276,14 +276,9 @@ def process_stems_for_project(
                     # CUDA: use larger batches
                     batch_size = min(8, max(2, 16 // overlap))
                 elif device == "mps":
-                    # MPS: moderate batches, unified memory means different tradeoffs
-                    # Based on benchmarks: batch_size=4 for overlap=2, batch_size=1 for overlap=8
-                    if overlap <= 2:
-                        batch_size = 4
-                    elif overlap <= 4:
-                        batch_size = 2
-                    else:
-                        batch_size = 1
+                    # MPS: Always use batch_size=1 for optimal performance
+                    # Benchmarks show batch_size=1 is faster than 2 or 4 even at low overlap
+                    batch_size = 1
                 else:
                     # CPU: smaller batches to avoid memory issues
                     batch_size = min(4, max(1, 8 // overlap))

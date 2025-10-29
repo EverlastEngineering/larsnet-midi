@@ -20,6 +20,7 @@ async function startSeparate() {
         // Run separation
         const result = await api.separate(currentProject.number, {
             device: settings.device,
+            overlap: settings.overlap,
             wiener: settings.wiener_exponent
         });
         

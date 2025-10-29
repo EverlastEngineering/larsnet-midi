@@ -596,6 +596,11 @@
                                         </select>
                                     </div>
                                     <div>
+                                        <label class="text-sm text-gray-300 block mb-2">Overlap</label>
+                                        <p class="text-xs text-gray-500 mb-2">MDX23C quality setting (2-8, higher=better quality but slower)</p>
+                                        <input type="number" id="setting-overlap" min="2" max="8" step="1" value="4" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-32">
+                                    </div>
+                                    <div>
                                         <label class="text-sm text-gray-300 block mb-2">Wiener Filter Exponent</label>
                                         <p class="text-xs text-gray-500 mb-2">Higher values = more aggressive filtering (0 = disabled)</p>
                                         <input type="number" id="setting-wiener" min="0" max="10" step="0.5" value="0" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-32">
