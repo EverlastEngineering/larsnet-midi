@@ -65,8 +65,7 @@ class OptimizedMDX23CProcessor:
         
         self.device = torch.device(device)
         self.batch_size = batch_size
-        # Enable fp16 for both CUDA and MPS (PyTorch 2.0+ supports MPS fp16)
-        # self.use_fp16 = use_fp16 and (device == "cuda" or device == "mps")
+        # Enable fp16 only for CUDA (MPS doesn't support fp16 for audio I/O)
         self.use_fp16 = use_fp16 and (device == "cuda")
         
         # Load model
@@ -175,7 +174,11 @@ class OptimizedMDX23CProcessor:
             # Convert to instrument dict
             stems = {}
             for i, instrument in enumerate(self.instruments):
-                stems[instrument] = output[0, i].cpu()  # (2, time)
+                # Convert to float32 for compatibility with audio I/O libraries
+                stem_data = output[0, i]
+                if stem_data.dtype == torch.float16:
+                    stem_data = stem_data.to(torch.float32)
+                stems[instrument] = stem_data.cpu()  # (2, time)
             
             return stems
     

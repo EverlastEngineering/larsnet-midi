@@ -32,7 +32,7 @@ import sys
 def separate_project(
     project: dict,
     model: str = 'mdx23c',
-    overlap: int = 8,
+    overlap: int = 4,
     wiener_exponent: Optional[float] = None,
     device: str = 'cpu',
     apply_eq: bool = False
@@ -43,7 +43,7 @@ def separate_project(
     Args:
         project: Project info dictionary from project_manager
         model: Separation model to use ('mdx23c' or 'larsnet')
-        overlap: Overlap value for MDX23C (2-50, higher=better quality but slower, default=8)
+        overlap: Overlap value for MDX23C (2-50, higher=better quality but slower, default=4)
         wiener_exponent: Wiener filter exponent (None to disable, LarsNet only)
         device: 'cpu' or 'cuda'
         apply_eq: Whether to apply frequency cleanup
@@ -111,8 +111,8 @@ Examples:
     parser.add_argument('-m', '--model', type=str, default='mdx23c',
                        choices=['mdx23c', 'larsnet'],
                        help="Separation model: 'mdx23c' or 'larsnet' (default: mdx23c)")
-    parser.add_argument('-o', '--overlap', type=int, default=8,
-                       help="MDX23C overlap (2-50): higher=better quality but slower (default: 8)")
+    parser.add_argument('-o', '--overlap', type=int, default=4,
+                       help="MDX23C overlap (2-50): higher=better quality but slower (default: 4)")
     parser.add_argument('-w', '--wiener', type=float, default=None,
                        help="Wiener filter exponent (default: disabled, LarsNet only)")
     parser.add_argument('-d', '--device', type=str, default=None,

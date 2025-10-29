@@ -8,7 +8,7 @@ The optimized MDX23C implementation provides significant speed improvements over
 
 - **2-8x faster** processing depending on settings
 - **Batch processing** of multiple chunks simultaneously  
-- **Mixed precision (fp16)** support for GPUs
+- **Mixed precision (fp16)** support for CUDA GPUs only
 - **Memory optimizations** with buffer reuse
 - **ONNX export** capability for further speedups
 
@@ -59,9 +59,9 @@ from mdx23c_optimized import OptimizedMDX23CProcessor
 
 # Initialize processor
 processor = OptimizedMDX23CProcessor(
-    device="cuda",        # or "cpu"
+    device="cuda",        # or "cpu" or "mps"
     batch_size=4,        # chunks per batch
-    use_fp16=True,       # mixed precision (GPU only)
+    use_fp16=True,       # mixed precision (CUDA only, not supported on MPS)
     optimize_for_inference=True
 )
 
@@ -138,8 +138,8 @@ On typical hardware:
    - Reduced peak memory usage
 
 3. **Mixed Precision (fp16)**
-   - Automatic on CUDA devices
-   - ~2x speedup on modern GPUs
+   - Available on CUDA GPUs only (not supported on MPS/Apple Silicon)
+   - ~2x speedup on modern NVIDIA GPUs
    - Maintains output quality
 
 4. **Inference Optimizations**
@@ -172,7 +172,7 @@ If you encounter OOM errors:
 
 1. Reduce batch size: `--batch-size 2`
 2. Increase overlap (reduces concurrent chunks): `--overlap 8`
-3. Disable mixed precision: Set `use_fp16=False`
+3. Disable mixed precision: Set `use_fp16=False` (CUDA only; not applicable to MPS)
 4. Use CPU instead of GPU: `--device cpu`
 
 ### Quality Issues

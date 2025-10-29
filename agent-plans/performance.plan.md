@@ -1,10 +1,11 @@
 Address each of these in order. If you run into an issue with one where it may impact delivering the final result, note this and skip it.
 
 Metal/MPS Integration Improvement Opportunities
-1. MPS-Specific Optimizations Missing
-Current state: Mixed precision (fp16) is explicitly disabled for MPS (use_fp16 = use_fp16 and device == "cuda" in mdx23c_optimized.py line 68)
-Improvement: PyTorch 2.0+ supports fp16 on MPS. Could enable mixed precision for MPS to potentially improve performance
-Location: mdx23c_optimized.py, line 68
+1. MPS-Specific Optimizations - fp16 NOT POSSIBLE
+Current state: Mixed precision (fp16) is explicitly disabled for MPS (use_fp16 = use_fp16 and device == "cuda")
+Issue: While PyTorch 2.0+ can perform fp16 inference on MPS, audio I/O libraries (soundfile, torchaudio) don't support float16 arrays, causing ValueError when saving
+Status: CANNOT BE FIXED - fp16 must remain CUDA-only due to ecosystem limitations
+Location: mdx23c_optimized.py, line 69
 2. Inefficient MPS Fallback Pattern
 Current state: STFT operations fallback to CPU for MPS with manual device transfers (x_is_mps = not x.device.type in ["cuda", "cpu"])
 Improvement: PyTorch's STFT now supports MPS natively in recent versions. The fallback mechanism causes unnecessary CPU↔GPU transfers

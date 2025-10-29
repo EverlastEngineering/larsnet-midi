@@ -207,7 +207,9 @@ def process_stems(
                 save_path = output_dir.joinpath(mixture.stem, f'{mixture.stem}-{stem}.wav')
                 save_path.parent.mkdir(parents=True, exist_ok=True)
                 
-                # Convert to numpy for saving
+                # Convert to numpy for saving (ensure float32 for soundfile compatibility)
+                if waveform.dtype == torch.float16:
+                    waveform = waveform.to(torch.float32)
                 waveform_np = waveform.cpu().numpy()
                 if waveform_np.ndim == 1:
                     waveform_np = waveform_np.reshape(-1, 1)
@@ -441,7 +443,7 @@ def process_stems_for_project(
                 config_path=str(mdx_config),
                 device=device,
                 batch_size=batch_size,
-                use_fp16=(device == "cuda" or device == "mps"),
+                use_fp16=(device == "cuda"),
                 optimize_for_inference=True
             )
             target_sr = separator.target_sr
@@ -452,7 +454,7 @@ def process_stems_for_project(
                 print(f"  Chunk size: {separator.chunk_size} samples (~{separator.chunk_size/target_sr:.1f}s)")
                 print(f"  Target SR: {target_sr} Hz")
                 print(f"  Overlap: {overlap} (hop={separator.chunk_size//overlap} samples)")
-                if device == "cuda" or device == "mps":
+                if device == "cuda":
                     print(f"  Mixed Precision: Enabled (fp16)")
         else:
             # Fallback to original implementation
@@ -526,7 +528,9 @@ def process_stems_for_project(
             # Save to stems directory
             save_path = stems_dir / f'{audio_file.stem}-{stem}.wav'
             
-            # Convert to numpy for saving
+            # Convert to numpy for saving (ensure float32 for soundfile compatibility)
+            if waveform.dtype == torch.float16:
+                waveform = waveform.to(torch.float32)
             waveform_np = waveform.cpu().numpy()
             if waveform_np.ndim == 1:
                 waveform_np = waveform_np.reshape(-1, 1)

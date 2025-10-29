@@ -51,13 +51,14 @@ python example_mdx23c_usage.py input.wav \
 The MDX23C model is now the default in `separate.py`:
 
 ```bash
-# Use MDX23C with default settings (overlap=8)
+# Use MDX23C with default settings (overlap=4)
 python separate.py 1
 
 # Use custom overlap (2-50, higher=better quality but slower)
-python separate.py 1 --overlap 4   # Fast (75% overlap)
-python separate.py 1 --overlap 8   # Default (87.5% overlap) 
-python separate.py 1 --overlap 16  # High quality (93.75% overlap)
+python separate.py 1 --overlap 2   # Fastest (50% overlap)
+python separate.py 1 --overlap 4   # Default - good balance (75% overlap)
+python separate.py 1 --overlap 8   # High quality (87.5% overlap) 
+python separate.py 1 --overlap 16  # Maximum quality (93.75% overlap)
 
 # Switch to LarsNet if needed
 python separate.py 1 --model larsnet

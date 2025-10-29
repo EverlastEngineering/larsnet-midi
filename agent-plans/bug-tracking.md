@@ -110,3 +110,29 @@
 
 ## Bug: if you reprocess files and it fails, the old file is overwriteen
 only remove old file, say, on video render, whn the new file is done
+
+## Bug: MPS fp16 causes soundfile save error
+- **Status**: Fixed
+- **Priority**: High
+- **Description**: When using fp16 mixed precision on MPS, audio separation succeeds but saving fails because soundfile doesn't support float16 dtype
+- **Steps to Reproduce**: 
+  1. Run separation with MPS device and fp16 enabled: `python separate.py 2 --overlap 2 --model mdx23c`
+  2. Processing completes successfully
+  3. Saving fails with: `ValueError: dtype must be one of ['float32', 'float64', 'int16', 'int32'] and not 'float16'`
+- **Expected Behavior**: Audio should be automatically converted to float32 before saving
+- **Actual Behavior**: Tensors remain in float16 format after `.cpu()`, causing soundfile to reject them
+- **Root Cause**: MPS doesn't actually support fp16 for all operations (specifically audio I/O via soundfile). While PyTorch can do fp16 inference on MPS, the ecosystem (soundfile, torchaudio I/O) doesn't support float16 arrays.
+- **Impact**: Breaks all MPS separation with fp16 enabled. Also affects documentation claiming MPS fp16 works.
+- **Solution**: 
+  1. ✅ Convert tensors to float32 before numpy conversion in both save locations (separation_utils.py lines 211, 532)
+  2. ✅ Disable fp16 for MPS throughout codebase (mdx23c_optimized.py line 68, separation_utils.py line 444)
+  3. ✅ Update all documentation removing claims that MPS supports fp16
+  4. ✅ Update device_utils.py to report fp16_support=False for MPS
+- **Fixed Files**:
+  - `mdx23c_optimized.py`: Disabled fp16 for MPS (line 68), convert to float32 before CPU transfer (lines 176-179)
+  - `separation_utils.py`: Disabled fp16 for MPS (line 444), removed fp16 from MPS verbose output (line 456), convert to float32 before saving (lines 209-210, 532-533)
+  - `device_utils.py`: Set fp16_support=False for MPS (line 114)
+  - `MPS_PERFORMANCE_IMPROVEMENTS.md`: Updated to reflect fp16 incompatibility
+  - `MDX23C_PERFORMANCE.md`: Clarified CUDA-only fp16 support
+  - `agent-plans/performance.plan.md`: Noted fp16 cannot work on MPS
+- **Verified**: Tested with `python separate.py 2 --overlap 2 --model mdx23c` - separation and saving successful

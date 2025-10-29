@@ -6,11 +6,12 @@ This document summarizes the Metal Performance Shaders (MPS) optimizations imple
 
 ## Critical Performance Improvements (Phase 1)
 
-### 1. Enabled MPS fp16 Mixed Precision
+### 1. ~~Enabled MPS fp16 Mixed Precision~~ (REVERTED)
 **File:** `mdx23c_optimized.py`
-- **Change:** Extended fp16 support to MPS (was CUDA-only)
-- **Impact:** 10-20% potential speedup on Apple Silicon
-- **Code:** `self.use_fp16 = use_fp16 and (device == "cuda" or device == "mps")`
+- **Change:** Attempted to extend fp16 support to MPS but discovered incompatibility
+- **Impact:** None - fp16 does not work on MPS due to audio I/O library limitations
+- **Issue:** While PyTorch can perform fp16 inference on MPS, soundfile and other audio I/O libraries don't support float16 arrays, causing ValueError when saving
+- **Current State:** fp16 remains CUDA-only: `self.use_fp16 = use_fp16 and (device == "cuda")`
 
 ### 2. Removed Inefficient MPS STFT Fallback
 **File:** `lib_v5/tfc_tdf_v3.py`
@@ -26,14 +27,17 @@ This document summarizes the Metal Performance Shaders (MPS) optimizations imple
 - **Features:**
   - System memory total and available
   - Memory usage percentage
-  - fp16 and STFT support flags based on PyTorch version
+  - STFT support flag based on PyTorch version
+  - fp16_support flag (always False for MPS due to audio I/O incompatibility)
 
-### 4. Enabled torch.compile for MPS
+### 4. ~~Enabled torch.compile for MPS~~ (DISABLED)
 **File:** `mdx23c_optimized.py`
-- **Change:** Enabled torch.compile optimization for all devices including MPS
-- **Impact:** 10-30% potential speedup
+- **Change:** Attempted to enable torch.compile for MPS but encountered unsupported operation
+- **Impact:** None - torch.compile disabled for MPS due to technical limitation
+- **Issue:** MPS backend doesn't support `welford_reduce` operations (used in batch norm variance calculations)
+- **Error:** `AssertionError: Multistage reduction not yet supported for welford_reduce`
+- **Current:** torch.compile enabled only for CUDA, disabled for MPS until PyTorch adds support
 - **Previous:** Completely disabled with `if hasattr(torch, 'compile') and False:`
-- **Current:** Enabled with proper error handling
 
 ### 5. Implemented MPS Warmup Strategy
 **File:** `test_mdx_performance.py`
@@ -99,17 +103,21 @@ This document summarizes the Metal Performance Shaders (MPS) optimizations imple
 
 ### 14. MPS Capability Detection
 **File:** `device_utils.py`
-- **Change:** Added fp16_support and stft_support flags based on PyTorch version
+- **Change:** Added stft_support flag based on PyTorch version
 - **Impact:** Runtime capability awareness
-- **Logic:** PyTorch 2.0+ has both features, 1.x doesn't
+- **Logic:** 
+  - fp16_support: Always False (audio I/O libraries don't support float16)
+  - stft_support: True for PyTorch 2.0+, False for 1.x
 
 ## Files Modified
 
 1. **mdx23c_optimized.py**
-   - Enabled fp16 for MPS
-   - Enabled torch.compile
+   - Attempted fp16 for MPS (reverted - incompatible with audio I/O)
+   - Attempted torch.compile for MPS (disabled - welford_reduce not supported)
+   - Enabled torch.compile for CUDA only
    - Added MPS error handling
    - Added tensor contiguity checks
+   - Added float32 conversion before CPU transfer to fix audio saving
 
 2. **lib_v5/tfc_tdf_v3.py**
    - Removed CPU fallback for MPS STFT operations
@@ -123,36 +131,40 @@ This document summarizes the Metal Performance Shaders (MPS) optimizations imple
 
 4. **separation_utils.py**
    - Added MPS-specific batch size tuning
-   - Extended fp16 to MPS in verbose output
+   - fp16 remains CUDA-only (removed from MPS verbose output)
+   - Added float32 conversion before saving audio stems
 
 5. **test_mdx_performance.py**
    - Added MPS synchronization points
    - Added MPS cache management
    - Added warmup documentation
-   - Extended fp16 info to MPS
 
 ## Performance Impact Estimates
 
 | Optimization | Estimated Impact | Confidence |
 |--------------|------------------|------------|
 | Remove STFT CPU fallback | 20-40% speedup | High |
-| Enable fp16 on MPS | 10-20% speedup | Medium |
-| Enable torch.compile | 10-30% speedup | Medium |
+| ~~Enable fp16 on MPS~~ | ~~10-20% speedup~~ | N/A (Audio I/O incompatible) |
+| ~~Enable torch.compile for MPS~~ | ~~10-30% speedup~~ | N/A (welford_reduce unsupported) |
+| Enable torch.compile for CUDA | 10-30% speedup | Medium |
 | Optimal batch sizes | 5-15% speedup | High |
-| Total Combined | 45-105% speedup | Medium |
+| Total Combined (MPS) | 25-55% speedup | Medium |
+| Total Combined (CUDA) | 35-85% speedup | Medium |
 
 **Note:** Actual performance gains depend on model, hardware, and workload. The removal of STFT CPU fallback is the single largest improvement.
 
 ## Testing Recommendations
 
 1. **Benchmark before/after** on Apple Silicon hardware
-2. **Verify fp16 accuracy** matches fp32 output
-3. **Test various overlap values** with new batch sizes
-4. **Monitor memory usage** with new profiling features
-5. **Check torch.compile** doesn't cause issues in specific environments
+2. **Test various overlap values** with new batch sizes
+3. **Monitor memory usage** with new profiling features
+4. **Check torch.compile** doesn't cause issues in specific environments
+5. **Verify audio output quality** remains high with float32 inference
 
 ## Known Limitations
 
+- **MPS does not support fp16 mixed precision** due to audio I/O library incompatibility (soundfile, torchaudio don't support float16 arrays)
+- **MPS does not support torch.compile** due to missing welford_reduce operation (used in batch normalization variance calculations)
 - MPS doesn't expose GPU memory info like CUDA (using system memory as proxy)
 - MPS Graph API optimization not implemented (requires significant low-level work)
 - No automatic memory pressure detection (would require complex monitoring)
