@@ -583,51 +583,31 @@
                             <div id="settings-separate" class="settings-panel hidden mt-4 md:mt-6 p-6 md:p-8 border-t border-gray-700">
                                 <h4 class="text-sm font-semibold mb-3 md:mb-4 text-white bg-blue-600 px-3 py-2 rounded">Separation Settings</h4>
                                 <div class="space-y-3 md:space-y-4">
-                                    <div class="flex items-center justify-between p-3 bg-gray-800 rounded border-2 border-blue-500">
-                                        <div class="flex-1">
-                                            <label class="text-sm text-gray-300 font-semibold flex items-center">
-                                                <i class="fas fa-flask mr-2 text-blue-400"></i>
-                                                Comparison Mode
-                                            </label>
-                                            <p class="text-xs text-gray-500 mt-1">Test multiple Wiener/EQ combinations for troublesome audio</p>
-                                        </div>
-                                        <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
-                                            <input type="checkbox" id="setting-comparison-mode" class="sr-only peer">
-                                            <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-500"></div>
-                                        </label>
-                                    </div>
-                                    <div id="single-separation-settings">
                                         <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                                             <div class="flex-1">
                                                 <label class="text-sm text-gray-300">Device</label>
                                                 <p class="text-xs text-gray-500">Processing device (CPU or CUDA GPU)</p>
                                             </div>
-                                            <select id="setting-device" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-auto">
-                                                <option value="cpu">CPU</option>
-                                                <option value="cuda">CUDA (GPU)</option>
-                                            </select>
-                                        </div>
-                                        <div class="flex items-center justify-between mt-3">
-                                            <div class="flex-1">
-                                                <label class="text-sm text-gray-300">Apply EQ Cleanup</label>
-                                                <p class="text-xs text-gray-500">Apply frequency filtering to reduce bleed</p>
-                                            </div>
-                                            <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
-                                                <input type="checkbox" id="setting-apply-eq" class="sr-only peer">
-                                                <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-larsnet-primary"></div>
-                                            </label>
-                                        </div>
-                                        <div class="mt-3">
-                                            <label class="text-sm text-gray-300 block mb-2">Wiener Filter Exponent</label>
-                                            <p class="text-xs text-gray-500 mb-2">Higher values = more aggressive filtering (0 = disabled)</p>
-                                            <input type="number" id="setting-wiener" min="0" max="10" step="0.5" value="0" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-32">
-                                        </div>
+                                        <select id="setting-device" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-auto">
+                                            <option value="cpu">CPU</option>
+                                            <option value="cuda">CUDA (GPU)</option>
+                                            <option value="mps">MPS (Apple Silicon)</option>
+                                        </select>
                                     </div>
-                                    <div id="comparison-mode-info" class="hidden p-3 bg-blue-900 bg-opacity-30 rounded border border-blue-500">
-                                        <p class="text-xs text-blue-200">
-                                            <i class="fas fa-info-circle mr-1"></i>
-                                            Comparison mode will test 7 configurations: baseline, wiener-2.0, wiener-1.0, wiener-0.4, eq, wiener-2.0+eq, wiener-1.0+eq. Results saved to for_comparison/ folder.
-                                        </p>
+                                    <div class="flex items-center justify-between">
+                                        <div class="flex-1">
+                                            <label class="text-sm text-gray-300">Apply EQ Cleanup</label>
+                                            <p class="text-xs text-gray-500">Apply frequency filtering to reduce bleed</p>
+                                        </div>
+                                        <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
+                                            <input type="checkbox" id="setting-apply-eq" class="sr-only peer">
+                                            <div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-larsnet-primary"></div>
+                                        </label>
+                                    </div>
+                                    <div>
+                                        <label class="text-sm text-gray-300 block mb-2">Wiener Filter Exponent</label>
+                                        <p class="text-xs text-gray-500 mb-2">Higher values = more aggressive filtering (0 = disabled)</p>
+                                        <input type="number" id="setting-wiener" min="0" max="10" step="0.5" value="0" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-32">
                                     </div>
                                 </div>
                             </div>
@@ -878,26 +858,6 @@
     <script src="/static/js/projects.js?v=15"></script>
     <script src="/static/js/operations.js?v=15"></script>
     <script src="/static/js/app.js?v=15"></script>
-    <script>
-        // Handle comparison mode toggle
-        document.addEventListener('DOMContentLoaded', () => {
-            const comparisonToggle = document.getElementById('setting-comparison-mode');
-            const singleSettings = document.getElementById('single-separation-settings');
-            const comparisonInfo = document.getElementById('comparison-mode-info');
-            
-            if (comparisonToggle) {
-                comparisonToggle.addEventListener('change', () => {
-                    if (comparisonToggle.checked) {
-                        singleSettings.classList.add('opacity-50', 'pointer-events-none');
-                        comparisonInfo.classList.remove('hidden');
-                    } else {
-                        singleSettings.classList.remove('opacity-50', 'pointer-events-none');
-                        comparisonInfo.classList.add('hidden');
-                    }
-                });
-            }
-        });
-    </script>
     
 </body>
 </html>

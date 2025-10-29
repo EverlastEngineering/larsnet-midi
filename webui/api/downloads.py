@@ -197,11 +197,11 @@ def get_file_by_path(project_number, file_path):
     GET /api/projects/:project_number/files/:file_path
     
     Access a file by relative path within project directory.
-    Used for comparison files and other custom paths.
+    Used for custom paths within project folders.
     
     Args:
         project_number: Project number
-        file_path: Relative path within project (e.g., for_comparison/baseline/song/kick.wav)
+        file_path: Relative path within project (e.g., stems/song/kick.wav)
         
     Returns:
         200: File streaming

@@ -280,19 +280,6 @@ class LarsNetAPI {
         });
     }
     
-    async compare(projectNumber, options = {}) {
-        return await this.post('/compare', {
-            project_number: projectNumber,
-            ...options
-        });
-    }
-    
-    async deleteComparison(projectNumber) {
-        return await this.post('/delete-comparison', {
-            project_number: projectNumber
-        });
-    }
-    
     // ========== Jobs API ==========
     
     async getJobs() {

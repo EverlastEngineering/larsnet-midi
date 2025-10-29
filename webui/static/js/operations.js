@@ -17,28 +17,15 @@ async function startSeparate() {
         // Get settings from SettingsManager
         const settings = window.settingsManager.getSettingsForOperation('separate');
         
-        // Check if comparison mode is enabled
-        const comparisonMode = document.getElementById('setting-comparison-mode')?.checked || false;
+        // Run separation
+        const result = await api.separate(currentProject.number, {
+            device: settings.device,
+            wiener: settings.wiener_exponent,
+            eq: settings.apply_eq
+        });
         
-        if (comparisonMode) {
-            // Run comparison mode
-            const result = await api.compare(currentProject.number, {
-                device: settings.device
-            });
-            
-            showToast('Comparison started - testing 7 configurations', 'success');
-            monitorJob(result.job_id, 'compare');
-        } else {
-            // Run normal separation
-            const result = await api.separate(currentProject.number, {
-                device: settings.device,
-                wiener: settings.wiener_exponent,
-                eq: settings.apply_eq
-            });
-            
-            showToast('Separation started', 'success');
-            monitorJob(result.job_id, 'separate');
-        }
+        showToast('Separation started', 'success');
+        monitorJob(result.job_id, 'separate');
         
     } catch (error) {
         console.error('Failed to start separation:', error);
