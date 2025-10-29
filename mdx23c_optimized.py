@@ -243,6 +243,10 @@ class OptimizedMDX23CProcessor:
         output = torch.zeros(1, 5, 2, total_length, device=self.device, dtype=dtype)
         overlap_count = torch.zeros(total_length, device=self.device, dtype=dtype)
         
+        # Track time for frequent progress updates
+        last_progress_time = time.time()
+        last_reported_progress = 0
+        
         # Process in batches
         with torch.no_grad():
             for batch_start in range(0, num_chunks, self.batch_size):
@@ -284,9 +288,19 @@ class OptimizedMDX23CProcessor:
                     output[:, :, :, start:start+actual_length] += batch_output[i, :, :, :actual_length]
                     overlap_count[start:start+actual_length] += 1
                 
-                if verbose and ((batch_end % 10 == 0) or batch_end == num_chunks):
-                    progress = (batch_end / num_chunks) * 100
-                    print(f"  Progress: {progress:.1f}% ({batch_end}/{num_chunks} chunks)")
+                # Report progress frequently for WebUI (at least every 1 second or every batch)
+                if verbose:
+                    current_time = time.time()
+                    # Model inference is 16-90%, so map chunk progress to that range
+                    chunk_progress = (batch_end / num_chunks) * 74  # 0-74%
+                    total_progress = int(16 + chunk_progress)  # 16-90%
+                    
+                    # Report if: progress changed AND (1 second elapsed OR final batch)
+                    if total_progress > last_reported_progress and \
+                       (current_time - last_progress_time >= 1.0 or batch_end == num_chunks):
+                        print(f"Progress: {total_progress}%")
+                        last_reported_progress = total_progress
+                        last_progress_time = current_time
         
         # Average overlapping regions
         output = output / overlap_count.view(1, 1, 1, -1)

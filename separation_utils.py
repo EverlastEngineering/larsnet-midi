@@ -409,6 +409,7 @@ def process_stems_for_project(
         print(f"  Device: {device}")
     
     print("Progress: 0%")
+    print("Progress: 5%")
     
     if model == 'mdx23c':
         # Load MDX23C model
@@ -456,6 +457,7 @@ def process_stems_for_project(
                 print(f"  Overlap: {overlap} (hop={separator.chunk_size//overlap} samples)")
                 if device == "cuda":
                     print(f"  Mixed Precision: Enabled (fp16)")
+            print("Progress: 10%")
         else:
             # Fallback to original implementation
             separator = load_mdx23c_checkpoint(mdx_checkpoint, mdx_config, device=device)
@@ -486,6 +488,7 @@ def process_stems_for_project(
     
     # Create stems directory
     stems_dir.mkdir(parents=True, exist_ok=True)
+    print("Progress: 16%")
     
     # Process each audio file
     for audio_file in audio_files:
@@ -512,10 +515,10 @@ def process_stems_for_project(
             # LarsNet processing
             stems = separator(audio_file)
         
-        # After all stems are separated: 15% (init) + 75% (5 stems * 15%) = 90%
-        print("Progress: 90%")
+        # After all stems are separated: model inference reports 16-90%
+        print("Progress: 91%")
         
-        # Saving phase: 90-100%
+        # Saving phase: 91-100%
         total_stems = len(stems)
         print(f"Status Update: Saving Stems...")
         for stem_idx, (stem, waveform) in enumerate(stems.items(), 1):
@@ -541,6 +544,6 @@ def process_stems_for_project(
             if verbose:
                 print(f"  Saved: {save_path}")
             
-            # Progress: saving stems (90-100%)
-            save_progress = int(90 + (stem_idx / total_stems) * 10)
+            # Progress: saving stems (91-100%)
+            save_progress = int(91 + (stem_idx / total_stems) * 9)
             print(f"Progress: {save_progress}%")
