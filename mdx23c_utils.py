@@ -12,10 +12,16 @@ The file also provides simple inference helpers that support:
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union, Callable
 import logging
+import warnings
 
 import numpy as np
 import torch
 import yaml
+
+# Suppress PyTorch STFT deprecation warning from lib_v5
+# The library uses return_complex=False which is deprecated but still functional
+# This will need updating when PyTorch removes support (not urgent)
+warnings.filterwarnings('ignore', message='.*stft with return_complex=False is deprecated.*')
 
 # Support both old and new architectures
 try:
