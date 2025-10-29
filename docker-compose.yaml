@@ -27,3 +27,14 @@ services:
     # If you need to enter the container interactively (good for development):
     stdin_open: true  # Keep STDIN open
     tty: true         # Allocate a pseudo-TTY
+    
+    # GPU support for NVIDIA GPUs (Windows/Linux with NVIDIA Container Toolkit)
+    # Uncomment the section below to enable GPU acceleration
+    # For setup instructions, see SETUP_WINDOWS_GPU.md
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]

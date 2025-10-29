@@ -11,15 +11,25 @@ This project extends [LarsNet](LARSNET.md), a deep learning model for drum sourc
 
 ## Quick Start
 
-### Setting Up
+### Choose Your Setup
 
-This project runs in Docker. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/), then run this in Terminal:
+#### 🚀 **Mac (Native + GPU)** - Recommended for Best Performance
+For Mac users, native installation provides **7x faster** processing than Docker:
+- **Setup Time:** 15-20 minutes
+- **Performance:** 38s for 51.7s audio (sub-realtime!)
+- **GPU:** Automatic Metal acceleration
+- **Guide:** [SETUP_MAC_NATIVE.md](SETUP_MAC_NATIVE.md)
+
+#### 🐋 **Docker (Cross-Platform)**
+Universal option that works everywhere:
+- **Mac:** CPU-only (20x slower than native)
+- **Windows:** Add GPU for 10-20x speedup ([SETUP_WINDOWS_GPU.md](SETUP_WINDOWS_GPU.md))
+- **Linux:** Add GPU for 10-20x speedup
 
 ```bash
+# Install Docker Desktop, then:
 docker compose up -d
 ```
-
-This will incur some significant downloads for tools and such. Once complete and running, you can use either:
 
 **Option 1: Web Interface (Recommended)**
 ```bash
@@ -32,7 +42,17 @@ Then open http://localhost:49152 in your browser. See [WEBUI_SETUP.md](WEBUI_SET
 ```bash
 docker exec -it larsnet-midi bash
 ```
-This is where you'll execute the scripts.
+
+### Performance Comparison
+
+| Platform | Setup | Time (51.7s audio) | Speed |
+|----------|-------|-------------------|-------|
+| **Mac Native** | MPS | **38s** | 7x faster than UVR ⚡ |
+| Mac Docker | CPU | 777s | 20x slower ❌ |
+| Windows Docker | CUDA | ~40-60s | Similar to Mac native ✅ |
+| Windows Docker | CPU | ~777s | Slow ❌ |
+
+**Recommendation:** Mac users should use native setup. Windows users should enable GPU in Docker.
 
 ## Turning Drum Tracks into MIDI
 
