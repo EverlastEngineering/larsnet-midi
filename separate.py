@@ -151,7 +151,7 @@ Examples:
                 print(f"✓ Created project {project['number']}: {project['name']}")
                 
                 # Process the newly created project
-                separate_project(project, args.model, args.overlap, args.wiener, args.device, args.eq, args.batch_size)
+                separate_project(project, args.model, args.overlap, args.wiener, args.device, args.batch_size)
                 
             except Exception as e:
                 print(f"ERROR: Failed to create project: {e}")

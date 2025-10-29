@@ -94,7 +94,7 @@ def load_mdx23c_checkpoint(
 
     logger.info("Loading checkpoint metadata from %s", ckpt_path)
     try:
-        ckpt = torch.load(str(ckpt_path), map_location=lambda storage, loc: storage)
+        ckpt = torch.load(str(ckpt_path), map_location=lambda storage, loc: storage, weights_only=False)
     except Exception as e:
         raise MDXLoadError(f"Failed to torch.load checkpoint: {e}")
 
@@ -323,7 +323,7 @@ def get_checkpoint_hyperparameters(
     if not p.exists():
         raise MDXLoadError(f"Checkpoint path not found: {p}")
     try:
-        ckpt = torch.load(str(p), map_location=lambda storage, loc: storage)
+        ckpt = torch.load(str(p), map_location=lambda storage, loc: storage, weights_only=False)
     except Exception as e:
         raise MDXLoadError(f"Failed to load checkpoint: {e}")
     

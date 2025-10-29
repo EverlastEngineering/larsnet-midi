@@ -23,7 +23,7 @@ class TestSeparateIntegration:
         user_files.mkdir()
         
         # Create root configs
-        (tmp_path / "config.yaml").write_text("# Mock LarsNet config")
+        (tmp_path / "config.yaml").write_text("# Mock config for testing")
         (tmp_path / "midiconfig.yaml").write_text("# Mock MIDI config")
         
         return {
@@ -63,4 +63,4 @@ class TestSeparateIntegration:
         # Verify config is accessible
         config = project["path"] / "config.yaml"
         assert config.exists()
-        assert "Mock LarsNet config" in config.read_text()
+        assert "Mock config for testing" in config.read_text()
