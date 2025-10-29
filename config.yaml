@@ -1,3 +1,7 @@
+# NOTE: This config.yaml file is kept for legacy compatibility
+# StemToMIDI now uses MDX23C model, not LarsNet
+# See mdx_models/config_mdx23c.yaml for current model configuration
+
 global:
   sr:                   44100     # Hz
   segment:              11.85     # seconds
@@ -6,13 +10,13 @@ global:
   n_workers:            16
   prefetch_factor:      6
 
-
-inference_models:
-  kick:     '/app/pretrained_larsnet_models/kick/pretrained_kick_unet.pth'
-  snare:    '/app/pretrained_larsnet_models/snare/pretrained_snare_unet.pth'
-  toms:     '/app/pretrained_larsnet_models/toms/pretrained_toms_unet.pth'
-  hihat:    '/app/pretrained_larsnet_models/hihat/pretrained_hihat_unet.pth'
-  cymbals:  '/app/pretrained_larsnet_models/cymbals/pretrained_cymbals_unet.pth'
+# Legacy LarsNet model paths (no longer used)
+# inference_models:
+#   kick:     '/app/pretrained_larsnet_models/kick/pretrained_kick_unet.pth'
+#   snare:    '/app/pretrained_larsnet_models/snare/pretrained_snare_unet.pth'
+#   toms:     '/app/pretrained_larsnet_models/toms/pretrained_toms_unet.pth'
+#   hihat:    '/app/pretrained_larsnet_models/hihat/pretrained_hihat_unet.pth'
+#   cymbals:  '/app/pretrained_larsnet_models/cymbals/pretrained_cymbals_unet.pth'
 
 
 data_augmentation:

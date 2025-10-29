@@ -24,15 +24,16 @@
 - [x] Phase 1 commit completed
 
 ### Phase 2: Python Core Removal
-- [ ] larsnet.py deleted
-- [ ] unet.py deleted
-- [ ] separation_utils.py cleaned (LarsNet removed)
-- [ ] separate.py updated (--model flag removed)
-- [ ] project_manager.py updated
-- [ ] main.py updated
-- [ ] config.yaml updated
-- [ ] pretrained_larsnet_models/ directory removed
-- [ ] Phase 2 commit completed
+- [x] larsnet.py deleted
+- [x] unet.py deleted
+- [x] separation_utils.py cleaned (LarsNet removed, model parameter kept)
+- [x] separate.py updated (--model kept but 'larsnet' choice removed)
+- [x] project_manager.py updated (metadata filename changed)
+- [x] main.py updated
+- [x] config.yaml updated (legacy paths commented out)
+- [x] pretrained_larsnet_models/ directory removed
+- [x] .gitattributes updated (LFS filter removed)
+- [x] Phase 2 commit completed
 
 ### Phase 3: Test Updates
 - [ ] test_separate.py updated
@@ -76,6 +77,14 @@
 - **LARSNET.md**: Preserved as historical attribution with clear note about MDX23C transition
 - **Documentation tone**: Updated to past tense for LarsNet, present tense for StemToMIDI/MDX23C
 - **Repository structure**: Updated from `larsnet/` to `stemtomidi/` in documentation
+
+### Phase 2
+- **Model parameter preserved**: Kept --model flag and model parameter for future extensibility
+- **LarsNet removal**: Removed all LarsNet-specific code including imports, conditionals, and processing
+- **Metadata filename**: Changed from `.larsnet_project.json` to `.stemtomidi_project.json`
+- **Config.yaml**: Commented out LarsNet model paths, added note about MDX23C
+- **Model directory**: Removed 562MB of pretrained LarsNet models (7 files)
+- **Future-ready**: Code structure supports adding new models easily
 
 ## Issues Encountered
 

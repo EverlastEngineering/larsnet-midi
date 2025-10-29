@@ -1,7 +1,6 @@
 """
 Shared utilities for drum separation.
 """
-from larsnet import LarsNet
 from pathlib import Path
 from typing import Union, Optional, Dict
 import soundfile as sf # type: ignore
@@ -16,76 +15,6 @@ try:
     MDX_OPTIMIZED_AVAILABLE = True
 except ImportError:
     MDX_OPTIMIZED_AVAILABLE = False
-
-
-def process_stems(
-    input_dir: Union[str, Path],
-    output_dir: Union[str, Path],
-    wiener_exponent: Optional[float],
-    device: str,
-    verbose: bool = True
-):
-    """
-    Separate drums into individual stems.
-    
-    Args:
-        input_dir: Directory containing drum mixes
-        output_dir: Directory to save separated stems
-        wiener_exponent: Wiener filter exponent (None to disable)
-        device: 'cpu', 'cuda', or 'mps'
-        verbose: Whether to print progress information
-    """
-    input_dir = Path(input_dir)
-    output_dir = Path(output_dir)
-
-    if not input_dir.exists():
-        raise RuntimeError(f'{input_dir} was not found.')
-
-    if wiener_exponent is not None and wiener_exponent <= 0:
-        raise ValueError(f'α-Wiener filter exponent should be positive.')
-
-    if verbose:
-        print(f"Initializing LarsNet...")
-        print(f"  Wiener filter: {'Enabled (α=' + str(wiener_exponent) + ')' if wiener_exponent else 'Disabled'}")
-        print(f"  Device: {device}")
-    
-    larsnet = LarsNet(
-        wiener_filter=wiener_exponent is not None,
-        wiener_exponent=wiener_exponent,
-        device=device,
-        config="config.yaml",
-    )
-
-    for mixture in input_dir.rglob("*.wav"):
-        if verbose:
-            print(f"\nProcessing: {mixture.name}")
-        
-        stems = larsnet(mixture)
-        print(f"Status Update: Saving Stems...")
-        for stem, waveform in stems.items():
-            try:
-                # Save
-                save_path = output_dir.joinpath(mixture.stem, f'{mixture.stem}-{stem}.wav')
-                save_path.parent.mkdir(parents=True, exist_ok=True)
-                
-                # Convert to numpy for saving (ensure float32 for soundfile compatibility)
-                if waveform.dtype == torch.float16:
-                    waveform = waveform.to(torch.float32)
-                waveform_np = waveform.cpu().numpy()
-                if waveform_np.ndim == 1:
-                    waveform_np = waveform_np.reshape(-1, 1)
-                else:
-                    waveform_np = waveform_np.T
-                
-                sf.write(save_path, waveform_np, larsnet.sr)
-                if verbose:
-                    print(f"  Saved: {save_path}")
-                    
-            except Exception as e:
-                print(f"ERROR processing {stem}: {type(e).__name__}: {e}")
-                import traceback
-                traceback.print_exc()
-                raise
 
 
 def _process_with_mdx23c(
@@ -222,9 +151,9 @@ def process_stems_for_project(
         project_dir: Path to project directory
         stems_dir: Path to stems output directory (project/stems/)
         config_path: Path to config.yaml (project-specific or root)
-        model: Separation model ('mdx23c' or 'larsnet')
+        model: Separation model ('mdx23c' currently supported, extensible for future models)
         overlap: Overlap value for MDX23C (2-50, higher=better quality but slower)
-        wiener_exponent: Wiener filter exponent (None to disable, LarsNet only)
+        wiener_exponent: Reserved for future model use (not used by MDX23C)
         device: 'cpu', 'cuda', or 'mps'
         batch_size: Batch size for MDX23C (None=auto-detect)
         verbose: Whether to print progress information
@@ -251,9 +180,6 @@ def process_stems_for_project(
     
     if verbose:
         print(f"Initializing {model.upper()} separation model...")
-        if model == 'larsnet':
-            print(f"  Config: {config_path}")
-            print(f"  Wiener filter: {'Enabled (α=' + str(wiener_exponent) + ')' if wiener_exponent else 'Disabled'}")
         print(f"  Device: {device}")
     
     print("Progress: 0%")
@@ -318,15 +244,8 @@ def process_stems_for_project(
                 print(f"  Target SR: {target_sr} Hz")
                 print(f"  Overlap: {overlap} (hop={chunk_size//overlap} samples)")
     else:
-        # Load LarsNet model
-        separator = LarsNet(
-            wiener_filter=wiener_exponent is not None,
-            wiener_exponent=wiener_exponent,
-            device=device,
-            config=str(config_path),
-        )
-        target_sr = separator.sr
-        instruments = None  # LarsNet returns dict with stem names
+        # Future: Add other model support here
+        raise ValueError(f"Unsupported model: {model}. Currently only 'mdx23c' is supported.")
     
     print("Progress: 15%")
     
@@ -356,8 +275,8 @@ def process_stems_for_project(
                     audio_file, separator, chunk_size, target_sr, instruments, overlap, device, verbose
                 )
         else:
-            # LarsNet processing
-            stems = separator(audio_file)
+            # Future: Add other model processing here
+            raise ValueError(f"Unsupported model: {model}")
         
         # After all stems are separated: model inference reports 16-90%
         print("Progress: 91%")

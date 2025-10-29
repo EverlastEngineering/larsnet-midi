@@ -1,14 +1,14 @@
 """
-Separate drums into individual stems using MDX23C or LarsNet.
+Separate drums into individual stems using MDX23C.
 
 Uses project-based workflow: automatically detects projects in user_files/
 or processes new audio files dropped there.
 
 Usage:
-    python separate.py              # Auto-detect project (uses MDX23C by default)
+    python separate.py              # Auto-detect project (uses MDX23C)
     python separate.py 1            # Process specific project by number
     python separate.py --device cuda  # Use GPU acceleration
-    python separate.py --model larsnet  # Use LarsNet instead of MDX23C
+    python separate.py --overlap 8  # High quality separation (slower)
 """
 
 from separation_utils import process_stems_for_project
@@ -42,9 +42,9 @@ def separate_project(
     
     Args:
         project: Project info dictionary from project_manager
-        model: Separation model to use ('mdx23c' or 'larsnet')
+        model: Separation model to use (currently only 'mdx23c')
         overlap: Overlap value for MDX23C (2-50, higher=better quality but slower, default=4)
-        wiener_exponent: Wiener filter exponent (None to disable, LarsNet only)
+        wiener_exponent: Reserved for future use (not used by MDX23C)
         device: 'cpu', 'cuda', or 'mps'
         batch_size: Batch size for MDX23C (None=auto, override for testing)
     """
@@ -96,25 +96,25 @@ def separate_project(
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description="Separate drums into individual stems using LarsNet.",
+        description="Separate drums into individual stems using MDX23C.",
         epilog="""
 Examples:
   python separate.py                    # Auto-detect project or new file
   python separate.py 1                  # Process project #1
   python separate.py --device cuda      # Use GPU
-  python separate.py --wiener 2.0       # Apply Wiener filtering
+  python separate.py --overlap 8        # High quality separation
         """
     )
     
     parser.add_argument('project_number', type=int, nargs='?', default=None,
                        help="Project number to process (optional)")
     parser.add_argument('-m', '--model', type=str, default='mdx23c',
-                       choices=['mdx23c', 'larsnet'],
-                       help="Separation model: 'mdx23c' or 'larsnet' (default: mdx23c)")
+                       choices=['mdx23c'],
+                       help="Separation model (default: mdx23c, currently only option)")
     parser.add_argument('-o', '--overlap', type=int, default=4,
                        help="MDX23C overlap (2-50): higher=better quality but slower (default: 4)")
     parser.add_argument('-w', '--wiener', type=float, default=None,
-                       help="Wiener filter exponent (default: disabled, LarsNet only)")
+                       help="Reserved for future use (not used by MDX23C)")
     parser.add_argument('-d', '--device', type=str, default=None,
                        help="Torch device: 'cpu', 'cuda', 'mps', or auto-detect (default: auto)")
     parser.add_argument('-b', '--batch-size', type=int, default=None,
@@ -133,12 +133,8 @@ Examples:
         sys.exit(1)
     
     if args.wiener is not None:
-        if args.wiener <= 0:
-            print("ERROR: Wiener exponent must be positive")
-            sys.exit(1)
-        if args.model == 'mdx23c':
-            print("WARNING: Wiener filter only works with LarsNet model, ignoring --wiener")
-            args.wiener = None
+        print("WARNING: Wiener filter parameter is not used by MDX23C, ignoring --wiener")
+        args.wiener = None
     
     # Check for loose files first (new audio files to process)
     loose_files = find_loose_files(USER_FILES_DIR)
