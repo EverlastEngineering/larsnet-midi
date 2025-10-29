@@ -60,8 +60,8 @@ python separate.py 1 --overlap 4   # Default - good balance (75% overlap)
 python separate.py 1 --overlap 8   # High quality (87.5% overlap) 
 python separate.py 1 --overlap 16  # Maximum quality (93.75% overlap)
 
-# Switch to LarsNet if needed
-python separate.py 1 --model larsnet
+# MDX23C is the default model
+# Future: python separate.py 1 --model <other_model>
 ```
 
 ### Overlap Parameter

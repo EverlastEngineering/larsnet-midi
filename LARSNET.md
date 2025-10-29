@@ -1,10 +1,14 @@
-# LarsNet: Foundational Research
+# LarsNet: Historical Attribution
 
-This project builds upon **LarsNet**, a deep learning model for drum source separation developed by researchers at Politecnico di Milano.
+**Note:** This document preserves attribution to the LarsNet research that originally inspired this project. StemToMIDI now uses the more modern and effective MDX23C model for drum separation, but we maintain this documentation to credit the foundational research that made this work possible.
+
+---
+
+**LarsNet** was a deep learning model for drum source separation developed by researchers at Politecnico di Milano.
 
 ## About LarsNet
 
-LarsNet is a deep drums demixing model that separates five stems from a stereo drum mixture faster than real-time using a parallel arrangement of dedicated U-Nets:
+LarsNet was a deep drums demixing model that separated five stems from a stereo drum mixture faster than real-time using a parallel arrangement of dedicated U-Nets:
 
 - **Kick Drum**
 - **Snare**
@@ -57,7 +61,7 @@ The open access paper "_**Toward Deep Drum Source Separation**_" authored by A. 
 
 Pretrained LarsNet model checkpoints can be found [here](https://drive.google.com/uc?id=1U8-5924B1ii1cjv9p0MTPzayb00P4qoL&export=download) (562 MB) licensed under CC BY-NC 4.0.
 
-These pretrained models power the drum separation in this project.
+**Note:** StemToMIDI no longer uses these models, having transitioned to the more effective MDX23C architecture.
 
 ## Beyond Drums Demixing
 
@@ -82,4 +86,4 @@ LARS was presented at ISMIR 2023 Late-Breaking Demo Session:
 
 ## Original Repository
 
-This fork extends the original LarsNet research with MIDI generation capabilities. The original repository can be found at: https://github.com/polimi-ispl/larsnet
+StemToMIDI was originally inspired by LarsNet research. The project has since evolved to use MDX23C for separation and added comprehensive MIDI generation capabilities. The original LarsNet repository can be found at: https://github.com/polimi-ispl/larsnet

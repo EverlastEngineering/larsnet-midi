@@ -1,6 +1,6 @@
-# Contributing to LarsNet
+# Contributing to StemToMIDI
 
-Thank you for your interest in contributing to LarsNet! This guide will help you get started with development, testing, and submitting contributions.
+Thank you for your interest in contributing to StemToMIDI! This guide will help you get started with development, testing, and submitting contributions.
 
 ## Development Setup
 
@@ -14,8 +14,8 @@ Thank you for your interest in contributing to LarsNet! This guide will help you
 
 1. **Fork and clone the repository:**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/larsnet-midi.git
-   cd larsnet-midi
+   git clone https://github.com/YOUR_USERNAME/stemtomidi.git
+   cd stemtomidi
    ```
 
 2. **Create development environment:**
@@ -27,7 +27,7 @@ Thank you for your interest in contributing to LarsNet! This guide will help you
    conda env create -f environment.yml
    
    # Activate environment
-   conda activate larsnet
+   conda activate stemtomidi-midi
    ```
 
 3. **Verify installation:**
@@ -44,7 +44,7 @@ For a consistent development environment:
 docker-compose up -d
 
 # Enter container
-docker exec -it larsnet-midi /bin/bash
+docker exec -it stemtomidi-midi /bin/bash
 
 # Run tests inside container
 cd /app && pytest
@@ -52,7 +52,7 @@ cd /app && pytest
 
 ## Architecture Overview
 
-LarsNet follows the **Functional Core, Imperative Shell (FCIS)** pattern:
+StemToMIDI follows the **Functional Core, Imperative Shell (FCIS)** pattern:
 
 ### Functional Core (Pure Logic)
 - Located in `stems_to_midi/helpers.py`
@@ -96,7 +96,7 @@ open htmlcov/index.html
 
 ```bash
 # Run tests inside container
-docker exec -it larsnet-midi bash -c "cd /app && pytest"
+docker exec -it stemtomidi-midi bash -c "cd /app && pytest"
 ```
 
 ### Writing Tests
@@ -291,7 +291,7 @@ See `docs/archive/` for examples of completed refactoring plans.
 ## Project Structure
 
 ```
-larsnet/
+stemtomidi/
 ├── stems_to_midi/          # MIDI conversion package
 │   ├── helpers.py          # Functional core (pure functions)
 │   ├── detection.py        # Onset detection
@@ -300,8 +300,8 @@ larsnet/
 │   ├── learning.py         # Threshold learning
 │   └── test_*.py           # Tests
 ├── separate.py             # Source separation script
-├── larsnet.py              # LarsNet model
-├── unet.py                 # U-Net architecture
+├── mdx23c_optimized.py     # MDX23C model
+├── separation_utils.py     # Separation utilities
 ├── render_midi_to_video.py # Video visualization
 ├── midiconfig.yaml         # MIDI conversion config
 ├── environment.yml         # Conda dependencies
@@ -317,4 +317,4 @@ By contributing, you agree that your contributions will be licensed under the sa
 
 ---
 
-**Thank you for contributing to LarsNet! 🥁🎵**
+**Thank you for contributing to StemToMIDI! 🥁🎵**

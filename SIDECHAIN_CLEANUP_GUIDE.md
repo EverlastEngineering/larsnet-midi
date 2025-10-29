@@ -1,4 +1,4 @@
-# Sidechain Cleanup Guide for LarsNet
+# Sidechain Cleanup Guide
 
 ## Overview
 

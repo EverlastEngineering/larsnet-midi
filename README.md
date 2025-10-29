@@ -1,13 +1,13 @@
-<img src="./webui/static/img/larsnetmidi.svg">
+<img src="./webui/static/img/stemtomidi.svg">
 
 ---
 
 Audio-to-MIDI conversion for drum tracks using deep learning separation, time analysis, spectral frequency analysis and frequency energy analysis.
 --- 
 
-### Before We Begin: **LarsNet**
+### Attribution
 
-This project extends [LarsNet](LARSNET.md), a deep learning model for drum source separation, with intelligent MIDI generation capabilities. Many thanks to the author's hard work on that project.
+This project was originally inspired by [LarsNet](LARSNET.md) research for drum source separation. We now use the more modern and effective MDX23C model for stem separation. Many thanks to the LarsNet researchers for their foundational work in this field.
 
 ## Quick Start
 
@@ -33,14 +33,14 @@ docker compose up -d
 
 **Option 1: Web Interface (Recommended)**
 ```bash
-docker exec -it larsnet-midi bash
+docker exec -it stemtomidi-midi bash
 python -m webui.app
 ```
 Then open http://localhost:49152 in your browser. See [WEBUI_SETUP.md](WEBUI_SETUP.md) for details.
 
 **Option 2: Command Line**
 ```bash
-docker exec -it larsnet-midi bash
+docker exec -it stemtomidi-midi bash
 ```
 
 ### Performance Comparison
@@ -109,7 +109,7 @@ Creates Rock Band-style falling notes visualization in an MP4 video. I view this
 
 For deeper details on each part of the pipeline, see:
 
-- [LarsNet research & models](LARSNET.md)
+- [Historical Attribution: LarsNet Research](LARSNET.md)
 - [Sidechain cleanup guide (reduce bleed)](SIDECHAIN_CLEANUP_GUIDE.md)
 - [Stems → MIDI guide](STEMS_TO_MIDI_GUIDE.md)
 - [MIDI visualization (Rock Band-style)](MIDI_VISUALIZATION_GUIDE.md)

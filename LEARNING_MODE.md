@@ -266,7 +266,7 @@ If you process multiple songs with different drum sounds:
 - Lower `learning_onset_threshold` even more (try 0.03 or 0.02)
 - Check `learning_delta` - lower = more sensitive (try 0.001)
 - Reduce `learning_wait` (try 0 for very fast passages)
-- Verify the audio file has good separation (run LarsNet separation again if needed)
+- Verify the audio file has good separation (run separation again if needed)
 
 ### Learned threshold doesn't work well?
 - **Overlap in ranges**: Check if kept and removed GeoMeans overlap significantly

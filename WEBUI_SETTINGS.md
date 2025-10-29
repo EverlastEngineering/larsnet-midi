@@ -29,22 +29,9 @@ All settings are automatically saved to browser localStorage:
 Splits drum track into individual components (kick, snare, toms, hi-hat, cymbals).
 
 **Device**
-- Options: `CPU`, `CUDA (GPU)`
-- Default: `CPU`
-- Choose CUDA if you have NVIDIA GPU for faster processing
-
-**Apply EQ Cleanup**
-- Type: Toggle
-- Default: `Off`
-- Applies frequency filtering to reduce bleed between stems
-- Same as `--eq` flag in CLI
-
-**Wiener Filter Exponent**
-- Range: `0` to `10` (step 0.5)
-- Default: `0` (disabled)
-- Higher values = more aggressive filtering
-- Same as `--wiener` flag in CLI
-- Set to `0` to disable
+- Options: `CPU`, `CUDA (GPU)`, `MPS (Mac GPU)`
+- Default: Auto-detected
+- Choose based on your hardware for optimal performance
 
 ### Clean (Sidechain Compression)
 
@@ -222,14 +209,14 @@ Changes will be saved to the project directory and persist for that project only
 
 ### Browser Storage
 
-Settings are stored in `localStorage` under key `larsnet_settings`:
+Settings are stored in `localStorage` under key `stemtomidi_settings`:
 
 ```javascript
-// View your settings
-console.log(localStorage.getItem('larsnet_settings'));
+// View current settings
+console.log(localStorage.getItem('stemtomidi_settings'));
 
-// Clear settings (revert to defaults)
-localStorage.removeItem('larsnet_settings');
+// Clear settings (reset to defaults)
+localStorage.removeItem('stemtomidi_settings');
 location.reload();
 ```
 
@@ -253,7 +240,7 @@ location.reload();
 **Want to reset everything?**
 ```javascript
 // In browser console:
-localStorage.removeItem('larsnet_settings');
+localStorage.removeItem('stemtomidi_settings');
 location.reload();
 ```
 

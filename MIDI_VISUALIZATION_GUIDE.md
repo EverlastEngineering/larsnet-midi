@@ -347,7 +347,7 @@ Want to improve the visualization? Here are some ideas:
 ## Credits
 
 Built on top of:
-- **LarsNet** - Deep drum source separation
+- **MDX23C** - Deep drum source separation
 - **mido** - MIDI file parsing
 - **OpenCV** - Video rendering
 

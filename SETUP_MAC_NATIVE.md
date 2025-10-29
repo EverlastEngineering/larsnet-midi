@@ -1,6 +1,6 @@
 # Mac Native Setup Guide
 
-This guide walks through setting up LarsNet MIDI natively on macOS to leverage Metal Performance Shaders (MPS) for GPU acceleration. This provides significantly better performance than Docker (2.9x faster for high-quality separation).
+This guide walks through setting up StemToMIDI natively on macOS to leverage Metal Performance Shaders (MPS) for GPU acceleration. This provides significantly better performance than Docker (2.9x faster for high-quality separation).
 
 ## Why Native on Mac?
 
@@ -61,11 +61,11 @@ conda --version
 # Should output: conda 24.x.x or similar
 ```
 
-## Step 3: Create LarsNet Environment
+## Step 3: Create StemToMIDI Environment
 
-Navigate to the LarsNet repository:
+Navigate to the StemToMIDI repository:
 ```bash
-cd /path/to/larsnet
+cd /path/to/stemtomidi
 ```
 
 Create the conda environment from `environment.yml`:
@@ -86,10 +86,10 @@ mamba env create -f environment.yml
 
 ### Activate the Environment
 ```bash
-conda activate larsnet-midi
+conda activate stemtomidi-midi
 ```
 
-Your prompt should now show `(larsnet-midi)` prefix.
+Your prompt should now show `(stemtomidi-midi)` prefix.
 
 ## Step 4: Verify Installation
 

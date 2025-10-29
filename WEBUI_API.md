@@ -1,6 +1,6 @@
-# LarsNet Web UI API Documentation
+# StemToMIDI Web UI API Documentation
 
-REST API for the LarsNet MIDI web interface. All operations run asynchronously via a job queue with real-time status updates through Server-Sent Events.
+REST API for the StemToMIDI web interface. All operations run asynchronously via a job queue with real-time status updates through Server-Sent Events.
 
 ## Base URL
 
@@ -278,7 +278,7 @@ All operations are asynchronous and return a job ID immediately. Use the job sta
 
 ### Separate Stems
 
-Separate drums into individual stems (kick, snare, hi-hat, cymbals, toms) using LarsNet deep learning models.
+Separate drums into individual stems (kick, snare, hi-hat, cymbals, toms) using deep learning models.
 
 **Endpoint:** `POST /api/separate`
 

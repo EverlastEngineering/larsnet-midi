@@ -1,6 +1,6 @@
 # Dependency Management
 
-This document explains LarsNet's dependency management strategy and provides guidance for contributors.
+This document explains StemToMIDI's dependency management strategy and provides guidance for contributors.
 
 ## Philosophy
 
@@ -42,7 +42,7 @@ We use **Conda** (via `environment.yml`) for dependency management because:
 
 ### Root Scripts
 
-**larsnet.py, unet.py, separation_utils.py**
+**separation_utils.py**
 - torch, torchaudio
 - pyyaml
 - soundfile
@@ -140,7 +140,11 @@ We evaluated using `requirements.txt` but chose Conda because:
 
 ```bash
 # From scratch
-conda env remove -n larsnet
+conda env remove -n stemtomidi-midi
+```
+
+```bash
+conda activate stemtomidi-midi
 conda env create -f environment.yml
 conda activate larsnet
 
@@ -186,7 +190,7 @@ This creates `conda-lock.yml` containing pinned versions for all specified platf
 
 ```bash
 # Install from lockfile
-conda-lock install -n larsnet conda-lock.yml
+conda-lock install -n stemtomidi-midi conda-lock.yml
 
 # Update specific package
 conda-lock lock --lockfile conda-lock.yml --update numpy

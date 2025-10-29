@@ -89,7 +89,7 @@ The project's `docker-compose.yaml` needs GPU runtime configuration:
 
 ```yaml
 services:
-  larsnet-midi:
+  stemtomidi-midi:
     # ... existing config ...
     
     # Add GPU support (uncomment for NVIDIA GPUs)
@@ -119,7 +119,7 @@ docker-compose up -d
 
 ### Verify GPU Inside Container
 ```powershell
-docker exec -it larsnet-midi bash -c "python -c 'import torch; print(f\"CUDA available: {torch.cuda.is_available()}\"); print(f\"GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"None\"}\")'"
+docker exec -it stemtomidi-midi bash -c "python -c 'import torch; print(f\"CUDA available: {torch.cuda.is_available()}\"); print(f\"GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"None\"}\")'"
 ```
 
 **Expected output:**
@@ -132,7 +132,12 @@ GPU: NVIDIA GeForce RTX 3080 (or your GPU name)
 
 ```powershell
 # Run separation with CUDA device
-docker exec -it larsnet-midi bash -c "cd /app && python separate.py 1 --model mdx23c --overlap 8"
+docker exec -it stemtomidi-midi bash -c "cd /app && python separate.py 1 --model mdx23c --overlap 8"
+```
+
+If GPU is not available, it will fall back to CPU:
+```bash
+docker exec -it stemtomidi-midi bash -c "cd /app && python separate.py 1 --device cuda --overlap 8"
 ```
 
 The device will automatically detect CUDA if available. You can also explicitly specify:
@@ -167,14 +172,14 @@ If not installed, return to Step 1.4.
 **Solution:** Reduce batch size or overlap:
 ```powershell
 # Try overlap=4 or overlap=2
-docker exec -it larsnet-midi bash -c "cd /app && python separate.py 1 --overlap 4"
+docker exec -it stemtomidi-midi bash -c "cd /app && python separate.py 1 --overlap 4"
 ```
 
 ### Issue: Slow performance despite GPU
 **Solution:** Verify device is actually CUDA:
 ```powershell
 # Check device detection
-docker exec -it larsnet-midi bash -c "cd /app && python -c 'from device_utils import detect_best_device, print_device_info; d = detect_best_device(); print(f\"Detected: {d}\"); print_device_info(d)'"
+docker exec -it stemtomidi-midi bash -c "cd /app && python -c 'from device_utils import detect_best_device, print_device_info; d = detect_best_device(); print(f\"Detected: {d}\"); print_device_info(d)'"
 ```
 
 Should show CUDA, not CPU.
