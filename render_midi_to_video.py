@@ -601,6 +601,31 @@ class MidiVideoRenderer:
         notes, total_duration = self.parse_midi(midi_path)
         print(f"Found {len(notes)} notes, duration: {total_duration:.2f}s")
         
+        # Filter out empty lanes - detect which lanes actually have notes
+        used_lanes = set(note.lane for note in notes if note.lane >= 0)
+        
+        if used_lanes and len(used_lanes) < self.num_lanes:
+            # Create mapping from original lane numbers to consecutive positions
+            sorted_used_lanes = sorted(used_lanes)
+            lane_mapping = {original: new for new, original in enumerate(sorted_used_lanes)}
+            
+            # Remap note lanes to consecutive positions
+            for note in notes:
+                if note.lane >= 0:
+                    note.lane = lane_mapping[note.lane]
+            
+            # Update number of lanes and recalculate note width
+            original_num_lanes = self.num_lanes
+            self.num_lanes = len(used_lanes)
+            self.note_width = self.width // self.num_lanes
+            
+            print(f"Filtered lanes: using {self.num_lanes} of {original_num_lanes} lanes (lanes {sorted_used_lanes})")
+        elif not used_lanes:
+            print(f"Warning: No regular lane notes found (only kick drum or empty MIDI)")
+            # Set to 1 lane minimum to avoid division by zero
+            self.num_lanes = 1
+            self.note_width = self.width
+        
         total_frames = int(total_duration * self.fps)
         print(f"Rendering {total_frames} frames at {self.fps} FPS...")
         
