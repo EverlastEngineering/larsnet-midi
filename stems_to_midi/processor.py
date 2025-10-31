@@ -257,7 +257,7 @@ def _create_midi_events(
         tom_classifications: Tom classifications (low/mid/high)
         drum_mapping: MIDI note mapping
         config: Configuration dictionary
-        sustain_durations: Optional list of sustain durations in milliseconds (for cymbals)
+        sustain_durations: Optional list of sustain durations in milliseconds (for cymbals and hihat foot-close events)
     
     Returns:
         List of MIDI event dictionaries
@@ -265,6 +265,10 @@ def _create_midi_events(
     # Get timing offset for this stem type (applied to MIDI timing only, not audio analysis)
     stem_config = config.get(stem_type, {})
     timing_offset = stem_config.get('timing_offset', 0.0)
+    
+    # Get hihat foot-close settings
+    generate_foot_close = stem_config.get('generate_foot_close', False)
+    foot_close_note = stem_config.get('midi_note_foot_close', 44)
     
     events = []
     
@@ -314,6 +318,26 @@ def _create_midi_events(
             'velocity': int(velocity),
             'duration': float(duration)
         })
+        
+        # Generate foot-close event for open hihats
+        if (stem_type == 'hihat' and hihat_states[i] == 'open' and 
+            generate_foot_close and sustain_durations is not None and 
+            i < len(sustain_durations)):
+            # Foot close occurs at the end of the open hihat sustain
+            sustain_seconds = sustain_durations[i] / 1000.0  # Convert ms to seconds
+            foot_close_time = midi_time + sustain_seconds
+            
+            # Use a moderate velocity for foot close (softer than the open hit)
+            foot_close_velocity = int(velocity * 0.7)  # 70% of open hit velocity
+            foot_close_velocity = max(foot_close_velocity, 40)  # Minimum 40
+            foot_close_velocity = min(foot_close_velocity, 100)  # Maximum 100
+            
+            events.append({
+                'time': float(foot_close_time),
+                'note': int(foot_close_note),
+                'velocity': int(foot_close_velocity),
+                'duration': 0.05  # Short duration for foot close
+            })
     
     return events
 
@@ -602,6 +626,14 @@ def process_stem_to_midi(
         tom_classifications = _detect_tom_pitches(audio, sr, onset_times, config)
     
     # Step 9: Create MIDI events
+    # Pass sustain durations for cymbals (note duration) and hihats (foot-close timing)
+    if stem_type == 'cymbals':
+        sustain_durations_param = cymbal_sustain_durations
+    elif stem_type == 'hihat':
+        sustain_durations_param = hihat_sustain_durations
+    else:
+        sustain_durations_param = None
+    
     events = _create_midi_events(
         onset_times,
         normalized_values,
@@ -613,7 +645,7 @@ def process_stem_to_midi(
         tom_classifications,
         drum_mapping,
         config,
-        sustain_durations=cymbal_sustain_durations if stem_type == 'cymbals' else None
+        sustain_durations=sustain_durations_param
     )
     
     return events

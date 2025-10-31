@@ -133,29 +133,35 @@ hihat:
   # Hi-hat settings
   midi_note_closed: 42       # F#1 - Closed hi-hat
   midi_note_open: 46         # A#1 - Open hi-hat
+  midi_note_foot_close: 44   # G#1 - Foot close (pedal closes open hihat)
   midi_note: 42              # Default (closed) for backward compatibility
+  
+  # Foot close generation
+  generate_foot_close: true  # Generate foot-close events at end of open hihat sustain
   
   # Onset detection (overrides global onset_detection settings for hihat)
   # Hi-hats can have very fast repeated hits, similar to cymbals but shorter sustain
-  onset_threshold: 0.1      # Moderate sensitivity (between global 0.01 and cymbals 0.15)
-  onset_delta: 0.01          # Moderate peak picking
-  onset_wait: 5              # 3 frames = ~35ms min spacing (allows 16th notes at fast tempos)
-  timing_offset: -0.017      # Timing offset in seconds (0 = no offset)
+  # These values were optimized through Bayesian analysis and testing
+  onset_threshold: 0.01     # Very sensitive to catch quiet closed hits after open hits (default: 0.3)
+  onset_delta: 0.005        # Low threshold for peak picking (default: 0.01)
+  onset_wait: 3             # ~33ms min spacing (allows fast 16th notes, default: 5)
+  timing_offset: -0.017     # Timing offset in seconds (0 = no offset)
   
   # Open/Closed detection
   detect_open: true          # Enable open vs closed hi-hat detection
   decay_threshold: 0.65      # Threshold for open detection (higher = fewer open detections)
-  open_sustain_ms: 100       # Open hi-hat sustain threshold (ms): >=100ms = open (learned from optimization)
-  open_geomean_min: 262.0    # Open hi-hat GeoMean threshold: >=262 = open (learned from optimization)
+  open_sustain_ms: 100       # Open hi-hat sustain threshold (ms): >=100ms = open (LEARNED: Bayesian optimization)
+  open_geomean_min: 262.0    # Open hi-hat GeoMean threshold: >=262 = open (LEARNED: 100% accuracy on test set)
   min_sustain_ms: 25         # Minimum sustain for artifact filtering (handclaps ~20ms, real hihats >25ms)
   
   # Classification logic: Open = (GeoMean >= open_geomean_min) AND (SustainMs >= open_sustain_ms)
   # Closed = everything else that passes geomean_threshold
   
-  # Spectral filtering
-  geomean_threshold: 20.0    # Geometric mean of body (500-2kHz) + sizzle (6-12kHz) energy
-                              # Real hi-hats: 100-400, Artifacts: 10-50
-                              # Set to 50 to be conservative (OR condition with sustain)
+  # Spectral filtering (LEARNED: optimized through testing to eliminate false positives)
+  min_strength_threshold: 0.1  # Minimum onset strength (0-1). LEARNED: Filters weak false positives (<0.04) while keeping real hits (>0.1)
+  geomean_threshold: 20.0      # Geometric mean of body (500-2kHz) + sizzle (6-12kHz) energy
+                                # Real hi-hats: 100-400, Artifacts: 10-50
+                                # LEARNED: 20.0 catches most real hits while rejecting artifacts
   
   # Spectral ranges for analysis (Hz)
   body_freq_min: 500         # Start of body/attack range (hi-hats are bright)

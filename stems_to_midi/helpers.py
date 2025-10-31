@@ -272,7 +272,8 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
                 'secondary': 'WireE'
             },
             'geomean_threshold': stem_config.get('geomean_threshold'),
-            'min_sustain_ms': None
+            'min_sustain_ms': None,
+            'min_strength_threshold': stem_config.get('min_strength_threshold')
         }
     
     elif stem_type == 'kick':
@@ -288,7 +289,8 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
                 'tertiary': 'AttackE'
             },
             'geomean_threshold': stem_config.get('geomean_threshold'),
-            'min_sustain_ms': None
+            'min_sustain_ms': None,
+            'min_strength_threshold': stem_config.get('min_strength_threshold')
         }
     
     elif stem_type == 'toms':
@@ -302,7 +304,8 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
                 'secondary': 'BodyE'
             },
             'geomean_threshold': stem_config.get('geomean_threshold'),
-            'min_sustain_ms': None
+            'min_sustain_ms': None,
+            'min_strength_threshold': stem_config.get('min_strength_threshold')
         }
     
     elif stem_type == 'hihat':
@@ -316,7 +319,8 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
                 'secondary': 'SizzleE'
             },
             'geomean_threshold': stem_config.get('geomean_threshold'),
-            'min_sustain_ms': stem_config.get('min_sustain_ms', 25)
+            'min_sustain_ms': stem_config.get('min_sustain_ms', 25),
+            'min_strength_threshold': stem_config.get('min_strength_threshold')
         }
     
     elif stem_type == 'cymbals':
@@ -331,7 +335,8 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
                 'secondary': 'BrillE'
             },
             'geomean_threshold': stem_config.get('geomean_threshold'),
-            'min_sustain_ms': stem_config.get('min_sustain_ms', 150)
+            'min_sustain_ms': stem_config.get('min_sustain_ms', 150),
+            'min_strength_threshold': stem_config.get('min_strength_threshold')
         }
     
     else:
@@ -461,12 +466,12 @@ def should_keep_onset(
     sustain_ms: Optional[float],
     geomean_threshold: Optional[float],
     min_sustain_ms: Optional[float],
-    stem_type: str
+    stem_type: str,
+    strength: Optional[float] = None,
+    min_strength_threshold: Optional[float] = None
 ) -> bool:
     """
-    TODO: It will be helpful to have ALL available parameters from the analysis in here, like strength, badness score, etc.
-
-    Determine if an onset should be kept based on spectral/sustain criteria.
+    Determine if an onset should be kept based on spectral/sustain/strength criteria.
     
     Pure function - decision logic without side effects.
     
@@ -476,10 +481,17 @@ def should_keep_onset(
         geomean_threshold: Threshold for geomean filtering (None to disable)
         min_sustain_ms: Minimum sustain threshold (None to disable)
         stem_type: Type of stem (affects logic for hihat vs others)
+        strength: Onset strength value (0-1, normalized)
+        min_strength_threshold: Minimum onset strength required (None to disable)
     
     Returns:
         True if onset should be kept, False if it should be rejected
     """
+    # Check strength first (applies to all stem types)
+    if min_strength_threshold is not None and strength is not None:
+        if strength < min_strength_threshold:
+            return False
+    
     # If no filtering enabled, keep everything
     if geomean_threshold is None and min_sustain_ms is None:
         return True
@@ -761,7 +773,9 @@ def filter_onsets_by_spectral(
             sustain_ms=sustain_duration,
             geomean_threshold=geomean_threshold,
             min_sustain_ms=min_sustain_ms,
-            stem_type=stem_type
+            stem_type=stem_type,
+            strength=strength,
+            min_strength_threshold=spectral_config.get('min_strength_threshold')
         )
         
         # In learning mode, keep ALL detections

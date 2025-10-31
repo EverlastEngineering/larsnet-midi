@@ -140,6 +140,7 @@ def extract_features_from_stem(project_number: int, stem_type: str, output_dir: 
     if spectral_config:
         geomean_threshold = spectral_config['geomean_threshold']
         min_sustain_ms = spectral_config.get('min_sustain_ms')
+        min_strength_threshold = spectral_config.get('min_strength_threshold')
         
         df['Status'] = df.apply(
             lambda row: 'KEPT' if should_keep_onset(
@@ -147,7 +148,9 @@ def extract_features_from_stem(project_number: int, stem_type: str, output_dir: 
                 sustain_ms=row.get('sustain_ms'),
                 geomean_threshold=geomean_threshold,
                 min_sustain_ms=min_sustain_ms,
-                stem_type=stem_type
+                stem_type=stem_type,
+                strength=row.get('strength'),
+                min_strength_threshold=min_strength_threshold
             ) else 'REJECTED',
             axis=1
         )
