@@ -19,7 +19,7 @@ Compare original vs optimized implementation:
 
 ```bash
 # Run inside Docker container
-docker exec -it stemtomidi-midi bash -c "cd /app && python test_mdx_performance.py 'user_files/2 - sdrums/sdrums.wav' --overlap 4 --device cpu"
+docker exec -it DrumToMIDI-midi bash -c "cd /app && python test_mdx_performance.py 'user_files/2 - sdrums/sdrums.wav' --overlap 4 --device cpu"
 ```
 
 This will:
@@ -33,7 +33,7 @@ This will:
 Test multiple overlap and batch size combinations:
 
 ```bash
-docker exec -it stemtomidi-midi bash -c "cd /app && python mdx23c_optimized.py 'user_files/2 - sdrums/sdrums.wav' --benchmark --device cpu"
+docker exec -it DrumToMIDI-midi bash -c "cd /app && python mdx23c_optimized.py 'user_files/2 - sdrums/sdrums.wav' --benchmark --device cpu"
 ```
 
 This tests all combinations of:
@@ -46,7 +46,7 @@ This tests all combinations of:
 Ensure optimizations don't affect output quality:
 
 ```bash
-docker exec -it stemtomidi-midi bash -c "cd /app && python test_mdx_performance.py 'user_files/2 - sdrums/sdrums.wav' --overlap 4 --quality-check"
+docker exec -it DrumToMIDI-midi bash -c "cd /app && python test_mdx_performance.py 'user_files/2 - sdrums/sdrums.wav' --overlap 4 --quality-check"
 ```
 
 This will:
@@ -60,10 +60,10 @@ Test with custom parameters:
 
 ```bash
 # Low overlap for speed
-docker exec -it stemtomidi-midi bash -c "cd /app && python test_mdx_performance.py 'user_files/2 - sdrums/sdrums.wav' --overlap 2 --batch-size 4"
+docker exec -it DrumToMIDI-midi bash -c "cd /app && python test_mdx_performance.py 'user_files/2 - sdrums/sdrums.wav' --overlap 2 --batch-size 4"
 
 # High overlap for quality
-docker exec -it stemtomidi-midi bash -c "cd /app && python test_mdx_performance.py 'user_files/2 - sdrums/sdrums.wav' --overlap 8 --batch-size 2"
+docker exec -it DrumToMIDI-midi bash -c "cd /app && python test_mdx_performance.py 'user_files/2 - sdrums/sdrums.wav' --overlap 8 --batch-size 2"
 ```
 
 ## Test Results from sdrums.wav (51.7 seconds)
@@ -105,11 +105,11 @@ For production use through `separate.py`:
 docker exec -it larsnet-midi bash -c "cd /app && python separate.py --model mdx23c --overlap 4"
 
 # Force specific settings
-docker exec -it stemtomidi-midi bash -c "cd /app && python separate.py --model mdx23c --overlap 4"
+docker exec -it DrumToMIDI-midi bash -c "cd /app && python separate.py --model mdx23c --overlap 4"
 ```
 
 ```bash
-docker exec -it stemtomidi-midi bash -c "cd /app && python separate.py --model mdx23c --overlap 2 --device cpu"
+docker exec -it DrumToMIDI-midi bash -c "cd /app && python separate.py --model mdx23c --overlap 2 --device cpu"
 ```
 
 ## Interpreting Results
@@ -124,7 +124,7 @@ docker exec -it stemtomidi-midi bash -c "cd /app && python separate.py --model m
 Monitor memory during tests:
 ```bash
 # In another terminal
-docker stats stemtomidi-midi
+docker stats DrumToMIDI-midi
 ```
 
 Expected memory usage:
@@ -137,7 +137,7 @@ Expected memory usage:
 ### If tests fail with OOM
 Reduce batch size:
 ```bash
-docker exec -it stemtomidi-midi bash -c "cd /app && python test_mdx_performance.py 'user_files/2 - sdrums/sdrums.wav' --batch-size 2"
+docker exec -it DrumToMIDI-midi bash -c "cd /app && python test_mdx_performance.py 'user_files/2 - sdrums/sdrums.wav' --batch-size 2"
 ```
 
 ### If torch.compile errors occur
@@ -154,11 +154,11 @@ If you have GPU available:
 
 ```bash
 # Test on GPU with mixed precision
-docker exec -it stemtomidi-midi bash -c "cd /app && python test_mdx_performance.py 'user_files/2 - sdrums/sdrums.wav' --device cuda"
+docker exec -it DrumToMIDI-midi bash -c "cd /app && python test_mdx_performance.py 'user_files/2 - sdrums/sdrums.wav' --device cuda"
 ```
 
 ```bash
-docker exec -it stemtomidi-midi bash -c "cd /app && python mdx23c_optimized.py 'user_files/2 - sdrums/sdrums.wav' --benchmark --device cuda"
+docker exec -it DrumToMIDI-midi bash -c "cd /app && python mdx23c_optimized.py 'user_files/2 - sdrums/sdrums.wav' --benchmark --device cuda"
 
 # Benchmark with larger batch sizes on GPU
 docker exec -it larsnet-midi bash -c "cd /app && python mdx23c_optimized.py 'user_files/2 - sdrums/sdrums.wav' --benchmark --device cuda"

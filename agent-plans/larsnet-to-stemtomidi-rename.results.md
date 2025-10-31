@@ -1,9 +1,9 @@
-# LarsNet to StemToMIDI Rename - Results
+# LarsNet to DrumToMIDI Rename - Results
 
 ## Progress Tracking
 
 ### Phase 1: Documentation and Attribution
-- [x] README.md updated with StemToMIDI branding
+- [x] README.md updated with DrumToMIDI branding
 - [x] LARSNET.md preserved as historical attribution
 - [x] WEBUI_SETUP.md updated
 - [x] WEBUI_API.md updated
@@ -40,13 +40,16 @@
 - [x] test_project_manager.py updated (no changes needed)
 - [x] webui/test_api.py updated
 - [x] Other test files checked (no LarsNet references found)
-- [x] All tests passing (32/32 passed in 0.08s)
-- [x] Phase 3 commit completed
+- [x] PyTorch 2.6 compatibility fixed (added weights_only=False to torch.load)
+- [x] MDX checkpoint downloaded from Git LFS (417MB)
+- [x] Fixed separate.py args.eq bug
+- [x] All tests passing (279/279 passed in 5.59s)
+- [x] Phase 3 commit completed (d879608)
 
 ### Phase 4: WebUI and Assets
 - [ ] webui/app.py updated
 - [ ] webui/templates/index.html updated
-- [ ] CSS classes renamed (larsnet-* → stemtomidi-*)
+- [ ] CSS classes renamed (larsnet-* → DrumToMIDI-*)
 - [ ] SVG renamed and referenced correctly
 - [ ] localStorage keys updated
 - [ ] webui/api/operations.py updated
@@ -71,30 +74,46 @@
 ## Decision Log
 
 ### Phase 1
-- **Container naming**: Changed from `larsnet-midi` to `stemtomidi-midi` for consistency
-- **Conda environment**: Changed from `larsnet` or `larsnet-midi` to `stemtomidi-midi` 
-- **localStorage key**: Changed from `larsnet_settings` to `stemtomidi_settings`
+- **Container naming**: Changed from `larsnet-midi` to `DrumToMIDI-midi` for consistency
+- **Conda environment**: Changed from `larsnet` or `larsnet-midi` to `DrumToMIDI-midi` 
+- **localStorage key**: Changed from `larsnet_settings` to `DrumToMIDI_settings`
 - **LARSNET.md**: Preserved as historical attribution with clear note about MDX23C transition
-- **Documentation tone**: Updated to past tense for LarsNet, present tense for StemToMIDI/MDX23C
-- **Repository structure**: Updated from `larsnet/` to `stemtomidi/` in documentation
+- **Documentation tone**: Updated to past tense for LarsNet, present tense for DrumToMIDI/MDX23C
+- **Repository structure**: Updated from `larsnet/` to `DrumToMIDI/` in documentation
 
 ### Phase 2
 - **Model parameter preserved**: Kept --model flag and model parameter for future extensibility
 - **LarsNet removal**: Removed all LarsNet-specific code including imports, conditionals, and processing
-- **Metadata filename**: Changed from `.larsnet_project.json` to `.stemtomidi_project.json`
+- **Metadata filename**: Changed from `.larsnet_project.json` to `.DrumToMIDI_project.json`
 - **Config.yaml**: Commented out LarsNet model paths, added note about MDX23C
 - **Model directory**: Removed 562MB of pretrained LarsNet models (7 files)
 - **Future-ready**: Code structure supports adding new models easily
 
 ### Phase 3
 - **Test coverage**: Updated test mock data and docstrings to remove LarsNet references
-- **Test results**: All 32 tests passing (test_separate.py, test_project_manager.py)
+- **Test results**: All 279 tests passing across entire codebase
+- **PyTorch compatibility**: Fixed for PyTorch 2.6 by adding weights_only=False to torch.load calls
+- **Git LFS issue**: MDX checkpoint was not downloaded (134B pointer file), required git lfs pull
+- **Bug fix**: Removed erroneous args.eq parameter in separate.py line 154
 - **Minimal changes**: Only 3 LarsNet references found in test files, all updated
 - **Quality maintained**: No test functionality broken by refactoring
 
 ## Issues Encountered
 
-*Any issues or blockers will be documented here*
+### Phase 3: PyTorch 2.6 Compatibility
+- **Issue**: PyTorch 2.6 changed default torch.load() parameter weights_only from False to True
+- **Impact**: 4 tests failing with "invalid load key, 'v'" error
+- **Root cause**: MDX checkpoint file was Git LFS pointer (134B) instead of actual file (417MB)
+- **Resolution**: 
+  1. Downloaded checkpoint with `git lfs pull --include="mdx_models/drumsep_5stems_mdx23c_jarredou.ckpt"`
+  2. Added weights_only=False to two torch.load() calls in mdx23c_utils.py (lines 97, 326)
+- **Status**: ✅ Resolved - All tests passing
+
+### Phase 3: separate.py Args Bug
+- **Issue**: Line 154 passed non-existent args.eq parameter to separate_project()
+- **Impact**: Runtime error when creating new projects from loose audio files
+- **Resolution**: Removed args.eq from function call (line 154)
+- **Status**: ✅ Resolved
 
 ## Final Validation
 

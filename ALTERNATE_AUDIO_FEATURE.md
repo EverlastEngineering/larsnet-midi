@@ -83,7 +83,7 @@ user_files/
 ### Scenario 1: Practice Video (No Drums)
 
 1. Export your mix without drums from your DAW
-2. Upload as `no_drums.wav` to your StemToMIDI project
+2. Upload as `no_drums.wav` to your DrumToMIDI project
 3. Render video selecting the no-drums mix
 4. Play the video and drum along - you ARE the drums!
 

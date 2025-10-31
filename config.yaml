@@ -1,5 +1,5 @@
 # NOTE: This config.yaml file is kept for legacy compatibility
-# StemToMIDI now uses MDX23C model, not LarsNet
+# DrumToMIDI now uses MDX23C model, not LarsNet
 # See mdx_models/config_mdx23c.yaml for current model configuration
 
 global:

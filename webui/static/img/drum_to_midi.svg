@@ -14,7 +14,7 @@
                     </defs>
                     <!-- The word "LarsNet" -->
                     <text font-family="SpaceGrotesk" x="250" y="70" text-anchor="end" fill="#ffffff" font-size="65" font-weight="700" letter-spacing="-2">
-                        StemTo
+                        DrumTo
                     </text>
 
                     <!-- The word "MIDI" -->
@@ -52,6 +52,6 @@
                     </g>
                     
                     <!-- Subtle Underline/Separator -->
-                    <line x1="150" y1="15" x2="386" y2="15" stroke="#33334d" stroke-width="2"></line>
+                    <line x1="183" y1="15" x2="386" y2="15" stroke="#33334d" stroke-width="2"></line>
                     <line x1="26" y1="80" x2="492" y2="80" stroke="#33334d" stroke-width="2"></line>
                 </svg>

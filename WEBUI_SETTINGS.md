@@ -209,14 +209,14 @@ Changes will be saved to the project directory and persist for that project only
 
 ### Browser Storage
 
-Settings are stored in `localStorage` under key `stemtomidi_settings`:
+Settings are stored in `localStorage` under key `DrumToMIDI_settings`:
 
 ```javascript
 // View current settings
-console.log(localStorage.getItem('stemtomidi_settings'));
+console.log(localStorage.getItem('DrumToMIDI_settings'));
 
 // Clear settings (reset to defaults)
-localStorage.removeItem('stemtomidi_settings');
+localStorage.removeItem('DrumToMIDI_settings');
 location.reload();
 ```
 
@@ -240,7 +240,7 @@ location.reload();
 **Want to reset everything?**
 ```javascript
 // In browser console:
-localStorage.removeItem('stemtomidi_settings');
+localStorage.removeItem('DrumToMIDI_settings');
 location.reload();
 ```
 

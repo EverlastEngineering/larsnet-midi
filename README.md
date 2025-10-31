@@ -1,4 +1,4 @@
-<img src="./webui/static/img/stemtomidi.svg">
+<img src="./webui/static/img/drum_to_midi.svg">
 
 ---
 
@@ -33,14 +33,14 @@ docker compose up -d
 
 **Option 1: Web Interface (Recommended)**
 ```bash
-docker exec -it stemtomidi-midi bash
+docker exec -it DrumToMIDI-midi bash
 python -m webui.app
 ```
 Then open http://localhost:49152 in your browser. See [WEBUI_SETUP.md](WEBUI_SETUP.md) for details.
 
 **Option 2: Command Line**
 ```bash
-docker exec -it stemtomidi-midi bash
+docker exec -it DrumToMIDI-midi bash
 ```
 
 ### Performance Comparison

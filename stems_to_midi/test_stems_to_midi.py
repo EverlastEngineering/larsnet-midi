@@ -410,7 +410,7 @@ class TestDrumMapping:
 # INTEGRATION TESTS
 # ============================================================================
 
-class TestProcessStemToMidi:
+class TestProcessDrumToMIDI:
     """Integration tests for full stem processing."""
     
     def test_process_stem_returns_events(self, temp_audio_file, sample_config, drum_mapping):

@@ -1,6 +1,6 @@
 # Web UI Setup Guide
 
-This guide explains how to set up and run the StemToMIDI web interface.
+This guide explains how to set up and run the DrumToMIDI web interface.
 
 ## Prerequisites
 
@@ -20,7 +20,7 @@ docker compose up -d
 
 This will:
 - Build the Docker image with all dependencies (first time only, ~5-10 minutes)
-- Create and start the `stemtomidi-midi` container
+- Create and start the `DrumToMIDI-midi` container
 - Expose port 5000 for the web UI
 
 ### 2. Start the Web UI
@@ -28,7 +28,7 @@ This will:
 Enter the container shell:
 
 ```bash
-docker exec -it stemtomidi-midi bash
+docker exec -it DrumToMIDI-midi bash
 ```
 
 Start the web server:
@@ -41,7 +41,7 @@ You should see:
 
 ```
 ============================================================
-StemToMIDI Web UI v0.1.0
+DrumToMIDI Web UI v0.1.0
 ============================================================
 
 Starting server at http://0.0.0.0:5000
@@ -57,7 +57,7 @@ Open your browser and navigate to:
 http://localhost:49152
 ```
 
-You should see the StemToMIDI web interface with:
+You should see the DrumToMIDI web interface with:
 - Left sidebar showing your projects
 - Upload area in the main panel
 - Operation controls for each processing step
@@ -182,16 +182,16 @@ docker compose up -d --build
 ```bash
 docker ps
 ```
-You should see `stemtomidi-midi` in the list.
+You should see `DrumToMIDI-midi` in the list.
 
 **Check 2:** Verify web server is running inside container:
 ```bash
-docker exec -it stemtomidi-midi bash -c "ps aux | grep python"
+docker exec -it DrumToMIDI-midi bash -c "ps aux | grep python"
 ```
 
 **Check 3:** Verify port is exposed:
 ```bash
-docker port stemtomidi-midi
+docker port DrumToMIDI-midi
 ```
 Should show: `5000/tcp -> 0.0.0.0:49152`
 
@@ -233,7 +233,7 @@ curl http://localhost:5000/api/jobs/JOB_ID
 
 **Solution 3:** Restart container:
 ```bash
-docker restart stemtomidi-midi
+docker restart DrumToMIDI-midi
 ```
 
 ## API Access
@@ -287,7 +287,7 @@ MAX_CONCURRENT_JOBS = 4  # Allow 4 simultaneous operations
 
 **Warning:** More concurrent jobs = more RAM usage. Monitor with:
 ```bash
-docker stats stemtomidi-midi
+docker stats DrumToMIDI-midi
 ```
 
 ## Development
@@ -323,10 +323,10 @@ View application logs:
 
 ```bash
 # Follow web server logs
-docker logs -f stemtomidi-midi
+docker logs -f DrumToMIDI-midi
 
 # View last 100 lines
-docker logs --tail 100 stemtomidi-midi
+docker logs --tail 100 DrumToMIDI-midi
 ```
 
 ## Production Deployment (Future)

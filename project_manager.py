@@ -1,5 +1,5 @@
 """
-Project Manager - Functional Core for StemToMIDI Project Management
+Project Manager - Functional Core for DrumToMIDI Project Management
 
 Manages user projects in the user_files/ directory with auto-numbering,
 metadata tracking, and per-project configuration files.
@@ -12,7 +12,7 @@ Architecture: Functional Core
 Project Structure:
     user_files/
     └── 1 - song name/
-        ├── .stemtomidi_project.json    # Metadata
+        ├── .drumtomidi_project.json    # Metadata
         ├── config.yaml              # Project-specific model config (optional)
         ├── midiconfig.yaml          # Project-specific MIDI config (optional)
         ├── song name.wav            # Original audio
@@ -36,7 +36,7 @@ import shutil
 
 # Resolve user_files directory relative to this file's location (project root)
 USER_FILES_DIR = Path(__file__).parent / "user_files"
-PROJECT_METADATA_FILE = ".stemtomidi_project.json"
+PROJECT_METADATA_FILE = ".drumtomidi_project.json"
 
 # Root config files to copy to projects
 ROOT_CONFIGS = {

@@ -1,6 +1,0 @@
-def main():
-    print("Hello from larsnet!")
-
-
-if __name__ == "__main__":
-    print("Hello from StemToMIDI!")

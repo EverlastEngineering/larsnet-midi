@@ -1,6 +1,6 @@
-# Contributing to StemToMIDI
+# Contributing to DrumToMIDI
 
-Thank you for your interest in contributing to StemToMIDI! This guide will help you get started with development, testing, and submitting contributions.
+Thank you for your interest in contributing to DrumToMIDI! This guide will help you get started with development, testing, and submitting contributions.
 
 ## Development Setup
 
@@ -14,8 +14,8 @@ Thank you for your interest in contributing to StemToMIDI! This guide will help 
 
 1. **Fork and clone the repository:**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/stemtomidi.git
-   cd stemtomidi
+   git clone https://github.com/YOUR_USERNAME/DrumToMIDI.git
+   cd DrumToMIDI
    ```
 
 2. **Create development environment:**
@@ -27,7 +27,7 @@ Thank you for your interest in contributing to StemToMIDI! This guide will help 
    conda env create -f environment.yml
    
    # Activate environment
-   conda activate stemtomidi-midi
+   conda activate DrumToMIDI-midi
    ```
 
 3. **Verify installation:**
@@ -44,7 +44,7 @@ For a consistent development environment:
 docker-compose up -d
 
 # Enter container
-docker exec -it stemtomidi-midi /bin/bash
+docker exec -it DrumToMIDI-midi /bin/bash
 
 # Run tests inside container
 cd /app && pytest
@@ -52,7 +52,7 @@ cd /app && pytest
 
 ## Architecture Overview
 
-StemToMIDI follows the **Functional Core, Imperative Shell (FCIS)** pattern:
+DrumToMIDI follows the **Functional Core, Imperative Shell (FCIS)** pattern:
 
 ### Functional Core (Pure Logic)
 - Located in `stems_to_midi/helpers.py`
@@ -96,7 +96,7 @@ open htmlcov/index.html
 
 ```bash
 # Run tests inside container
-docker exec -it stemtomidi-midi bash -c "cd /app && pytest"
+docker exec -it DrumToMIDI-midi bash -c "cd /app && pytest"
 ```
 
 ### Writing Tests
@@ -291,7 +291,7 @@ See `docs/archive/` for examples of completed refactoring plans.
 ## Project Structure
 
 ```
-stemtomidi/
+DrumToMIDI/
 ├── stems_to_midi/          # MIDI conversion package
 │   ├── helpers.py          # Functional core (pure functions)
 │   ├── detection.py        # Onset detection
@@ -317,4 +317,4 @@ By contributing, you agree that your contributions will be licensed under the sa
 
 ---
 
-**Thank you for contributing to StemToMIDI! 🥁🎵**
+**Thank you for contributing to DrumToMIDI! 🥁🎵**

@@ -1,19 +1,19 @@
-# LarsNet to StemToMIDI Rename Plan
+# LarsNet to DrumToMIDI Rename Plan
 
 ## Objective
-Remove all references to the Lars model and rename the project from LarsNetMidi to StemToMIDI. The MDX23C model is now the primary and only separation model used.
+Remove all references to the Lars model and rename the project from LarsNetMidi to DrumToMIDI. The MDX23C model is now the primary and only separation model used.
 
 ## Context
 - LarsNet was the original drum separation model used in this project
 - MDX23C is significantly more modern and effective
 - LarsNet model code and references should be removed, but model selection infrastructure preserved
 - Future models may be added, so keep --model parameter and conditional structure
-- The repository is being renamed from larsnet-midi to StemToMIDI
+- The repository is being renamed from larsnet-midi to DrumToMIDI
 
 ## Phases
 
 ### Phase 1: Documentation and Attribution
-**Goal:** Update all markdown files, documentation, and attribution to reflect StemToMIDI branding and remove LarsNet references.
+**Goal:** Update all markdown files, documentation, and attribution to reflect DrumToMIDI branding and remove LarsNet references.
 
 **Scope:**
 - Update README.md with new branding and remove LarsNet mentions
@@ -35,7 +35,7 @@ Remove all references to the Lars model and rename the project from LarsNetMidi 
 - All other .md files referencing LarsNet
 
 **Success Criteria:**
-- All user-facing documentation uses StemToMIDI branding
+- All user-facing documentation uses DrumToMIDI branding
 - Historical attribution to LarsNet research preserved appropriately
 - No misleading references to LarsNet as active model
 
@@ -99,8 +99,8 @@ Remove all references to the Lars model and rename the project from LarsNetMidi 
 **Scope:**
 - Update webui/app.py references
 - Update webui/templates/index.html
-- Rename CSS classes from larsnet-* to stemtomidi-*
-- Update SVG logo (larsnetmidi.svg → stemtomidi.svg)
+- Rename CSS classes from larsnet-* to DrumToMIDI-*
+- Update SVG logo (larsnetmidi.svg → DrumToMIDI.svg)
 - Update localStorage keys
 - Update API documentation
 - Update webui module docstrings
@@ -108,16 +108,16 @@ Remove all references to the Lars model and rename the project from LarsNetMidi 
 **Files:**
 - webui/app.py
 - webui/templates/index.html (CSS classes, branding)
-- webui/static/img/larsnetmidi.svg → webui/static/img/stemtomidi.svg
+- webui/static/img/larsnetmidi.svg → webui/static/img/DrumToMIDI.svg
 - webui/api/operations.py
 - webui/config*.py
 - All webui test files
 
 **Success Criteria:**
-- Web interface displays "StemToMIDI" branding
+- Web interface displays "DrumToMIDI" branding
 - SVG logo updated with correct naming
-- CSS classes use stemtomidi-* naming
-- localStorage uses stemtomidi_settings key
+- CSS classes use DrumToMIDI-* naming
+- localStorage uses DrumToMIDI_settings key
 - All webui tests pass
 
 ### Phase 5: Infrastructure and Configuration
@@ -140,14 +140,14 @@ Remove all references to the Lars model and rename the project from LarsNetMidi 
 - PROJECT_METADATA_FILE constant
 
 **Success Criteria:**
-- Docker container named stemtomidi-midi or similar
+- Docker container named DrumToMIDI-midi or similar
 - All infrastructure references updated
 - Git LFS filters updated/removed
 
 ## Risks and Mitigations
 
 **Risk:** Breaking existing user projects with .larsnet_project.json metadata
-**Mitigation:** Rename metadata file to .stemtomidi_project.json, consider migration script
+**Mitigation:** Rename metadata file to .DrumToMIDI_project.json, consider migration script
 
 **Risk:** Users with docker containers named larsnet-midi
 **Mitigation:** Document the rename in README, provide migration instructions
@@ -166,7 +166,7 @@ Remove all references to the Lars model and rename the project from LarsNetMidi 
 1. **Zero LarsNet References:** No code imports or uses larsnet module
 2. **Clean Model Path:** Only MDX23C separation logic remains (but model selection infrastructure preserved)
 3. **Extensible Architecture:** Model parameter kept for future model additions
-4. **Consistent Branding:** All user-facing materials say "StemToMIDI"
+4. **Consistent Branding:** All user-facing materials say "DrumToMIDI"
 5. **Tests Pass:** 100% test passage after each phase
 6. **Attribution Preserved:** Historical credit to LarsNet research maintained appropriately
 7. **Documentation Complete:** All docs reflect new reality
@@ -181,6 +181,6 @@ Each phase commits separately. If issues arise:
 ## Notes
 
 - The note in docker-compose.yaml has a typo: "larsmet-midi" should be fixed
-- SVG already says "StemToMIDI" in the graphic, just needs filename change
+- SVG already says "DrumToMIDI" in the graphic, just needs filename change
 - Project metadata file constant should be renamed throughout
 - localStorage key in webui should be migrated for existing users

@@ -7,7 +7,7 @@ When testing, once you're sure the docker container is running and stable, use t
 
 **Run all tests with coverage (recommended):**
 ```bash
-docker exec -it stemtomidi-midi bash -c "cd /app && pytest"
+docker exec -it DrumToMIDI-midi bash -c "cd /app && pytest"
 ```
 
 Find test files by searching for `import pytest`.

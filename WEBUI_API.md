@@ -1,6 +1,6 @@
-# StemToMIDI Web UI API Documentation
+# DrumToMIDI Web UI API Documentation
 
-REST API for the StemToMIDI web interface. All operations run asynchronously via a job queue with real-time status updates through Server-Sent Events.
+REST API for the DrumToMIDI web interface. All operations run asynchronously via a job queue with real-time status updates through Server-Sent Events.
 
 ## Base URL
 

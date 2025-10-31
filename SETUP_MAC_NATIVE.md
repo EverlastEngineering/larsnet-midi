@@ -1,6 +1,6 @@
 # Mac Native Setup Guide
 
-This guide walks through setting up StemToMIDI natively on macOS to leverage Metal Performance Shaders (MPS) for GPU acceleration. This provides significantly better performance than Docker (2.9x faster for high-quality separation).
+This guide walks through setting up DrumToMIDI natively on macOS to leverage Metal Performance Shaders (MPS) for GPU acceleration. This provides significantly better performance than Docker (2.9x faster for high-quality separation).
 
 ## Why Native on Mac?
 
@@ -61,11 +61,11 @@ conda --version
 # Should output: conda 24.x.x or similar
 ```
 
-## Step 3: Create StemToMIDI Environment
+## Step 3: Create DrumToMIDI Environment
 
-Navigate to the StemToMIDI repository:
+Navigate to the DrumToMIDI repository:
 ```bash
-cd /path/to/stemtomidi
+cd /path/to/DrumToMIDI
 ```
 
 Create the conda environment from `environment.yml`:
@@ -86,10 +86,10 @@ mamba env create -f environment.yml
 
 ### Activate the Environment
 ```bash
-conda activate stemtomidi-midi
+conda activate DrumToMIDI-midi
 ```
 
-Your prompt should now show `(stemtomidi-midi)` prefix.
+Your prompt should now show `(DrumToMIDI-midi)` prefix.
 
 ## Step 4: Verify Installation
 

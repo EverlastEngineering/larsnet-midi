@@ -1,6 +1,6 @@
 # LarsNet: Historical Attribution
 
-**Note:** This document preserves attribution to the LarsNet research that originally inspired this project. StemToMIDI now uses the more modern and effective MDX23C model for drum separation, but we maintain this documentation to credit the foundational research that made this work possible.
+**Note:** This document preserves attribution to the LarsNet research that originally inspired this project. DrumToMIDI now uses the more modern and effective MDX23C model for drum separation, but we maintain this documentation to credit the foundational research that made this work possible.
 
 ---
 
@@ -61,7 +61,7 @@ The open access paper "_**Toward Deep Drum Source Separation**_" authored by A. 
 
 Pretrained LarsNet model checkpoints can be found [here](https://drive.google.com/uc?id=1U8-5924B1ii1cjv9p0MTPzayb00P4qoL&export=download) (562 MB) licensed under CC BY-NC 4.0.
 
-**Note:** StemToMIDI no longer uses these models, having transitioned to the more effective MDX23C architecture.
+**Note:** DrumToMIDI no longer uses these models, having transitioned to the more effective MDX23C architecture.
 
 ## Beyond Drums Demixing
 
@@ -86,4 +86,4 @@ LARS was presented at ISMIR 2023 Late-Breaking Demo Session:
 
 ## Original Repository
 
-StemToMIDI was originally inspired by LarsNet research. The project has since evolved to use MDX23C for separation and added comprehensive MIDI generation capabilities. The original LarsNet repository can be found at: https://github.com/polimi-ispl/larsnet
+DrumToMIDI was originally inspired by LarsNet research. The project has since evolved to use MDX23C for separation and added comprehensive MIDI generation capabilities. The original LarsNet repository can be found at: https://github.com/polimi-ispl/larsnet

@@ -1,5 +1,5 @@
 """
-Unit Tests for StemToMIDI Web UI API
+Unit Tests for DrumToMIDI Web UI API
 
 Tests all API endpoints with mocked project_manager functions.
 Run with: pytest webui/test_api.py

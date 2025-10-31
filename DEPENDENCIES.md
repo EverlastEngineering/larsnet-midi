@@ -1,6 +1,6 @@
 # Dependency Management
 
-This document explains StemToMIDI's dependency management strategy and provides guidance for contributors.
+This document explains DrumToMIDI's dependency management strategy and provides guidance for contributors.
 
 ## Philosophy
 
@@ -140,11 +140,11 @@ We evaluated using `requirements.txt` but chose Conda because:
 
 ```bash
 # From scratch
-conda env remove -n stemtomidi-midi
+conda env remove -n DrumToMIDI-midi
 ```
 
 ```bash
-conda activate stemtomidi-midi
+conda activate DrumToMIDI-midi
 conda env create -f environment.yml
 conda activate larsnet
 
@@ -190,7 +190,7 @@ This creates `conda-lock.yml` containing pinned versions for all specified platf
 
 ```bash
 # Install from lockfile
-conda-lock install -n stemtomidi-midi conda-lock.yml
+conda-lock install -n DrumToMIDI-midi conda-lock.yml
 
 # Update specific package
 conda-lock lock --lockfile conda-lock.yml --update numpy

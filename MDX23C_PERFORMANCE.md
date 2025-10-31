@@ -197,7 +197,7 @@ If not seeing speedups:
 
 The optimized implementation approaches UVR performance:
 
-| Aspect | UVR | StemToMIDI Original | StemToMIDI Optimized |
+| Aspect | UVR | DrumToMIDI Original | DrumToMIDI Optimized |
 |--------|-----|---------------------|----------------------|
 | Default overlap | 0.25 (?) | 0.875 (overlap=8) | 0.75 (overlap=4) |
 | Batch processing | Yes | No | Yes |
