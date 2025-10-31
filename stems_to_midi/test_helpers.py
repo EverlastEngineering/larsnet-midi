@@ -366,11 +366,11 @@ class TestShouldKeepOnset:
         )
         assert result is True
     
-    def test_hihat_sustain_or_geomean(self):
-        """Test hihat passes with EITHER sustain OR geomean."""
-        # Pass sustain, fail geomean
+    def test_hihat_geomean_threshold(self):
+        """Test hihat uses geomean threshold (current implementation)."""
+        # Pass geomean threshold
         result = should_keep_onset(
-            geomean=30.0,
+            geomean=60.0,
             sustain_ms=50.0,
             geomean_threshold=50.0,
             min_sustain_ms=25.0,
@@ -378,25 +378,35 @@ class TestShouldKeepOnset:
         )
         assert result is True
         
-        # Fail sustain, pass geomean
-        result = should_keep_onset(
-            geomean=60.0,
-            sustain_ms=20.0,
-            geomean_threshold=50.0,
-            min_sustain_ms=25.0,
-            stem_type='hihat'
-        )
-        assert result is True
-        
-        # Fail both
+        # Fail geomean threshold (sustain doesn't matter)
         result = should_keep_onset(
             geomean=30.0,
-            sustain_ms=20.0,
+            sustain_ms=200.0,  # High sustain doesn't help
             geomean_threshold=50.0,
             min_sustain_ms=25.0,
             stem_type='hihat'
         )
         assert result is False
+        
+        # At exact threshold (should fail, uses > not >=)
+        result = should_keep_onset(
+            geomean=50.0,
+            sustain_ms=100.0,
+            geomean_threshold=50.0,
+            min_sustain_ms=25.0,
+            stem_type='hihat'
+        )
+        assert result is False
+        
+        # Just above threshold
+        result = should_keep_onset(
+            geomean=50.1,
+            sustain_ms=10.0,
+            geomean_threshold=50.0,
+            min_sustain_ms=25.0,
+            stem_type='hihat'
+        )
+        assert result is True
     
     def test_cymbal_only_sustain_threshold(self):
         """Test cymbal with only sustain threshold set."""
@@ -510,6 +520,85 @@ class TestShouldKeepOnset:
             stem_type='snare'
         )
         assert result is True
+    
+    def test_strength_filter_pass(self):
+        """Test onset passes strength threshold."""
+        result = should_keep_onset(
+            geomean=100.0,
+            sustain_ms=None,
+            geomean_threshold=50.0,
+            min_sustain_ms=None,
+            stem_type='hihat',
+            strength=0.5,
+            min_strength_threshold=0.1
+        )
+        assert result is True
+    
+    def test_strength_filter_fail(self):
+        """Test onset fails strength threshold."""
+        result = should_keep_onset(
+            geomean=100.0,
+            sustain_ms=None,
+            geomean_threshold=50.0,
+            min_sustain_ms=None,
+            stem_type='hihat',
+            strength=0.05,
+            min_strength_threshold=0.1
+        )
+        assert result is False
+    
+    def test_strength_filter_exact_threshold(self):
+        """Test onset at exact strength threshold."""
+        result = should_keep_onset(
+            geomean=100.0,
+            sustain_ms=None,
+            geomean_threshold=50.0,
+            min_sustain_ms=None,
+            stem_type='kick',
+            strength=0.1,
+            min_strength_threshold=0.1
+        )
+        assert result is True
+    
+    def test_strength_filter_disabled(self):
+        """Test strength filter disabled when threshold is None."""
+        result = should_keep_onset(
+            geomean=100.0,
+            sustain_ms=None,
+            geomean_threshold=50.0,
+            min_sustain_ms=None,
+            stem_type='snare',
+            strength=0.01,
+            min_strength_threshold=None
+        )
+        assert result is True
+    
+    def test_strength_filter_with_geomean_fail(self):
+        """Test strength passes but geomean fails."""
+        result = should_keep_onset(
+            geomean=30.0,
+            sustain_ms=None,
+            geomean_threshold=50.0,
+            min_sustain_ms=None,
+            stem_type='kick',
+            strength=0.5,
+            min_strength_threshold=0.1
+        )
+        assert result is False
+    
+    def test_strength_filter_all_stems(self):
+        """Test strength filter applies to all stem types."""
+        for stem_type in ['kick', 'snare', 'hihat', 'cymbals', 'toms']:
+            result = should_keep_onset(
+                geomean=100.0,
+                sustain_ms=100.0,
+                geomean_threshold=50.0,
+                min_sustain_ms=50.0,
+                stem_type=stem_type,
+                strength=0.05,
+                min_strength_threshold=0.1
+            )
+            assert result is False, f"Strength filter should reject for {stem_type}"
 
 
 class TestNormalizeValues:

@@ -327,11 +327,11 @@ class TestDetectHihatState:
             audio[idx:idx+10] = 0.05  # Very low amplitude for open detection
         
         onset_times = np.array([0.1, 0.3, 0.5])
-        sustain_durations = [80.0, 200.0, 40.0]  # ms (40 < 75 for handclap, 90 is open threshold)
+        sustain_durations = [80.0, 200.0, 40.0]  # ms
         spectral_data = [
-            {'primary_energy': 10, 'secondary_energy': 50},
-            {'primary_energy': 250, 'secondary_energy': 80},  # High body energy for open
-            {'primary_energy': 450, 'secondary_energy': 120}  # High body energy for handclap
+            {'primary_energy': 10, 'secondary_energy': 50},  # Low energy = closed
+            {'primary_energy': 500, 'secondary_energy': 200},  # GeoMean=316, Sustain=200ms = OPEN (learned thresholds)
+            {'primary_energy': 30, 'secondary_energy': 40}  # Low energy = closed
         ]
         
         states = detect_hihat_state(
@@ -339,13 +339,13 @@ class TestDetectHihatState:
             sustain_durations=sustain_durations,
             spectral_data=spectral_data,
             config=sample_config,
-            open_sustain_threshold_ms=90.0
+            open_sustain_threshold_ms=100.0  # Learned threshold
         )
         
         assert len(states) == 3
-        assert states[0] == 'closed'  # 80ms < 90ms
-        assert states[1] == 'open'    # 200ms > 90ms + energy > 200
-        assert states[2] == 'handclap'  # High energy + short sustain (40 < 75)
+        assert states[0] == 'closed'  # GeoMean=22 < 262, Sustain=80ms < 100ms
+        assert states[1] == 'open'    # GeoMean=316 >= 262 AND Sustain=200ms >= 100ms (LEARNED)
+        assert states[2] == 'closed'  # GeoMean=34 < 262, Sustain=40ms < 100ms
     
     def test_detect_hihat_state_without_precalculated_data(self, sample_config):
         """Test when sustain durations need to be calculated."""
@@ -461,7 +461,7 @@ class TestDetectHihatState:
         assert states[0] == 'closed'
     
     def test_detect_hihat_state_multiple_hits(self, sample_config):
-        """Test with multiple hi-hat hits of different types."""
+        """Test with multiple hi-hat hits using learned thresholds."""
         sr = 22050
         audio = np.zeros(sr * 2)  # Use zeros since we're providing spectral_data
         # Add low amplitude transients at onset times for peak detection
@@ -470,12 +470,12 @@ class TestDetectHihatState:
             audio[idx:idx+10] = 0.05  # Very low amplitude for open detection
         
         onset_times = np.array([0.1, 0.3, 0.5, 0.7])
-        sustain_durations = [80.0, 200.0, 40.0, 120.0]  # 90ms is open threshold
+        sustain_durations = [80.0, 200.0, 40.0, 120.0]
         spectral_data = [
-            {'primary_energy': 15, 'secondary_energy': 70},   # closed
-            {'primary_energy': 250, 'secondary_energy': 90},  # open (body > 200)
-            {'primary_energy': 450, 'secondary_energy': 150}, # handclap (body > 400)
-            {'primary_energy': 10, 'secondary_energy': 60}    # closed
+            {'primary_energy': 15, 'secondary_energy': 70},   # GeoMean=32 < 262 = closed
+            {'primary_energy': 500, 'secondary_energy': 200}, # GeoMean=316 >= 262, Sustain=200ms >= 100 = OPEN (learned)
+            {'primary_energy': 30, 'secondary_energy': 50},   # GeoMean=39 < 262 = closed
+            {'primary_energy': 10, 'secondary_energy': 60}    # GeoMean=24 < 262 = closed
         ]
         
         states = detect_hihat_state(
@@ -483,14 +483,14 @@ class TestDetectHihatState:
             sustain_durations=sustain_durations,
             spectral_data=spectral_data,
             config=sample_config,
-            open_sustain_threshold_ms=90.0
+            open_sustain_threshold_ms=100.0  # Learned threshold
         )
         
         assert len(states) == 4
-        assert states[0] == 'closed'
-        assert states[1] == 'open'
-        assert states[2] == 'handclap'
-        assert states[3] == 'closed'
+        assert states[0] == 'closed'  # GeoMean=32 < 262, Sustain=80ms < 100ms
+        assert states[1] == 'open'    # GeoMean=316 >= 262 AND Sustain=200ms >= 100ms (LEARNED)
+        assert states[2] == 'closed'  # GeoMean=39 < 262, Sustain=40ms < 100ms
+        assert states[3] == 'closed'  # GeoMean=24 < 262, Sustain=120ms (fails GeoMean check)
 
 
 if __name__ == '__main__':

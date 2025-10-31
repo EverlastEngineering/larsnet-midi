@@ -326,52 +326,58 @@ class TestHiHatStateDetection:
     
     def test_detect_hihat_state_with_precalculated(self, sample_config):
         """Test hi-hat state detection with pre-calculated sustain durations."""
-        onset_times = np.array([0.5, 1.0, 1.5])
-        sustain_durations = [80.0, 200.0, 50.0]  # ms (open_sustain_ms is 90 in config)
+        # Current classification uses: Open = (GeoMean >= 262) AND (SustainMs >= 100)
+        onset_times = np.array([0.5, 1.0, 1.5, 2.0])
+        sustain_durations = [80.0, 180.0, 50.0, 120.0]  # ms
         spectral_data = [
-            {'primary_energy': 180, 'secondary_energy': 200},  # Closed: sustain < threshold
-            {'primary_energy': 250, 'secondary_energy': 200},  # Open: high energy + long sustain
-            {'primary_energy': 180, 'secondary_energy': 200}   # Closed: sustain < threshold
+            {'primary_energy': 100, 'secondary_energy': 200},   # Closed: GeoMean=141 < 262
+            {'primary_energy': 400, 'secondary_energy': 200},   # Open: GeoMean=283 > 262, Sustain=180 > 100
+            {'primary_energy': 180, 'secondary_energy': 200},   # Closed: GeoMean=190 < 262
+            {'primary_energy': 300, 'secondary_energy': 250}    # Open: GeoMean=274 > 262, Sustain=120 > 100
         ]
         
-        # Dummy audio (not used when sustain_durations provided, but needs low peak amplitude)
+        # Dummy audio (not used when sustain_durations provided)
         sr = 44100
-        audio = np.zeros(sr * 2)
-        # Add low amplitude transients at onset times for peak detection
-        for onset_time in onset_times:
-            idx = int(onset_time * sr)
-            audio[idx:idx+10] = 0.05  # Very low amplitude for open detection
+        audio = np.zeros(sr * 3)
+        
+        # Configure with learned thresholds
+        config = sample_config.copy()
+        config['hihat'] = {
+            'open_sustain_ms': 100,
+            'open_geomean_min': 262.0
+        }
         
         states = detect_hihat_state(
             audio, sr, onset_times,
             sustain_durations=sustain_durations,
-            open_sustain_threshold_ms=90.0,
+            open_sustain_threshold_ms=100.0,
             spectral_data=spectral_data,
-            config=sample_config
+            config=config
         )
         
-        assert len(states) == 3
-        assert states[0] == 'closed'  # 80ms < 90ms
-        assert states[1] == 'open'    # 200ms > 90ms + energy > 200 + low peak
-        assert states[2] == 'closed'  # 50ms < 90ms
+        assert len(states) == 4
+        assert states[0] == 'closed'  # GeoMean=141 < 262
+        assert states[1] == 'open'    # GeoMean=283 >= 262 AND Sustain=180 >= 100
+        assert states[2] == 'closed'  # GeoMean=190 < 262
+        assert states[3] == 'open'    # GeoMean=274 >= 262 AND Sustain=120 >= 100
     
-    def test_detect_hihat_handclap(self, sample_config):
-        """Test handclap detection."""
-        onset_times = np.array([0.5])
-        sustain_durations = [30.0]  # Short duration (< handclap_sustain_max of 75ms)
+    def test_detect_hihat_closed_low_energy(self, sample_config):
+        """Test closed hihat detection with low energy."""
+        onset_times = np.array([0.5, 1.0])
+        sustain_durations = [30.0, 50.0]  # Short sustain
         spectral_data = [
-            {'primary_energy': 450, 'secondary_energy': 200}  # High energy (body > 400)
+            {'primary_energy': 50, 'secondary_energy': 100},   # GeoMean=71 < 262 → closed
+            {'primary_energy': 100, 'secondary_energy': 150}   # GeoMean=122 < 262 → closed
         ]
         
         audio = np.zeros(44100 * 2)
         sr = 44100
         
-        # Enable handclap detection with current config values
         config = sample_config.copy()
-        config['hihat']['detect_handclap'] = True
-        config['hihat']['handclap_body_min'] = 400
-        config['hihat']['handclap_sizzle_min'] = 100
-        config['hihat']['handclap_sustain_max'] = 75
+        config['hihat'] = {
+            'open_sustain_ms': 100,
+            'open_geomean_min': 262.0
+        }
         
         states = detect_hihat_state(
             audio, sr, onset_times,
@@ -380,8 +386,9 @@ class TestHiHatStateDetection:
             config=config
         )
         
-        assert len(states) == 1
-        assert states[0] == 'handclap'
+        assert len(states) == 2
+        assert states[0] == 'closed'  # Low energy
+        assert states[1] == 'closed'  # Low energy
 
 
 # ============================================================================
@@ -558,6 +565,252 @@ class TestRegression:
         
         # For now, just check the config loads
         assert 'cymbals' in config
+
+
+class TestFootCloseEvents:
+    """Test foot-close event generation for open hihats."""
+    
+    def test_foot_close_generation_enabled(self, sample_config, drum_mapping):
+        """Test foot-close events are generated when enabled."""
+        from stems_to_midi.processor import _create_midi_events
+        
+        # Configure for foot-close generation
+        config = sample_config.copy()
+        config['hihat'] = {
+            'generate_foot_close': True,
+            'midi_note_foot_close': 44,
+            'timing_offset': 0.0
+        }
+        
+        onset_times = np.array([1.0, 2.0])
+        normalized_values = np.array([0.8, 0.9])
+        hihat_states = ['open', 'closed']
+        sustain_durations = [150.0, 50.0]  # ms
+        
+        events = _create_midi_events(
+            onset_times=onset_times,
+            normalized_values=normalized_values,
+            stem_type='hihat',
+            note=42,
+            min_velocity=80,
+            max_velocity=110,
+            hihat_states=hihat_states,
+            tom_classifications=None,
+            drum_mapping=drum_mapping,
+            config=config,
+            sustain_durations=sustain_durations
+        )
+        
+        # Should have 2 hihat notes + 1 foot-close (only for open hihat)
+        assert len(events) == 3
+        
+        # First event: open hihat at 1.0s
+        assert events[0]['note'] == 46  # open hihat
+        assert events[0]['time'] == 1.0
+        
+        # Second event: foot-close at 1.0 + 0.15 = 1.15s
+        assert events[1]['note'] == 44  # foot-close
+        assert events[1]['time'] == 1.15
+        assert events[1]['velocity'] <= events[0]['velocity']  # Softer than open hit
+        
+        # Third event: closed hihat at 2.0s (no foot-close)
+        assert events[2]['note'] == 42  # closed hihat
+        assert events[2]['time'] == 2.0
+    
+    def test_foot_close_generation_disabled(self, sample_config, drum_mapping):
+        """Test no foot-close events when disabled."""
+        from stems_to_midi.processor import _create_midi_events
+        
+        config = sample_config.copy()
+        config['hihat'] = {
+            'generate_foot_close': False,
+            'midi_note_foot_close': 44,
+            'timing_offset': 0.0
+        }
+        
+        onset_times = np.array([1.0, 2.0])
+        normalized_values = np.array([0.8, 0.9])
+        hihat_states = ['open', 'closed']
+        sustain_durations = [150.0, 50.0]
+        
+        events = _create_midi_events(
+            onset_times=onset_times,
+            normalized_values=normalized_values,
+            stem_type='hihat',
+            note=42,
+            min_velocity=80,
+            max_velocity=110,
+            hihat_states=hihat_states,
+            tom_classifications=None,
+            drum_mapping=drum_mapping,
+            config=config,
+            sustain_durations=sustain_durations
+        )
+        
+        # Should have only 2 hihat notes, no foot-close
+        assert len(events) == 2
+        assert all(e['note'] in [42, 46] for e in events)
+    
+    def test_foot_close_timing_calculation(self, sample_config, drum_mapping):
+        """Test foot-close timing is correct (onset + sustain)."""
+        from stems_to_midi.processor import _create_midi_events
+        
+        config = sample_config.copy()
+        config['hihat'] = {
+            'generate_foot_close': True,
+            'midi_note_foot_close': 44,
+            'timing_offset': 0.0
+        }
+        
+        onset_times = np.array([0.5, 1.5, 3.0])
+        normalized_values = np.array([0.8, 0.9, 0.7])
+        hihat_states = ['open', 'open', 'closed']
+        sustain_durations = [200.0, 100.0, 50.0]  # ms
+        
+        events = _create_midi_events(
+            onset_times=onset_times,
+            normalized_values=normalized_values,
+            stem_type='hihat',
+            note=42,
+            min_velocity=80,
+            max_velocity=110,
+            hihat_states=hihat_states,
+            tom_classifications=None,
+            drum_mapping=drum_mapping,
+            config=config,
+            sustain_durations=sustain_durations
+        )
+        
+        # Should have 3 hihats + 2 foot-closes
+        assert len(events) == 5
+        
+        # Find foot-close events
+        foot_closes = [e for e in events if e['note'] == 44]
+        assert len(foot_closes) == 2
+        
+        # First foot-close: 0.5 + 0.2 = 0.7s
+        assert abs(foot_closes[0]['time'] - 0.7) < 0.001
+        
+        # Second foot-close: 1.5 + 0.1 = 1.6s
+        assert abs(foot_closes[1]['time'] - 1.6) < 0.001
+    
+    def test_foot_close_velocity_scaling(self, sample_config, drum_mapping):
+        """Test foot-close velocity is scaled from open hihat velocity."""
+        from stems_to_midi.processor import _create_midi_events
+        
+        config = sample_config.copy()
+        config['hihat'] = {
+            'generate_foot_close': True,
+            'midi_note_foot_close': 44,
+            'timing_offset': 0.0
+        }
+        
+        onset_times = np.array([1.0])
+        normalized_values = np.array([1.0])  # Maximum normalized value
+        hihat_states = ['open']
+        sustain_durations = [150.0]
+        
+        events = _create_midi_events(
+            onset_times=onset_times,
+            normalized_values=normalized_values,
+            stem_type='hihat',
+            note=42,
+            min_velocity=80,
+            max_velocity=110,
+            hihat_states=hihat_states,
+            tom_classifications=None,
+            drum_mapping=drum_mapping,
+            config=config,
+            sustain_durations=sustain_durations
+        )
+        
+        open_event = events[0]
+        foot_close_event = events[1]
+        
+        # Foot-close should be 70% of open velocity
+        expected_foot_close_vel = int(open_event['velocity'] * 0.7)
+        expected_foot_close_vel = max(expected_foot_close_vel, 40)
+        expected_foot_close_vel = min(expected_foot_close_vel, 100)
+        
+        assert foot_close_event['velocity'] == expected_foot_close_vel
+        assert foot_close_event['velocity'] < open_event['velocity']
+    
+    def test_foot_close_not_for_cymbals(self, sample_config, drum_mapping):
+        """Test foot-close events are not generated for cymbals."""
+        from stems_to_midi.processor import _create_midi_events
+        
+        config = sample_config.copy()
+        config['cymbals'] = {
+            'generate_foot_close': True,  # Should be ignored for cymbals
+            'midi_note_foot_close': 44,
+            'timing_offset': 0.0
+        }
+        
+        onset_times = np.array([1.0])
+        normalized_values = np.array([0.8])
+        sustain_durations = [1500.0]  # Long sustain
+        
+        events = _create_midi_events(
+            onset_times=onset_times,
+            normalized_values=normalized_values,
+            stem_type='cymbals',
+            note=49,
+            min_velocity=80,
+            max_velocity=110,
+            hihat_states=['closed'],  # Not used for cymbals
+            tom_classifications=None,
+            drum_mapping=drum_mapping,
+            config=config,
+            sustain_durations=sustain_durations
+        )
+        
+        # Should have only 1 cymbal note, no foot-close
+        assert len(events) == 1
+        assert events[0]['note'] == 49
+
+
+class TestGetSpectralConfigWithStrength:
+    """Test get_spectral_config_for_stem includes min_strength_threshold."""
+    
+    def test_hihat_has_strength_threshold(self, sample_config):
+        """Test hihat config includes strength threshold."""
+        from stems_to_midi.helpers import get_spectral_config_for_stem
+        
+        config = sample_config.copy()
+        config['hihat'] = {
+            'geomean_threshold': 20.0,
+            'min_strength_threshold': 0.1,
+            'body_freq_min': 500,
+            'body_freq_max': 2000,
+            'sizzle_freq_min': 6000,
+            'sizzle_freq_max': 12000
+        }
+        
+        spectral_config = get_spectral_config_for_stem('hihat', config)
+        
+        assert 'min_strength_threshold' in spectral_config
+        assert spectral_config['min_strength_threshold'] == 0.1
+    
+    def test_strength_threshold_optional(self, sample_config):
+        """Test strength threshold is optional."""
+        from stems_to_midi.helpers import get_spectral_config_for_stem
+        
+        config = sample_config.copy()
+        config['kick'] = {
+            'geomean_threshold': 70.0,
+            'fundamental_freq_min': 40,
+            'fundamental_freq_max': 80,
+            'body_freq_min': 80,
+            'body_freq_max': 150,
+            'attack_freq_min': 2000,
+            'attack_freq_max': 6000
+            # Deliberately omit min_strength_threshold
+        }
+        
+        spectral_config = get_spectral_config_for_stem('kick', config)
+        
+        # Should have None if not specified
+        assert spectral_config.get('min_strength_threshold') is None
 
 
 if __name__ == '__main__':
