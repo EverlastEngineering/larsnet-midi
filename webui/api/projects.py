@@ -290,11 +290,11 @@ def upload_alternate_audio(project_number):
     """
     POST /api/projects/{number}/upload-alternate-audio
     
-    Upload an alternate audio file (WAV) to a project's alternate_mix directory.
+    Upload an alternate audio file to a project's alternate_mix directory.
     
     Request:
         - multipart/form-data with 'file' field
-        - file must be .wav format
+        - file must be a supported audio format (wav, mp3, flac, aiff, aac, ogg, m4a)
         
     Returns:
         201: File uploaded successfully
@@ -335,20 +335,20 @@ def upload_alternate_audio(project_number):
                 'message': 'Please select a file to upload'
             }), 400
         
-        # Check file extension - only allow WAV files for alternate audio
-        if not file.filename.lower().endswith('.wav'):
+        # Check file extension - allow common audio formats
+        allowed_extensions = {'.wav', '.mp3', '.flac', '.aiff', '.aif', '.aac', '.ogg', '.m4a'}
+        file_ext = Path(file.filename).suffix.lower()
+        
+        if file_ext not in allowed_extensions:
+            allowed_formats = ', '.join(sorted(allowed_extensions))
             return jsonify({
                 'error': 'Invalid file type',
-                'message': 'Alternate audio must be WAV format (.wav)'
+                'message': f'Audio file must be one of: {allowed_formats}'
             }), 400
         
         # Secure the filename
         from werkzeug.utils import secure_filename
         filename = secure_filename(file.filename)
-        
-        # Ensure filename ends with .wav
-        if not filename.lower().endswith('.wav'):
-            filename += '.wav'
         
         # Create alternate_mix directory if it doesn't exist
         project_path = project['path']
@@ -446,7 +446,13 @@ def list_audio_files(project_number):
         # Check for alternate audio files
         alternate_mix_dir = project_path / 'alternate_mix'
         if alternate_mix_dir.exists() and alternate_mix_dir.is_dir():
-            for audio_file in sorted(alternate_mix_dir.glob('*.wav')):
+            # Support all common audio formats
+            alternate_extensions = ['*.wav', '*.mp3', '*.flac', '*.aiff', '*.aif', '*.aac', '*.ogg', '*.m4a']
+            alternate_files = []
+            for pattern in alternate_extensions:
+                alternate_files.extend(alternate_mix_dir.glob(pattern))
+            
+            for audio_file in sorted(alternate_files):
                 audio_files.append({
                     'name': audio_file.name,
                     'path': f'alternate_mix/{audio_file.name}',

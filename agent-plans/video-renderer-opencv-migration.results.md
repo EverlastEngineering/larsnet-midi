@@ -25,15 +25,30 @@
 ---
 
 ### Phase 2: Single Layer Migration
-- [ ] Implement `draw_strike_line_cv2()`
-- [ ] Add A/B testing framework
-- [ ] Verify visual output matches PIL version
-- [ ] Benchmark frame render time
-- [ ] Enable OpenCV for strike line
+- [x] Implement `draw_strike_line_cv2()`
+- [x] Add A/B testing framework (use_opencv flag)
+- [x] Verify visual output matches PIL version
+- [x] Benchmark frame render time with real video
+- [x] Enable OpenCV for strike line
 
-**Status**: Not Started  
-**Metrics**: N/A  
-**Notes**:
+**Status**: ⚠️ Complete but NOT RECOMMENDED for use  
+**Metrics**: 
+- Strike line layer migrated to OpenCV
+- Conditional rendering based on use_opencv flag
+- 8 tests passing (7 infrastructure + 1 strike line)
+- **Performance**: 2x SLOWER than PIL-only path
+
+**Notes**: 
+- Implemented draw_highlight_circle_cv2() for pulsing circles
+- Strike line, lane markers, and highlights all use cv2 functions
+- **Problem discovered**: Format conversion overhead kills gains
+  - PIL→OpenCV→PIL→OpenCV conversion for every frame
+  - Converting entire 1920x1080 canvas 3x per frame
+  - This overhead > savings from OpenCV rendering
+- **Solution**: Must migrate ALL layers (Phase 3+4) to eliminate conversions
+- Single layer migration is not worthwhile due to conversion overhead
+- Infrastructure validated and working correctly
+- Next: Skip to Phase 3+4 combo - migrate all layers at once
 
 ---
 

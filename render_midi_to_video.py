@@ -197,27 +197,58 @@ def cv2_composite_layer(base: np.ndarray, overlay: np.ndarray, alpha: float = 1.
     """Composite overlay onto base using alpha blending (modifies base in-place)
     
     Args:
-        base: Base canvas (BGR or BGRA) - modified in-place
-        overlay: Overlay canvas (BGRA with alpha channel)
+        base: Base canvas (BGR, 3-channel) - modified in-place
+        overlay: Overlay canvas (BGRA, 4-channel with alpha)
         alpha: Additional alpha multiplier (0.0 to 1.0)
     """
     if overlay.shape[2] != 4:
         # No alpha channel, simple copy
         if alpha >= 1.0:
-            base[:] = overlay[:, :, :3]
+            base[:] = overlay
         else:
-            cv2.addWeighted(base, 1.0 - alpha, overlay[:, :, :3], alpha, 0, base)
+            cv2.addWeighted(base, 1.0 - alpha, overlay, alpha, 0, base)
         return
     
     # Extract alpha channel and apply multiplier
     overlay_alpha = (overlay[:, :, 3] / 255.0 * alpha).astype(np.float32)
     
-    # Expand alpha to match RGB channels
+    # Expand alpha to match BGR channels
     overlay_alpha_3ch = np.stack([overlay_alpha] * 3, axis=2)
     
     # Alpha blending: base * (1 - alpha) + overlay * alpha
-    base[:] = (base[:, :, :3] * (1 - overlay_alpha_3ch) + 
-               overlay[:, :, :3] * overlay_alpha_3ch).astype(np.uint8)
+    # base should be 3-channel BGR, overlay should be 4-channel BGRA
+    base[:, :, :] = (base[:, :, :] * (1 - overlay_alpha_3ch) + 
+                     overlay[:, :, :3] * overlay_alpha_3ch).astype(np.uint8)
+
+
+def cv2_draw_highlight_circle(canvas: np.ndarray, center_x: int, center_y: int, 
+                               max_size: float, color: Tuple[int, int, int],
+                               circle_alpha: int, pulse: float, glow_layers: int = 0) -> None:
+    """Draw pulsing highlight circle using OpenCV (optimized - no glow)
+    
+    Args:
+        canvas: BGRA canvas to draw on
+        center_x: X coordinate of circle center
+        center_y: Y coordinate of circle center  
+        max_size: Radius of main circle
+        color: RGB color tuple
+        circle_alpha: Alpha value for main circle (0-255)
+        pulse: Pulse factor (0.0 to 1.0) for animation
+        glow_layers: Ignored (glow disabled for performance)
+    """
+    # Convert RGB to BGR for OpenCV
+    bgr_color = (color[2], color[1], color[0])
+    
+    # Main circle - pre-multiply alpha for speed
+    main_color = tuple(int(c * circle_alpha / 255.0) for c in bgr_color)
+    cv2.circle(canvas, (center_x, center_y), int(max_size), 
+               (*main_color, circle_alpha), -1, cv2.LINE_AA)
+    
+    # Bright outline
+    outline_width = int(2 + 2 * pulse)
+    bright_color = tuple(min(255, int(c + (255 - c) * 0.8)) for c in bgr_color)
+    cv2.circle(canvas, (center_x, center_y), int(max_size), 
+               (*bright_color, 255), outline_width, cv2.LINE_AA)
 
 
 @dataclass
@@ -272,6 +303,9 @@ class MidiVideoRenderer:
         # Load font for UI
         self.font = self._load_font(24)
         self.font_small = self._load_font(16)
+        
+        # Cache for UI legend (rendered once, reused every frame)
+        self._cached_legend_layer = None
     
     def _load_font(self, size: int) -> ImageFont.FreeTypeFont:
         """Load system font or fall back to default"""
@@ -409,13 +443,13 @@ class MidiVideoRenderer:
                 draw_rounded_rectangle(draw,
                     (0, y_pos - self.kick_bar_height + y_offset, 
                      self.width, y_pos + y_offset),
-                    3,
+                    self.corner_radius,
                     fill=(*base_color, blur_alpha))
             
-            # Main bar with rounded corners
+            # Main bar
             draw_rounded_rectangle(draw,
                 (0, y_pos - self.kick_bar_height, self.width, y_pos),
-                3,
+                self.corner_radius,
                 fill=(*base_color, alpha),
                 outline=outline_color,
                 width=2)
@@ -442,7 +476,7 @@ class MidiVideoRenderer:
                     draw_rounded_rectangle(draw,
                         (0, self.strike_line_y - self.kick_bar_height - glow_height,
                          self.width, self.strike_line_y + glow_height),
-                        8,
+                        self.corner_radius,
                         fill=(*highlight_color, glow_alpha))
                 
                 # Main highlight bar
@@ -451,7 +485,7 @@ class MidiVideoRenderer:
                 draw_rounded_rectangle(draw,
                     (0, self.strike_line_y - self.kick_bar_height - extra_height,
                      self.width, self.strike_line_y + extra_height),
-                    6,
+                    self.corner_radius,
                     fill=(*highlight_color, bar_alpha),
                     outline=bright_outline,
                     width=outline_width)
@@ -503,11 +537,11 @@ class MidiVideoRenderer:
         glow_color = get_brighter_outline_color(base_color, int(alpha * 0.6))
         draw_rounded_rectangle(draw,
             (x - 2, note_top - 2, x + width + 2, note_bottom + 2),
-            self.corner_radius + 2,
+            self.corner_radius,
             outline=glow_color,
             width=4)
         
-        # Main note with rounded corners and anti-aliasing
+        # Main note
         draw_rounded_rectangle(draw,
             (x, note_top, x + width, note_bottom),
             self.corner_radius,
@@ -618,39 +652,64 @@ class MidiVideoRenderer:
             outline=bright_outline,
             width=outline_width)
     
-    def draw_ui(self, draw: ImageDraw.ImageDraw, current_time: float, total_time: float):
-        """Draw UI elements with glassy transparent progress bar at top and legend at bottom"""
+    def draw_highlight_circle_cv2(self, canvas: np.ndarray, note: DrumNote, current_time: float, first_highlight_frame: set):
+        """Draw the strike line highlight circle using OpenCV (Phase 2)
         
-        # === Progress bar at top with glassy effect ===
-        progress = current_time / total_time
-        bar_height = 50
-        bar_margin = 20
+        Args:
+            canvas: OpenCV BGRA canvas
+            note: DrumNote to draw
+            current_time: Current time in seconds
+            first_highlight_frame: Set tracking which notes are showing highlight for first time
+        """
+        if note.lane == -1:  # Skip kick drums
+            return
         
-        # Glassy background (60% transparent)
-        draw_rounded_rectangle(draw,
-            (bar_margin, bar_margin, 
-             self.width - bar_margin, bar_margin + bar_height),
-            15,
-            fill=(20, 20, 20, 153))
+        time_until_hit = note.time - current_time
+        alpha_factor = calculate_note_alpha(time_until_hit, self.strike_line_y, self.strike_line_y, self.height)
+        brightness = calculate_brightness(note.velocity)
+        base_color = apply_brightness_to_color(note.color, brightness)
         
-        # Progress fill with gradient effect
-        bar_filled_width = int((self.width - 2 * bar_margin - 20) * progress)
-        if bar_filled_width > 0:
-            # Main progress bar
-            draw_rounded_rectangle(draw,
-                (bar_margin + 10, bar_margin + 10,
-                 bar_margin + 10 + bar_filled_width, bar_margin + bar_height - 10),
-                10,
-                fill=(0, 200, 255, 153))
-            
-            # Highlight on top for glassy effect
-            draw_rounded_rectangle(draw,
-                (bar_margin + 10, bar_margin + 10,
-                 bar_margin + 10 + bar_filled_width, bar_margin + 20),
-                8,
-                fill=(100, 220, 255, 100))
+        x = note.lane * self.note_width + 10
+        width = self.note_width - 20
+        center_x = x + width // 2
         
-        # === Legend at bottom with glassy background ===
+        # Get animation progress (0.0 = entering, 0.5 = peak, 1.0 = leaving)
+        progress = self.calculate_strike_animation_progress(note, current_time)
+        
+        # Smooth pulse: peaks at center (0.5), fades at edges
+        pulse = abs(np.sin(progress * np.pi))  # 0→1→0 across the zone
+        
+        # Scale and size based on pulse with velocity influence
+        velocity_factor = brightness * 0.3 + 0.7  # 0.7 to 1.0 based on velocity
+        base_size = 50
+        max_size = base_size + 20 * pulse * velocity_factor
+        
+        # Color transitions from base → bright white → base
+        white_mix = pulse * 0.7  # Mix up to 70% white at peak
+        mixed_color = tuple(int(c + (255 - c) * white_mix) for c in base_color)
+        
+        # Alpha fades in/out smoothly
+        base_alpha = int(220 * alpha_factor)
+        circle_alpha = int(base_alpha * (0.3 + 0.7 * pulse))
+        
+        # Use helper function to draw circle with glow
+        cv2_draw_highlight_circle(canvas, center_x, self.strike_line_y,
+                                   max_size, mixed_color, circle_alpha, pulse)
+    
+    def _get_cached_legend_layer(self, used_notes=None):
+        """Get or create cached legend layer (rendered once, reused every frame)
+        
+        Args:
+            used_notes: Set of MIDI note numbers actually used in the song. If provided,
+                       only these instruments will be shown in the legend.
+        """
+        if self._cached_legend_layer is not None:
+            return self._cached_legend_layer
+        
+        # Create legend layer once
+        legend_layer = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(legend_layer, 'RGBA')
+        
         legend_height = 60
         legend_y = self.height - legend_height - 10
         
@@ -660,9 +719,16 @@ class MidiVideoRenderer:
             15,
             fill=(20, 20, 20, 180))
         
+        # Filter to only used drums if specified
+        if used_notes:
+            drums_to_show = [(note_num, lane_list) for note_num, lane_list in DRUM_MAP.items() 
+                           if note_num in used_notes]
+        else:
+            drums_to_show = list(DRUM_MAP.items())
+        
         # Draw legend items horizontally across the bottom
-        sorted_drums = sorted(DRUM_MAP.items(), key=lambda x: x[1][0]["lane"])
-        item_width = (self.width - 40) // len(sorted_drums)
+        sorted_drums = sorted(drums_to_show, key=lambda x: x[1][0]["lane"])
+        item_width = (self.width - 40) // len(sorted_drums) if sorted_drums else (self.width - 40)
         
         for idx, (note_num, lane_list) in enumerate(sorted_drums):
             info = lane_list[0]
@@ -689,6 +755,37 @@ class MidiVideoRenderer:
             # Text
             draw.text((x_pos + circle_size + 5, y_pos - 2), text,
                      font=self.font_small, fill=(255, 255, 255, 255))
+        
+        self._cached_legend_layer = legend_layer
+        return legend_layer
+    
+    def draw_ui(self, draw: ImageDraw.ImageDraw, current_time: float, total_time: float):
+        """Draw UI elements with progress bar only (legend is cached)"""
+        
+        # === Progress bar at top with glassy effect ===
+        progress = current_time / total_time
+        bar_height = 50
+        bar_margin = 20
+        
+        # Simplified progress bar (no rounded corners for speed)
+        draw.rectangle(
+            (bar_margin, bar_margin, 
+             self.width - bar_margin, bar_margin + bar_height),
+            fill=(20, 20, 20, 153))
+        
+        # Progress fill
+        bar_filled_width = int((self.width - 2 * bar_margin - 20) * progress)
+        if bar_filled_width > 0:
+            draw.rectangle(
+                (bar_margin + 10, bar_margin + 10,
+                 bar_margin + 10 + bar_filled_width, bar_margin + bar_height - 10),
+                fill=(0, 200, 255, 153))
+            
+            # Highlight on top
+            draw.rectangle(
+                (bar_margin + 10, bar_margin + 10,
+                 bar_margin + 10 + bar_filled_width, bar_margin + 20),
+                fill=(100, 220, 255, 100))
     
     def render(self, midi_path: str, output_path: str, show_preview: bool = False, audio_path: Optional[str] = None):
         """Render MIDI file to video
@@ -703,6 +800,9 @@ class MidiVideoRenderer:
         print(f"Parsing MIDI file: {midi_path}")
         notes, total_duration = self.parse_midi(midi_path)
         print(f"Found {len(notes)} notes, duration: {total_duration:.2f}s")
+        
+        # Track which MIDI notes are actually used (for legend filtering)
+        used_midi_notes = set(note.midi_note for note in notes)
         
         # Filter out empty lanes - detect which lanes actually have notes
         used_lanes = set(note.lane for note in notes if note.lane >= 0)
@@ -803,11 +903,7 @@ class MidiVideoRenderer:
             # Create base layer with opaque black background
             base_layer = Image.new('RGB', (self.width, self.height), (0, 0, 0))
             
-            # Create kick drum layer (rendered first, below everything)
-            kick_layer = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
-            kick_draw = ImageDraw.Draw(kick_layer, 'RGBA')
-            
-            # Create notes layer with transparency
+            # Create combined notes+kick layer (reduce layer count from 5 to 3)
             notes_layer = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
             notes_draw = ImageDraw.Draw(notes_layer, 'RGBA')
             
@@ -835,47 +931,87 @@ class MidiVideoRenderer:
                     note_index = i + 1
                     continue
                 
-                # Draw kick drums on kick layer, regular notes on notes layer
-                if note.lane == -1:
-                    self.draw_note(kick_draw, note, current_time, draw_kick_only=True, first_kick_frame=first_highlight_frame)
-                else:
-                    self.draw_note(notes_draw, note, current_time, draw_kick_only=False)
+                # Draw all notes (kick and regular) on the same layer
+                self.draw_note(notes_draw, note, current_time, 
+                              draw_kick_only=(note.lane == -1), 
+                              first_kick_frame=first_highlight_frame)
             
             # Create strike line layer (rendered on top of everything)
-            strike_layer = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
-            strike_draw = ImageDraw.Draw(strike_layer, 'RGBA')
-            
-            # Draw highlight circles for notes at strike line (before strike line itself)
-            for i in range(visible_start, len(notes)):
-                note = notes[i]
-                time_until_hit = note.time - current_time
+            if self.use_opencv:
+                # Phase 2: OpenCV path for strike line
+                strike_layer = create_cv2_canvas(self.width, self.height, channels=4)
                 
-                if time_until_hit > lookahead_time:
-                    break
+                # Draw highlight circles for notes at strike line
+                for i in range(visible_start, len(notes)):
+                    note = notes[i]
+                    time_until_hit = note.time - current_time
+                    
+                    if time_until_hit > lookahead_time:
+                        break
+                    
+                    if self.should_draw_highlight(note, current_time):
+                        self.draw_highlight_circle_cv2(strike_layer, note, current_time, first_highlight_frame)
                 
-                if self.should_draw_highlight(note, current_time):
-                    self.draw_highlight_circle(strike_draw, note, current_time, first_highlight_frame)
+                # Draw strike line (BGR format: white)
+                cv2.line(strike_layer, (0, self.strike_line_y), (self.width, self.strike_line_y),
+                         (255, 255, 255, 255), 4, cv2.LINE_AA)
+                
+                # Draw lane markers at strike line
+                for lane in range(self.num_lanes):
+                    x = lane * self.note_width + self.note_width // 2
+                    cv2.circle(strike_layer, (x, self.strike_line_y), 20,
+                               (200, 200, 200, 255), 2, cv2.LINE_AA)
+            else:
+                # Original PIL path
+                strike_layer = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
+                strike_draw = ImageDraw.Draw(strike_layer, 'RGBA')
+                
+                # Draw highlight circles for notes at strike line (before strike line itself)
+                for i in range(visible_start, len(notes)):
+                    note = notes[i]
+                    time_until_hit = note.time - current_time
+                    
+                    if time_until_hit > lookahead_time:
+                        break
+                    
+                    if self.should_draw_highlight(note, current_time):
+                        self.draw_highlight_circle(strike_draw, note, current_time, first_highlight_frame)
+                
+                # Draw strike line
+                strike_draw.line([(0, self.strike_line_y), (self.width, self.strike_line_y)], 
+                         fill=(255, 255, 255, 255), width=4)
+                
+                # Draw lane markers at strike line
+                for lane in range(self.num_lanes):
+                    x = lane * self.note_width + self.note_width // 2
+                    strike_draw.ellipse([x - 20, self.strike_line_y - 20, x + 20, self.strike_line_y + 20],
+                               outline=(200, 200, 200, 255), width=2)
             
-            # Draw strike line
-            strike_draw.line([(0, self.strike_line_y), (self.width, self.strike_line_y)], 
-                     fill=(255, 255, 255, 255), width=4)
-            
-            # Draw lane markers at strike line
-            for lane in range(self.num_lanes):
-                x = lane * self.note_width + self.note_width // 2
-                strike_draw.ellipse([x - 20, self.strike_line_y - 20, x + 20, self.strike_line_y + 20],
-                           outline=(200, 200, 200, 255), width=2)
-            
-            # Create UI layer with transparency
+            # Create UI layer with transparency (only for progress bar)
             ui_layer = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 0))
             ui_draw = ImageDraw.Draw(ui_layer, 'RGBA')
             self.draw_ui(ui_draw, current_time, total_duration)
             
-            # Composite layers: base -> kick -> notes -> UI -> strike line (on top)
-            base_layer.paste(kick_layer, (0, 0), kick_layer)
+            # Composite layers: base -> notes -> UI -> legend -> strike line (on top)
             base_layer.paste(notes_layer, (0, 0), notes_layer)
             base_layer.paste(ui_layer, (0, 0), ui_layer)
-            base_layer.paste(strike_layer, (0, 0), strike_layer)
+            
+            # Paste cached legend layer (reused every frame, filtered to used instruments)
+            if frame_num == 0:
+                # Create legend on first frame with filtered instruments
+                legend_layer = self._get_cached_legend_layer(used_midi_notes)
+            base_layer.paste(legend_layer, (0, 0), legend_layer)
+            
+            # Composite strike layer (handle both PIL and OpenCV formats)
+            if self.use_opencv and isinstance(strike_layer, np.ndarray):
+                # Convert base to cv2, composite strike layer, convert back
+                base_cv2 = pil_to_cv2(base_layer)  # This is BGR (3-channel)
+                # Composite the BGRA strike layer onto BGR base
+                cv2_composite_layer(base_cv2, strike_layer)
+                # Convert back to PIL for now (will optimize away in Phase 4)
+                base_layer = cv2_to_pil(base_cv2)
+            else:
+                base_layer.paste(strike_layer, (0, 0), strike_layer)
             
             # Convert to OpenCV for FFmpeg
             frame = pil_to_cv2(base_layer)
@@ -1000,7 +1136,8 @@ def render_project_video(
     preview: bool = False,
     audio_source: Optional[str] = 'original',
     include_audio: Optional[bool] = None,  # Deprecated: kept for backward compatibility
-    fall_speed_multiplier: float = 1.0
+    fall_speed_multiplier: float = 1.0,
+    use_opencv: bool = False
 ):
     """
     Render MIDI to video for a specific project.
@@ -1050,11 +1187,10 @@ def render_project_video(
     video_dir = project_dir / "video"
     video_dir.mkdir(parents=True, exist_ok=True)
     
-    # Generate output filename
-    output_file = video_dir / f"{midi_file.stem}.mp4"
-    
-    # Resolve audio file path based on audio_source
+    # Resolve audio file path based on audio_source (do this first to determine output filename)
     audio_file = None
+    video_basename = midi_file.stem  # Default to MIDI name if no audio
+    
     if audio_source:
         if audio_source == 'original':
             # Look for original audio file in project root
@@ -1063,6 +1199,8 @@ def render_project_video(
                 potential_audio = project_dir / f"{project['name']}{ext}"
                 if potential_audio.exists():
                     audio_file = str(potential_audio)
+                    # Use the original audio filename (without extension)
+                    video_basename = Path(audio_file).stem
                     break
             
             if not audio_file:
@@ -1074,10 +1212,15 @@ def render_project_video(
             alternate_audio_path = project_dir / audio_source
             if alternate_audio_path.exists():
                 audio_file = str(alternate_audio_path)
+                # Use the alternate audio filename (without extension)
+                video_basename = Path(audio_file).stem
             else:
                 print(f"WARNING: Alternate audio '{audio_source}' not found")
         else:
             print(f"WARNING: Unknown audio_source value: {audio_source}")
+    
+    # Generate output filename based on audio source
+    output_file = video_dir / f"{video_basename}.mp4"
     
     print(f"Rendering video to: {output_file}")
     print(f"Settings: {width}x{height} @ {fps}fps")
@@ -1091,7 +1234,7 @@ def render_project_video(
     print()
     
     # Render video
-    renderer = MidiVideoRenderer(width=width, height=height, fps=fps, fall_speed_multiplier=fall_speed_multiplier)
+    renderer = MidiVideoRenderer(width=width, height=height, fps=fps, fall_speed_multiplier=fall_speed_multiplier, use_opencv=use_opencv)
     renderer.render(str(midi_file), str(output_file), show_preview=preview, audio_path=audio_file)
     
     # Update project metadata
@@ -1134,6 +1277,8 @@ Examples:
                        help='Disable audio in the video (audio included by default)')
     parser.add_argument('--fall-speed', type=float, default=1.0,
                        help='Note fall speed multiplier (default: 1.0, range: 0.5-2.0)')
+    parser.add_argument('--use-opencv', action='store_true',
+                       help='Use OpenCV for rendering (experimental performance optimization)')
     
     args = parser.parse_args()
     
@@ -1167,7 +1312,8 @@ Examples:
         fps=args.fps,
         preview=args.preview,
         audio_source=None if args.no_audio else 'original',
-        fall_speed_multiplier=args.fall_speed
+        fall_speed_multiplier=args.fall_speed,
+        use_opencv=args.use_opencv
     )
     
     return 0

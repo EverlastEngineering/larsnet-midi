@@ -586,8 +586,10 @@ async function uploadAlternateAudio(file) {
     if (!currentProject) return;
     
     // Validate file type
-    if (!file.name.toLowerCase().endsWith('.wav')) {
-        showToast('Only WAV files are supported', 'error');
+    const allowedExtensions = ['.wav', '.mp3', '.flac', '.aiff', '.aif', '.aac', '.ogg', '.m4a'];
+    const fileExt = file.name.toLowerCase().match(/\.[^.]+$/)?.[0];
+    if (!fileExt || !allowedExtensions.includes(fileExt)) {
+        showToast('Supported formats: WAV, MP3, FLAC, AIFF, AAC, OGG, M4A', 'error');
         return;
     }
     

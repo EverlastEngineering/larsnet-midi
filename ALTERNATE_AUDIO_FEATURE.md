@@ -124,7 +124,7 @@ The old `include_audio` boolean parameter is deprecated but still works:
 
 ## Troubleshooting
 
-### "Only WAV files are supported"
+### "Supported formats: WAV, MP3, FLAC, AIFF, AAC, OGG, M4A"
 
 **Problem**: Tried to upload MP3, FLAC, or other format  
 **Solution**: Convert to WAV using your DAW or audio editor

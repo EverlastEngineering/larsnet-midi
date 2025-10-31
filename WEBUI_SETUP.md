@@ -154,7 +154,7 @@ Upload alternative audio files to render your drum video with different backing 
    - Mastered version: Video with final mix
    - Practice track: Custom backing track for practice
 
-**Note:** Only WAV files are supported. Files are stored in the project's `alternate_mix/` directory and can be deleted from the settings panel.
+**Note:** Supported audio formats: WAV, MP3, FLAC, AIFF, AAC, OGG, M4A. Files are stored in the project's `alternate_mix/` directory and can be deleted from the settings panel.
 
 ### Advanced Configuration (Future)
 

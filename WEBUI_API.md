@@ -213,7 +213,7 @@ Upload an alternate audio file (e.g., no-drums mix, mastered version) to a proje
 **Content-Type:** `multipart/form-data`
 
 **Body:**
-- `file` (file): WAV audio file
+- `file` (file): Audio file (WAV, MP3, FLAC, AIFF, AAC, OGG, or M4A)
 
 **Example (curl):**
 ```bash
@@ -232,11 +232,11 @@ curl -X POST http://localhost:49152/api/projects/1/upload-alternate-audio \
 ```
 
 **Error Responses:**
-- `400 Bad Request`: No file, not WAV format, or file already exists
+- `400 Bad Request`: No file, unsupported format, or file already exists
 - `404 Not Found`: Project not found
 
 **Notes:**
-- Only WAV files are accepted
+- Supported formats: WAV, MP3, FLAC, AIFF, AAC, OGG, M4A
 - Files are stored in `project/alternate_mix/` directory
 - Use for backing tracks, no-drums mixes, or alternative masters
 
