@@ -118,6 +118,108 @@ def draw_rounded_rectangle(draw: ImageDraw.ImageDraw,
     draw.rounded_rectangle(xy, radius=radius, fill=fill, outline=outline, width=width)
 
 
+# ============================================================================
+# OpenCV Drawing Helpers (Phase 1: Infrastructure)
+# ============================================================================
+
+def create_cv2_canvas(width: int, height: int, channels: int = 4, fill_color: Tuple[int, ...] = None) -> np.ndarray:
+    """Create OpenCV canvas (NumPy array) for drawing
+    
+    Args:
+        width: Canvas width in pixels
+        height: Canvas height in pixels
+        channels: 3 for BGR, 4 for BGRA
+        fill_color: Initial fill color (B, G, R) or (B, G, R, A). None for transparent/black.
+    
+    Returns:
+        NumPy array ready for cv2 drawing operations
+    """
+    if channels == 4:
+        canvas = np.zeros((height, width, 4), dtype=np.uint8)
+        if fill_color:
+            canvas[:] = fill_color
+    else:
+        canvas = np.zeros((height, width, 3), dtype=np.uint8)
+        if fill_color:
+            canvas[:] = fill_color
+    return canvas
+
+
+def cv2_draw_rounded_rectangle(canvas: np.ndarray,
+                                xy: Tuple[int, int, int, int],
+                                radius: int,
+                                fill: Optional[Tuple[int, ...]] = None,
+                                outline: Optional[Tuple[int, ...]] = None,
+                                width: int = 1) -> None:
+    """Draw rounded rectangle on OpenCV canvas
+    
+    Args:
+        canvas: NumPy array to draw on (modified in-place)
+        xy: (x1, y1, x2, y2) bounding box
+        radius: Corner radius in pixels
+        fill: Fill color (B, G, R) or (B, G, R, A)
+        outline: Outline color (B, G, R) or (B, G, R, A)
+        width: Outline width in pixels
+    """
+    x1, y1, x2, y2 = xy
+    
+    # For now, use simple rounded corners via circles at corners
+    # More sophisticated implementation can be added later
+    if radius <= 0:
+        # Simple rectangle
+        if fill:
+            cv2.rectangle(canvas, (x1, y1), (x2, y2), fill, -1, cv2.LINE_AA)
+        if outline:
+            cv2.rectangle(canvas, (x1, y1), (x2, y2), outline, width, cv2.LINE_AA)
+        return
+    
+    # Draw filled rounded rectangle using multiple primitives
+    if fill:
+        # Main body rectangles
+        cv2.rectangle(canvas, (x1 + radius, y1), (x2 - radius, y2), fill, -1, cv2.LINE_AA)
+        cv2.rectangle(canvas, (x1, y1 + radius), (x2, y2 - radius), fill, -1, cv2.LINE_AA)
+        
+        # Corner circles
+        cv2.circle(canvas, (x1 + radius, y1 + radius), radius, fill, -1, cv2.LINE_AA)
+        cv2.circle(canvas, (x2 - radius, y1 + radius), radius, fill, -1, cv2.LINE_AA)
+        cv2.circle(canvas, (x1 + radius, y2 - radius), radius, fill, -1, cv2.LINE_AA)
+        cv2.circle(canvas, (x2 - radius, y2 - radius), radius, fill, -1, cv2.LINE_AA)
+    
+    # Draw outline (simplified - just draws regular rounded rect outline)
+    if outline:
+        # For outline, use ellipse arcs at corners
+        # This is a simplified version - can be enhanced later
+        cv2.rectangle(canvas, (x1 + radius, y1), (x2 - radius, y2), outline, width, cv2.LINE_AA)
+        cv2.rectangle(canvas, (x1, y1 + radius), (x2, y2 - radius), outline, width, cv2.LINE_AA)
+
+
+def cv2_composite_layer(base: np.ndarray, overlay: np.ndarray, alpha: float = 1.0) -> None:
+    """Composite overlay onto base using alpha blending (modifies base in-place)
+    
+    Args:
+        base: Base canvas (BGR or BGRA) - modified in-place
+        overlay: Overlay canvas (BGRA with alpha channel)
+        alpha: Additional alpha multiplier (0.0 to 1.0)
+    """
+    if overlay.shape[2] != 4:
+        # No alpha channel, simple copy
+        if alpha >= 1.0:
+            base[:] = overlay[:, :, :3]
+        else:
+            cv2.addWeighted(base, 1.0 - alpha, overlay[:, :, :3], alpha, 0, base)
+        return
+    
+    # Extract alpha channel and apply multiplier
+    overlay_alpha = (overlay[:, :, 3] / 255.0 * alpha).astype(np.float32)
+    
+    # Expand alpha to match RGB channels
+    overlay_alpha_3ch = np.stack([overlay_alpha] * 3, axis=2)
+    
+    # Alpha blending: base * (1 - alpha) + overlay * alpha
+    base[:] = (base[:, :, :3] * (1 - overlay_alpha_3ch) + 
+               overlay[:, :, :3] * overlay_alpha_3ch).astype(np.uint8)
+
+
 @dataclass
 class DrumNote:
     """Represents a single drum note to be rendered"""
@@ -151,11 +253,12 @@ DRUM_MAP = {
 class MidiVideoRenderer:
     """Renders MIDI drum files to Rock Band-style falling notes videos"""
     
-    def __init__(self, width: int = 1920, height: int = 1080, fps: int = 60, fall_speed_multiplier: float = 1.0):
+    def __init__(self, width: int = 1920, height: int = 1080, fps: int = 60, fall_speed_multiplier: float = 1.0, use_opencv: bool = False):
         self.width = width
         self.height = height
         self.fps = fps
         self.fall_speed_multiplier = fall_speed_multiplier
+        self.use_opencv = use_opencv  # Phase 1: Flag for gradual OpenCV migration
         # Count lanes excluding kick drum (lane -1)
         self.num_lanes = len(set(info["lane"] for lane_list in DRUM_MAP.values() for info in lane_list if info["lane"] >= 0))  
         self.note_width = width // self.num_lanes
