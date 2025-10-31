@@ -160,9 +160,9 @@ class MidiVideoRenderer:
         self.num_lanes = len(set(info["lane"] for lane_list in DRUM_MAP.values() for info in lane_list if info["lane"] >= 0))  
         self.note_width = width // self.num_lanes
         self.strike_line_y = int(height * 0.85)  # Where notes are "hit"
-        self.note_height = 30  # Height of each note rectangle
-        self.kick_bar_height = 15  # Height of kick drum bar
-        self.pixels_per_second = height * 0.2 * fall_speed_multiplier  # How fast notes fall
+        self.note_height = 60  # Height of each note rectangle (doubled from 30)
+        self.kick_bar_height = 30  # Height of kick drum bar (doubled from 15)
+        self.pixels_per_second = height * 0.4 * fall_speed_multiplier  # How fast notes fall (doubled from 0.2)
         self.corner_radius = 8  # Rounded corners for anti-aliasing
         self.motion_blur_strength = 2  # Pixels of motion blur
         
