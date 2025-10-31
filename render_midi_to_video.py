@@ -133,6 +133,7 @@ class DrumNote:
 # Kick drum (36) uses lane -1 to indicate it's drawn as a screen-wide bar
 DRUM_MAP = {
     42: [{"name": "Hi-Hat Closed", "lane": 0, "color": (0, 255, 255)}],  # Cyan
+    44: [{"name": "Hi-Hat Foot Close", "lane": 0, "color": (15, 128, 40)}], # Dark Blue?
     46: [{"name": "Hi-Hat Open", "lane": 1, "color": (30, 255, 80)}],     # Light Blue 
     38: [{"name": "Snare", "lane": 2, "color": (255, 0, 0)}],       # Red
     40: [{"name": "Snare Rim", "lane": 2, "color": (255, 0, 255)}],   # Dark Red
@@ -638,13 +639,24 @@ class MidiVideoRenderer:
         if audio_path:
             ffmpeg_cmd.extend(['-c:a', 'aac', '-b:a', '192k'])
         
-        # Web optimization
+        # Web optimization (moov atom relocation for streaming)
         ffmpeg_cmd.extend(['-movflags', '+faststart', output_path])
         
+        print(f"\n{'='*60}")
         print(f"Starting FFmpeg encoder for H.264 output...")
-        ffmpeg_process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, 
-                                         stdout=subprocess.DEVNULL, 
-                                         stderr=subprocess.PIPE)
+        print(f"DEBUG: Output file: {output_path}")
+        print(f"DEBUG: Video: {self.width}x{self.height} @ {self.fps}fps, {total_frames} frames, {total_duration:.2f}s")
+        print(f"DEBUG: Using +faststart flag to optimize for streaming")
+        print(f"{'='*60}\n")
+        
+        try:
+            ffmpeg_process = subprocess.Popen(ffmpeg_cmd, stdin=subprocess.PIPE, 
+                                             stdout=subprocess.DEVNULL, 
+                                             stderr=subprocess.PIPE)
+            print(f"DEBUG: FFmpeg process started (PID: {ffmpeg_process.pid})")
+        except Exception as e:
+            print(f"⚠️  DEBUG: Failed to start FFmpeg process: {e}")
+            raise
         
         # Pre-calculate time step to avoid floating point accumulation errors
         time_step = 1.0 / self.fps
@@ -743,8 +755,20 @@ class MidiVideoRenderer:
             # Write frame to FFmpeg
             try:
                 ffmpeg_process.stdin.write(frame.tobytes())
-            except BrokenPipeError:
-                print("FFmpeg process terminated unexpectedly")
+            except BrokenPipeError as e:
+                print(f"\n⚠️  DEBUG: FFmpeg pipe broken at frame {frame_num}/{total_frames} ({(frame_num/total_frames)*100:.1f}%)")
+                print(f"⚠️  DEBUG: Error: {e}")
+                print(f"⚠️  DEBUG: FFmpeg may have crashed or terminated early")
+                # Check if FFmpeg process is still alive
+                if ffmpeg_process.poll() is not None:
+                    print(f"⚠️  DEBUG: FFmpeg process has terminated (return code: {ffmpeg_process.returncode})")
+                    stderr_output = ffmpeg_process.stderr.read().decode('utf-8') if ffmpeg_process.stderr else ''
+                    if stderr_output:
+                        print(f"⚠️  DEBUG: FFmpeg stderr: {stderr_output[-500:]}")
+                break
+            except IOError as e:
+                print(f"\n⚠️  DEBUG: IO error writing to FFmpeg at frame {frame_num}/{total_frames}")
+                print(f"⚠️  DEBUG: Error: {e}")
                 break
             
             # Show preview
@@ -758,26 +782,86 @@ class MidiVideoRenderer:
                 progress = (frame_num / total_frames) * 100
                 print(f"Progress: {progress:.1f}%")
         
+        # Final progress update
+        print(f"Progress: 100.0% - All frames processed")
+        
         # Close FFmpeg stdin and wait for completion
-        ffmpeg_process.stdin.close()
-        ffmpeg_process.wait()
+        print(f"\n{'='*60}")
+        print(f"DEBUG: Finalizing video encoding...")
+        print(f"{'='*60}")
+        print(f"DEBUG: Closing FFmpeg stdin pipe...")
+        
+        try:
+            ffmpeg_process.stdin.close()
+            print(f"DEBUG: FFmpeg stdin closed successfully")
+        except Exception as e:
+            print(f"⚠️  DEBUG: Error closing FFmpeg stdin: {e}")
+        
+        print(f"DEBUG: Waiting for FFmpeg to complete encoding...")
+        print(f"DEBUG: This includes writing moov atom for streaming (faststart)...")
+        
+        try:
+            ffmpeg_process.wait(timeout=60)  # 60 second timeout for finalization
+            print(f"DEBUG: FFmpeg process completed (return code: {ffmpeg_process.returncode})")
+        except subprocess.TimeoutExpired:
+            print(f"⚠️  DEBUG: FFmpeg finalization timed out after 60 seconds!")
+            print(f"⚠️  DEBUG: Forcing termination...")
+            ffmpeg_process.kill()
+            ffmpeg_process.wait()
+            print(f"⚠️  DEBUG: Process terminated (return code: {ffmpeg_process.returncode})")
         
         if show_preview:
             cv2.destroyAllWindows()
         
+        # Explicitly close stderr to release file handle
+        print(f"DEBUG: Closing FFmpeg stderr pipe...")
+        try:
+            if ffmpeg_process.stderr:
+                ffmpeg_process.stderr.close()
+                print(f"DEBUG: FFmpeg stderr closed successfully")
+        except Exception as e:
+            print(f"⚠️  DEBUG: Error closing FFmpeg stderr: {e}")
+        
+        # Check file integrity
+        import os
+        if os.path.exists(output_path):
+            file_size = os.path.getsize(output_path)
+            print(f"DEBUG: Output file exists: {output_path}")
+            print(f"DEBUG: File size: {file_size:,} bytes ({file_size / (1024*1024):.2f} MB)")
+            
+            # Check if file is likely valid (has minimum size)
+            if file_size < 1024:  # Less than 1 KB is definitely corrupt
+                print(f"⚠️  DEBUG: File size is suspiciously small - likely corrupted!")
+            
+            # Ensure file handle is released by explicitly flushing any OS buffers
+            print(f"DEBUG: Ensuring file handle is released...")
+            try:
+                # Force a sync to ensure all OS buffers are flushed
+                subprocess.run(['sync'], check=False)
+                print(f"DEBUG: File system sync completed")
+            except Exception as e:
+                print(f"⚠️  DEBUG: Error syncing filesystem: {e}")
+        else:
+            print(f"⚠️  DEBUG: Output file does not exist: {output_path}")
+        
         if ffmpeg_process.returncode == 0:
+            print(f"\n{'='*60}")
             print(f"✅ Video saved to: {output_path}")
             if audio_path:
                 print(f"   Encoded with H.264 video codec and AAC audio codec")
             else:
                 print(f"   Encoded with H.264 video codec (no audio)")
-            print(f"   Optimized for web streaming")
+            print(f"   Optimized for web streaming (moov atom relocated)")
             print(f"   Note: If video player shows old version, hard refresh browser (Cmd+Shift+R / Ctrl+Shift+R)")
+            print(f"{'='*60}\n")
         else:
+            print(f"\n{'='*60}")
             stderr_output = ffmpeg_process.stderr.read().decode('utf-8') if ffmpeg_process.stderr else ''
-            print(f"⚠️  FFmpeg encoding completed with return code {ffmpeg_process.returncode}")
+            print(f"⚠️  FFmpeg encoding failed with return code {ffmpeg_process.returncode}")
             if stderr_output:
-                print(f"   Error details: {stderr_output[-500:]}")  # Last 500 chars
+                print(f"   Error details (last 500 chars):")
+                print(f"   {stderr_output[-500:]}")
+            print(f"{'='*60}\n")
 
 
 def render_project_video(
