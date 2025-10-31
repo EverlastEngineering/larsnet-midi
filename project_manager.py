@@ -567,3 +567,93 @@ def select_project(
             return None
     
     return None
+
+
+def find_stem_files(project_number: int, user_files_dir: Path = USER_FILES_DIR) -> Dict[str, Dict[str, Path]]:
+    """
+    Find stem files in a project's stems directory, grouped by base name.
+    
+    Expected stem naming: "{basename}-{stem_type}.wav"
+    Example: "06_Taylor_Swift_Ruin_The_Friendship_Drums-hihat.wav"
+    
+    Args:
+        project_number: Project number
+        user_files_dir: Path to user_files directory
+        
+    Returns:
+        Dictionary mapping base names to dictionaries of {stem_type: file_path}
+        Example: {"06_Taylor_Swift_Ruin_The_Friendship_Drums": {"hihat": Path(...), "kick": Path(...)}}
+    """
+    from collections import defaultdict
+    
+    project = get_project_by_number(project_number, user_files_dir)
+    if not project:
+        return {}
+    
+    stems_dir = project["path"] / "stems"
+    if not stems_dir.exists():
+        return {}
+    
+    # Find all WAV files
+    stem_files = list(stems_dir.glob("*.wav"))
+    if not stem_files:
+        return {}
+    
+    # Group by base name
+    files_by_song = defaultdict(dict)
+    
+    # Common stem types to look for
+    stem_types = ['kick', 'snare', 'toms', 'hihat', 'cymbals', 'bass', 'other', 'vocals', 'drums']
+    
+    for stem_file in stem_files:
+        name_without_ext = stem_file.stem
+        
+        # Try to match each stem type
+        for stem_type in stem_types:
+            if name_without_ext.endswith(f"-{stem_type}"):
+                base_name = name_without_ext[:-len(f"-{stem_type}")]
+                files_by_song[base_name][stem_type] = stem_file
+                break
+    
+    return dict(files_by_song)
+
+
+def get_stem_file(project_number: int, stem_type: str, user_files_dir: Path = USER_FILES_DIR) -> Optional[Path]:
+    """
+    Get the path to a specific stem file in a project.
+    
+    Args:
+        project_number: Project number
+        stem_type: Type of stem ('hihat', 'kick', 'snare', etc.)
+        user_files_dir: Path to user_files directory
+        
+    Returns:
+        Path to stem file, or None if not found
+    """
+    files_by_song = find_stem_files(project_number, user_files_dir)
+    
+    if not files_by_song:
+        return None
+    
+    # If there's only one base name, use it
+    if len(files_by_song) == 1:
+        base_name = list(files_by_song.keys())[0]
+        return files_by_song[base_name].get(stem_type)
+    
+    # Multiple base names - try to find the one matching the project name
+    project = get_project_by_number(project_number, user_files_dir)
+    if not project:
+        return None
+    
+    # Try to match base name to project name
+    project_name = project["name"]
+    for base_name, stems in files_by_song.items():
+        if project_name.lower() in base_name.lower():
+            return stems.get(stem_type)
+    
+    # Fallback: return first match
+    for base_name, stems in files_by_song.items():
+        if stem_type in stems:
+            return stems[stem_type]
+    
+    return None

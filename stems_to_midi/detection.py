@@ -244,10 +244,9 @@ def detect_hihat_state(
     config: Dict = None
 ) -> List[str]:
     """
-    Classify hi-hat hits as open, closed, or handclap based on sustain duration and spectral content.
+    Classify hi-hat hits as open or closed based on sustain duration and spectral content.
     
-    - Handclaps: High energy (body>20, sizzle>100) + very short transient (<50ms)
-    - Open hi-hats: Sustain >150ms
+    - Open hi-hats: Sustain >150ms + high body energy + low peak amplitude
     - Closed hi-hats: Everything else
     
     Args:
@@ -257,28 +256,15 @@ def detect_hihat_state(
         sustain_durations: Pre-calculated sustain durations in ms (if available)
         open_sustain_threshold_ms: Threshold in ms (longer = open, shorter = closed)
         spectral_data: List of dicts with 'primary_energy' and 'secondary_energy'
-        config: Configuration dict with handclap detection settings
+        config: Configuration dict
     
     Returns:
-        List of 'open', 'closed', or 'handclap' for each onset
+        List of 'open' or 'closed' for each onset
     """
     # Convert to mono if stereo (use helper function)
     audio = ensure_mono(audio)
     
     states = []
-    
-    # Get handclap detection settings from config
-    detect_handclap = False
-    handclap_body_min = 20
-    handclap_sizzle_min = 100
-    handclap_sustain_max = 50
-    
-    if config is not None:
-        hihat_config = config.get('hihat', {})
-        detect_handclap = hihat_config.get('detect_handclap', False)
-        handclap_body_min = hihat_config.get('handclap_body_min', 20)
-        handclap_sizzle_min = hihat_config.get('handclap_sizzle_min', 100)
-        handclap_sustain_max = hihat_config.get('handclap_sustain_max', 50)
     
     # If sustain durations and spectral data were already calculated, use them
     if (sustain_durations is not None and len(sustain_durations) == len(onset_times) and
@@ -286,22 +272,12 @@ def detect_hihat_state(
         for i, sustain_ms in enumerate(sustain_durations):
             # Get spectral energies for this onset
             body_energy = spectral_data[i].get('primary_energy', 0)
-            sizzle_energy = spectral_data[i].get('secondary_energy', 0)
             
             # Calculate peak amplitude for this onset
             onset_sample = int(onset_times[i] * sr)
             peak_amplitude = calculate_peak_amplitude(audio, onset_sample, sr, window_ms=10.0)
             
-            # Check for handclap first (if enabled)
-            if detect_handclap:
-                # Handclap: high energy + very short transient
-                if (body_energy > handclap_body_min and 
-                    sizzle_energy > handclap_sizzle_min and 
-                    sustain_ms < handclap_sustain_max):
-                    states.append('handclap')
-                    continue
-            
-            # Otherwise classify as open or closed based on sustain, energy, and amplitude
+            # Classify as open or closed based on sustain, energy, and amplitude
             if (sustain_ms > open_sustain_threshold_ms 
                 and body_energy > 200 
                 and peak_amplitude < 0.15):  # Peak amplitude is 0.0-1.0 range

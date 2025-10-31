@@ -464,6 +464,8 @@ def should_keep_onset(
     stem_type: str
 ) -> bool:
     """
+    TODO: It will be helpful to have ALL available parameters from the analysis in here, like strength, badness score, etc.
+
     Determine if an onset should be kept based on spectral/sustain criteria.
     
     Pure function - decision logic without side effects.
@@ -495,12 +497,15 @@ def should_keep_onset(
     
     # For hihat: use sustain OR geomean (more permissive)
     elif stem_type == 'hihat':
-        if min_sustain_ms is not None and sustain_ms is not None:
-            if sustain_ms >= min_sustain_ms:
-                return True
+        # if min_sustain_ms is not None and sustain_ms is not None:
+        #     if sustain_ms >= min_sustain_ms:
+        #         return True
+        # if geomean_threshold is not None:
+        #     return geomean > geomean_threshold
         if geomean_threshold is not None:
-            return geomean > geomean_threshold
-        return False
+            if geomean <= geomean_threshold:
+                return False
+        return True
     
     # For other stems (kick, snare, toms): use geomean only
     else:

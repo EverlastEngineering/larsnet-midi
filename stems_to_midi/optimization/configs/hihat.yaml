@@ -1,0 +1,55 @@
+# Hi-Hat Threshold Optimization Configuration
+
+stem_type: hihat
+classification_type: binary
+classes:
+  - open
+  - closed
+
+# Features to optimize
+features:
+  - name: GeoMean
+    column: body_wire_geomean
+    range: [200, 700]
+    description: "Geometric mean of Body×Sizzle energy"
+  
+  - name: SustainMs
+    column: sustain_ms
+    range: [60, 200]
+    description: "Sustain duration in milliseconds"
+  
+  - name: BodyE
+    column: primary_energy
+    range: [30, 250]
+    description: "Body energy (500-2000Hz)"
+  
+  - name: SizzleE
+    column: secondary_energy
+    range: [500, 4000]
+    description: "Sizzle energy (6000-12000Hz)"
+  
+  - name: Total
+    column: total_energy
+    range: [500, 4000]
+    description: "Total spectral energy"
+  
+  - name: Amp
+    column: amplitude
+    range: [0.05, 0.35]
+    description: "Peak amplitude"
+
+# Optimization settings
+optimization:
+  method: bayesian  # Options: bayesian, random, grid
+  n_calls: 100      # Number of evaluations
+  objective: maximize_margin  # Goal: maximize safety margin
+  
+  # Bayesian-specific settings
+  n_random_starts: 20  # Initial random samples before GP learning
+  acquisition_function: EI  # Expected Improvement
+
+# Default features to use (can be overridden)
+default_features:
+  - GeoMean
+  - SustainMs
+  - BodyE
