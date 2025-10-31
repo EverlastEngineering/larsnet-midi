@@ -266,21 +266,25 @@ def detect_hihat_state(
     
     states = []
     
+    # Get classification thresholds from config (learned from optimization)
+    hihat_config = config.get('hihat', {}) if config else {}
+    open_geomean_min = hihat_config.get('open_geomean_min', 262.0)  # Learned threshold
+    
     # If sustain durations and spectral data were already calculated, use them
     if (sustain_durations is not None and len(sustain_durations) == len(onset_times) and
         spectral_data is not None and len(spectral_data) == len(onset_times)):
         for i, sustain_ms in enumerate(sustain_durations):
             # Get spectral energies for this onset
-            body_energy = spectral_data[i].get('primary_energy', 0)
+            primary_energy = spectral_data[i].get('primary_energy', 0)  # BodyE
+            secondary_energy = spectral_data[i].get('secondary_energy', 0)  # SizzleE
             
-            # Calculate peak amplitude for this onset
-            onset_sample = int(onset_times[i] * sr)
-            peak_amplitude = calculate_peak_amplitude(audio, onset_sample, sr, window_ms=10.0)
+            # Calculate GeoMean (same as filtering uses)
+            geomean = np.sqrt(primary_energy * secondary_energy) if (primary_energy > 0 and secondary_energy > 0) else 0
             
-            # Classify as open or closed based on sustain, energy, and amplitude
-            if (sustain_ms > open_sustain_threshold_ms 
-                and body_energy > 200 
-                and peak_amplitude < 0.15):  # Peak amplitude is 0.0-1.0 range
+            # Classify using learned thresholds:
+            # Open = GeoMean >= 262 AND SustainMs >= 100
+            # This correctly identifies high-energy, long-sustain open hihats
+            if (geomean >= open_geomean_min and sustain_ms >= open_sustain_threshold_ms):
                 states.append('open')
             else:
                 states.append('closed')

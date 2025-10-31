@@ -145,8 +145,12 @@ hihat:
   # Open/Closed detection
   detect_open: true          # Enable open vs closed hi-hat detection
   decay_threshold: 0.65      # Threshold for open detection (higher = fewer open detections)
-  open_sustain_ms: 90       # Open hi-hat threshold (ms): >150ms = open, <150ms = closed
+  open_sustain_ms: 100       # Open hi-hat sustain threshold (ms): >=100ms = open (learned from optimization)
+  open_geomean_min: 262.0    # Open hi-hat GeoMean threshold: >=262 = open (learned from optimization)
   min_sustain_ms: 25         # Minimum sustain for artifact filtering (handclaps ~20ms, real hihats >25ms)
+  
+  # Classification logic: Open = (GeoMean >= open_geomean_min) AND (SustainMs >= open_sustain_ms)
+  # Closed = everything else that passes geomean_threshold
   
   # Spectral filtering
   geomean_threshold: 20.0    # Geometric mean of body (500-2kHz) + sizzle (6-12kHz) energy
