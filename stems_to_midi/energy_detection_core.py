@@ -27,6 +27,68 @@ import numpy as np
 from typing import List, Tuple, Optional
 import librosa
 from scipy.signal import find_peaks
+from scipy.ndimage import maximum_filter1d
+
+
+def find_amplitude_peaks_in_region(
+    audio: np.ndarray,
+    region_start_sample: int,
+    region_end_sample: int,
+    sr: int,
+    min_spacing_ms: float = 90.0,
+    prominence_fraction: float = 0.3,
+    smoothing_ms: float = 3.0
+) -> List[int]:
+    """
+    Find amplitude peaks within a region - like visual inspection in DAW.
+    
+    This is Pass 2 of two-pass detection: given a region where energy
+    detection found "something happened", find the exact timing of stick
+    impacts by looking at raw amplitude peaks.
+    
+    Uses peak-hold envelope (like DAW waveform display) with minimal
+    smoothing (2-5ms) to preserve transients while rejecting noise spikes.
+    
+    Args:
+        audio: Raw audio signal
+        region_start_sample: Start of region from energy detection
+        region_end_sample: End of region from energy detection
+        sr: Sample rate
+        min_spacing_ms: Minimum spacing between peaks (prevents doubles)
+        prominence_fraction: Min prominence as fraction of max in region (0.3 = 30%)
+        smoothing_ms: Peak-hold smoothing window in milliseconds (2-5ms)
+    
+    Returns:
+        List of sample indices for amplitude peaks
+    """
+    if region_start_sample >= region_end_sample:
+        return []
+    
+    # Extract region
+    region = audio[region_start_sample:region_end_sample]
+    if len(region) == 0:
+        return []
+    
+    # Apply peak-hold envelope (like DAW waveform display)
+    # This preserves sharp transients while smoothing out sample noise
+    smooth_samples = max(1, int(smoothing_ms * sr / 1000.0))
+    envelope = maximum_filter1d(np.abs(region), size=smooth_samples)
+    
+    # Find peaks in amplitude envelope
+    min_spacing_samples = int(min_spacing_ms * sr / 1000.0)
+    max_amplitude = np.max(envelope)
+    prominence_threshold = max_amplitude * prominence_fraction
+    
+    peaks, properties = find_peaks(
+        envelope,
+        distance=min_spacing_samples,
+        prominence=prominence_threshold
+    )
+    
+    # Convert to absolute sample indices
+    absolute_peaks = [region_start_sample + p for p in peaks]
+    
+    return absolute_peaks
 
 
 def snap_to_amplitude_peak(
@@ -248,6 +310,129 @@ def detect_transient_peaks(
     return peaks
 
 
+def detect_transient_peaks_two_pass(
+    times: np.ndarray,
+    energy: np.ndarray,
+    audio: np.ndarray,
+    sr: int,
+    threshold_db: float = 12.0,
+    min_peak_spacing_ms: float = 100.0,
+    min_absolute_energy: float = 0.001,
+    amplitude_smoothing_ms: float = 3.0,
+    amplitude_prominence: float = 0.3,
+    max_peaks_per_region: int = 3,
+) -> List[dict]:
+    """
+    Two-pass detection: energy regions + amplitude peak refinement.
+    
+    Pass 1 (Coarse): Find regions where drum events occur using RMS energy
+    Pass 2 (Fine): Find exact amplitude peaks within each region (DAW-like)
+    
+    This combines the robustness of energy detection (filters noise/silence)
+    with the timing precision of amplitude peaks (1-2ms resolution).
+    
+    Solves:
+    - Missed peaks when RMS smoothing blends nearby hits (e.g., 149.467s)
+    - False positives in reverb tails (e.g., 149.641s)
+    - 90ms timing delays from RMS center-of-mass shift
+    
+    Args:
+        times: Time in seconds for each energy frame
+        energy: Energy values at each frame
+        audio: Raw audio signal for amplitude peak detection
+        sr: Sample rate
+        threshold_db: Energy prominence threshold (Pass 1)
+        min_peak_spacing_ms: Minimum spacing between peaks (Pass 2)
+        min_absolute_energy: Noise floor for energy detection (Pass 1)
+        amplitude_smoothing_ms: Peak-hold smoothing window (Pass 2, 2-5ms)
+        amplitude_prominence: Min prominence fraction for amplitude peaks (Pass 2)
+        max_peaks_per_region: Maximum amplitude peaks per energy region (safety limit)
+    
+    Returns:
+        List of peak dicts with onset_time, peak_energy
+    """
+    if len(times) == 0 or len(energy) == 0 or audio is None:
+        # Fall back to single-pass if audio not provided
+        return detect_transient_peaks(
+            times, energy, threshold_db, min_peak_spacing_ms,
+            min_absolute_energy, audio=audio, sr=sr
+        )
+    
+    # PASS 1: Find energy regions (coarse detection)
+    frame_duration = times[1] - times[0] if len(times) > 1 else 0.01
+    hop_length = int(frame_duration * sr)
+    min_spacing_frames = int(min_peak_spacing_ms / 1000.0 / frame_duration)
+    
+    min_prominence_linear = min_absolute_energy * (10 ** (threshold_db / 20) - 1)
+    
+    peak_indices, properties = find_peaks(
+        energy,
+        height=min_absolute_energy,
+        distance=min_spacing_frames,
+        prominence=max(min_prominence_linear, min_absolute_energy * 0.1),
+        wlen=None,
+    )
+    
+    left_bases = properties.get('left_bases', peak_indices)
+    
+    # PASS 2: Find amplitude peaks within each energy region
+    results = []
+    
+    for i, peak_idx in enumerate(peak_indices):
+        peak_energy = energy[peak_idx]
+        
+        # Define region boundaries
+        base_idx = left_bases[i] if left_bases is not None else max(0, peak_idx - 50)
+        
+        # Backtrack to find region start (attack onset)
+        relative_threshold = peak_energy * 0.15
+        absolute_threshold = min_absolute_energy * 1.5
+        onset_threshold = max(relative_threshold, absolute_threshold)
+        onset_idx = peak_idx
+        
+        for j in range(peak_idx - 1, max(0, base_idx - 10), -1):
+            if energy[j] < onset_threshold:
+                onset_idx = j + 1
+                break
+        
+        # Convert to sample indices
+        region_start_sample = int(onset_idx * hop_length)
+        region_end_sample = int(peak_idx * hop_length + hop_length * 10)  # +10 frames buffer
+        region_end_sample = min(len(audio), region_end_sample)
+        
+        # Find amplitude peaks within this region
+        amplitude_peaks = find_amplitude_peaks_in_region(
+            audio,
+            region_start_sample,
+            region_end_sample,
+            sr,
+            min_spacing_ms=min_peak_spacing_ms,
+            prominence_fraction=amplitude_prominence,
+            smoothing_ms=amplitude_smoothing_ms
+        )
+        
+        # Limit peaks per region (safety)
+        if len(amplitude_peaks) > max_peaks_per_region:
+            # Keep only the strongest peaks
+            peak_amplitudes = [abs(audio[p]) for p in amplitude_peaks]
+            sorted_indices = np.argsort(peak_amplitudes)[-max_peaks_per_region:]
+            amplitude_peaks = [amplitude_peaks[idx] for idx in sorted(sorted_indices)]
+        
+        # If no amplitude peaks found, fall back to energy peak
+        if len(amplitude_peaks) == 0:
+            amplitude_peaks = [int(peak_idx * hop_length)]
+        
+        # Create result for each amplitude peak
+        for amp_peak_sample in amplitude_peaks:
+            results.append({
+                'onset_time': float(amp_peak_sample / sr),
+                'peak_energy': float(peak_energy),
+                'peak_time': float(times[peak_idx]),
+            })
+    
+    return results
+
+
 def detect_energy_onsets(
     times: np.ndarray,
     energy: np.ndarray,
@@ -395,13 +580,16 @@ def detect_stereo_transient_peaks(
     hop_length: int = 512,
     method: str = 'rms',
     min_absolute_energy: float = 0.001,
+    enable_amplitude_refinement: bool = True,
+    amplitude_smoothing_ms: float = 3.0,
+    amplitude_prominence: float = 0.3,
+    max_peaks_per_region: int = 3,
 ) -> dict:
     """
-    Detect transient peaks in stereo audio - simple and reliable.
+    Detect transient peaks in stereo audio with optional two-pass refinement.
     
-    Finds sharp attack transients (what you see in DAW), not subtle energy
-    changes. This is the most direct approach: find local maxima that stand
-    out prominently.
+    Finds sharp attack transients (what you see in DAW). Can use two-pass
+    detection for better timing accuracy in reverb-heavy material.
     
     Args:
         stereo_audio: Stereo audio (2, samples) or (samples, 2)
@@ -413,6 +601,10 @@ def detect_stereo_transient_peaks(
         hop_length: Hop length for energy calculation
         method: 'rms' or 'spectral'
         min_absolute_energy: Noise floor threshold
+        enable_amplitude_refinement: Enable two-pass detection (energy + amplitude)
+        amplitude_smoothing_ms: Peak-hold smoothing for amplitude peaks (2-5ms)
+        amplitude_prominence: Min prominence fraction for amplitude peaks (0.3 = 30%)
+        max_peaks_per_region: Max amplitude peaks per energy region (safety limit)
     
     Returns:
         Dict with onset_times, left_energies, right_energies, pan_confidence
@@ -438,15 +630,28 @@ def detect_stereo_transient_peaks(
     )
     
     # Detect transient peaks in each channel
-    # Pass raw audio for amplitude peak snapping (percussive precision)
-    left_peaks = detect_transient_peaks(
-        left_times, left_energy, threshold_db, min_peak_spacing_ms,
-        min_absolute_energy, audio=left_channel, sr=sr
-    )
-    right_peaks = detect_transient_peaks(
-        right_times, right_energy, threshold_db, min_peak_spacing_ms,
-        min_absolute_energy, audio=right_channel, sr=sr
-    )
+    # Use two-pass detection if enabled (better timing in reverb-heavy material)
+    if enable_amplitude_refinement:
+        left_peaks = detect_transient_peaks_two_pass(
+            left_times, left_energy, left_channel, sr,
+            threshold_db, min_peak_spacing_ms, min_absolute_energy,
+            amplitude_smoothing_ms, amplitude_prominence, max_peaks_per_region
+        )
+        right_peaks = detect_transient_peaks_two_pass(
+            right_times, right_energy, right_channel, sr,
+            threshold_db, min_peak_spacing_ms, min_absolute_energy,
+            amplitude_smoothing_ms, amplitude_prominence, max_peaks_per_region
+        )
+    else:
+        # Single-pass detection (legacy behavior)
+        left_peaks = detect_transient_peaks(
+            left_times, left_energy, threshold_db, min_peak_spacing_ms,
+            min_absolute_energy, audio=left_channel, sr=sr
+        )
+        right_peaks = detect_transient_peaks(
+            right_times, right_energy, threshold_db, min_peak_spacing_ms,
+            min_absolute_energy, audio=right_channel, sr=sr
+        )
     
     # Merge L/R peaks within merge window
     merge_window_sec = merge_window_ms / 1000.0

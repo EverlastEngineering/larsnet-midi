@@ -21,6 +21,10 @@ def detect_onsets_energy_based(
     frame_length: int = 2048,
     hop_length: int = 512,
     method: str = 'rms',
+    enable_amplitude_refinement: bool = True,
+    amplitude_smoothing_ms: float = 3.0,
+    amplitude_prominence: float = 0.3,
+    max_peaks_per_region: int = 3,
 ) -> Tuple[np.ndarray, np.ndarray, Dict]:
     """
     Detect onsets using energy-based transient peak detection (NEW METHOD).
@@ -72,6 +76,10 @@ def detect_onsets_energy_based(
         hop_length=hop_length,
         method=method,
         min_absolute_energy=min_absolute_energy,
+        enable_amplitude_refinement=enable_amplitude_refinement,
+        amplitude_smoothing_ms=amplitude_smoothing_ms,
+        amplitude_prominence=amplitude_prominence,
+        max_peaks_per_region=max_peaks_per_region,
     )
     
     # Convert to format expected by processing_shell

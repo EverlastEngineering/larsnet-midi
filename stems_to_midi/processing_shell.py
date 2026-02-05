@@ -738,6 +738,12 @@ def process_stem_to_midi(
         min_absolute_energy = config.get(stem_type, {}).get('min_absolute_energy', 0.01)
         merge_window_ms = config.get(stem_type, {}).get('merge_window_ms', 150.0)
         
+        # Two-pass detection parameters (amplitude refinement)
+        enable_amplitude_refinement = config.get(stem_type, {}).get('enable_amplitude_refinement', True)
+        amplitude_smoothing_ms = config.get(stem_type, {}).get('amplitude_smoothing_ms', 3.0)
+        amplitude_prominence = config.get(stem_type, {}).get('amplitude_prominence', 0.3)
+        max_peaks_per_region = config.get(stem_type, {}).get('max_peaks_per_region', 3)
+        
         onset_times, onset_strengths, extra_data = detect_onsets_energy_based(
             audio if is_stereo else audio_mono,  # Pass stereo if available
             sr,
@@ -746,6 +752,10 @@ def process_stem_to_midi(
             min_absolute_energy=min_absolute_energy,
             merge_window_ms=merge_window_ms,
             hop_length=onset_params['hop_length'],
+            enable_amplitude_refinement=enable_amplitude_refinement,
+            amplitude_smoothing_ms=amplitude_smoothing_ms,
+            amplitude_prominence=amplitude_prominence,
+            max_peaks_per_region=max_peaks_per_region,
         )
         
         # Pan information already calculated in detection
