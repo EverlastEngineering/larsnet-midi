@@ -33,38 +33,37 @@ def snap_to_amplitude_peak(
     audio: np.ndarray,
     onset_sample: int,
     peak_sample: int,
-    search_window_ms: float = 20.0,
+    search_window_ms: float = 30.0,
     sr: int = 44100
 ) -> int:
     """
-    Snap detection to actual amplitude peak near attack transient.
+    Snap detection to actual amplitude peak for percussive transients.
     
-    Energy-based detection backtracks to find attack start, but may be
-    slightly off from the exact sample of maximum amplitude. This searches
-    a SMALL window around the onset to find the precise amplitude peak,
-    preserving the backtracking that finds the attack start.
+    Energy-based detection finds RMS energy peaks, but for drums we want
+    the exact sample of maximum raw amplitude (stick impact). This searches
+    forward from the backtracked onset to find the amplitude peak.
     
-    CRITICAL: Search window must be small (±20ms) to avoid finding the
-    energy envelope peak which may be 50-120ms later (e.g., cymbal decay).
-    We want the initial transient attack, not the sustained resonance.
+    For percussive hits, the amplitude peak is usually within 30ms of the
+    energy peak. We search from onset forward to peak+30ms to handle cases
+    where backtracking fails (sustained reverb tails keep energy elevated).
     
     Args:
         audio: Raw audio signal
         onset_sample: Backtracked onset position (attack start from energy)
-        peak_sample: Energy envelope peak position (for reference, not used)
-        search_window_ms: Search window in milliseconds (±20ms default)
+        peak_sample: Energy envelope peak position
+        search_window_ms: Forward search buffer in milliseconds (30ms default)
         sr: Sample rate
     
     Returns:
-        Sample index of maximum amplitude peak near onset
+        Sample index of maximum amplitude peak within transient window
     """
     search_samples = int(search_window_ms * sr / 1000.0)
     
-    # Search window: ±20ms around the backtracked onset
-    # This captures timing variations from RMS smoothing without finding
-    # the much-later energy peak from sustained resonance
-    search_start = max(0, onset_sample - search_samples)
-    search_end = min(len(audio), onset_sample + search_samples)
+    # Search window: from backtracked onset to peak + 30ms buffer
+    # This handles both normal cases and cases where backtracking failed
+    # due to sustained energy (reverb tails from previous hits)
+    search_start = max(0, onset_sample)
+    search_end = min(len(audio), peak_sample + search_samples)
     
     if search_start >= search_end:
         return onset_sample
