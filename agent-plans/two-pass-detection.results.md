@@ -56,3 +56,34 @@
 - [x] No increase in false positives from noise ✅ (still uses energy filtering)
 - [x] All existing tests pass ✅
 - [x] Time resolution matches visual inspection ✅ (3ms smoothing)
+
+## Post-Implementation Fix: Double Detection Issue
+
+### Problem (Commit 00b01ae)
+- Two-pass detection created double events 20-40ms apart on hihat
+- Root cause: `min_spacing_ms` only enforced within each energy region, not globally
+- When energy regions overlapped, each region could produce nearby amplitude peaks
+- Example: Hihat had 1313 detections with ~200 doubles (1.871s/1.895s, 3.203s/3.224s)
+
+### Solution
+1. **Added global deduplication** in `detect_transient_peaks_two_pass`:
+   - Sort all amplitude peaks by time after collecting from all regions
+   - Enforce `min_peak_spacing_ms` globally across all peaks
+   - Keeps first peak in each cluster, discards peaks too close together
+
+2. **Disabled two-pass for hihat**:
+   - Added `enable_amplitude_refinement: false` to hihat config
+   - Hihats have clean, sharp transients - don't need amplitude refinement
+   - Energy-only detection sufficient for hihat
+   - Reduces detections from 1313 → 1114 (-199 doubles)
+
+3. **Verified toms still recover missing peak**:
+   - With global deduplication: 120 detections total
+   - Still finds 149.4832s peak correctly
+   - No regression in peak recovery
+
+### Results After Fix
+- **Hihat**: 1313 → 1114 detections (-199 false doubles)
+- **Toms**: 120 detections, 149.4832s still recovered
+- **Tests**: All 6 integration tests passing
+- **Deduplication**: Down to 3 <1ms duplicates (from 13)

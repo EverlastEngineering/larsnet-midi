@@ -96,6 +96,40 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 - **Impact**: Cannot analyze pitch distribution or validate classification decisions
 - **Root Cause**: Pitch values used for classification are not passed through to the events data structure
 
+### Two-pass detection creates double events from overlapping energy regions
+- **Status**: Fixed
+- **Priority**: High
+- **Description**: Two-pass detection finds multiple amplitude peaks per energy region, and when energy regions overlap, creates double events 20-40ms apart
+- **Details**:
+  - Two-pass detection (Pass 1: energy regions, Pass 2: amplitude peaks within regions) was creating up to 3 amplitude peaks per energy region
+  - `min_spacing_ms` enforcement only applied within each region, not globally
+  - When energy regions overlapped (common in reverb-heavy material), nearby regions could produce peaks 20-40ms apart
+  - Example: Hihat had 1313 detections with ~200 doubles (pairs like 1.871s/1.895s, 3.203s/3.224s)
+  - Doubles passed through deduplication because existing logic only removed <1ms duplicates
+- **Expected Behavior**: No duplicate detections regardless of energy region overlap
+- **Actual Behavior**: Overlapping energy regions produced peaks spaced by 20-90ms
+- **Impact**: Double triggers on hihats, potential double triggers on toms/snare in fast sections
+- **Fixed in Commit**: 00b01ae
+- **Solution**: 
+  1. Added global deduplication in `detect_transient_peaks_two_pass` to enforce `min_peak_spacing_ms` across all regions
+  2. Disabled two-pass detection for hihat (`enable_amplitude_refinement: false`) - clean transients don't need it
+  3. Hihat: 1313 → 1114 detections (-199 doubles eliminated)
+  4. Toms: still recovers missing 149.4832s peak, 120 total detections
+
+### Two-pass detection returns peak times instead of attack starts
+- **Status**: Open
+- **Priority**: Medium
+- **Description**: Two-pass amplitude refinement finds peak times but doesn't backtrack to attack start, inconsistent with energy-only detection
+- **Details**:
+  - Energy-only detection backtracks from energy peak to find attack start (50-120ms earlier)
+  - Two-pass detection finds amplitude peaks but returns them directly without backtracking
+  - This means two-pass events are timed at peak (what you see) instead of attack start (what you hear)
+  - For most drums this ~10-30ms difference is acceptable, but for cymbals it's 50-120ms
+- **Expected Behavior**: Two-pass detection should backtrack from amplitude peak to attack start
+- **Actual Behavior**: Returns amplitude peak time directly
+- **Impact**: Timing inconsistency between stems using two-pass vs energy-only detection
+- **Potential Solution**: Apply backtracking logic to amplitude peaks in `detect_transient_peaks_two_pass`
+
 ### MIDI file creation error: "pop from empty list" in midiutil
 - **Status**: Fixed
 - **Priority**: High
