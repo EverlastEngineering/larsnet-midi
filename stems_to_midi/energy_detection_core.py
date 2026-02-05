@@ -430,6 +430,22 @@ def detect_transient_peaks_two_pass(
                 'peak_time': float(times[peak_idx]),
             })
     
+    # Global deduplication: remove peaks too close together across all regions
+    # This handles overlapping energy regions that produce nearby amplitude peaks
+    if len(results) > 1:
+        # Sort by time
+        results.sort(key=lambda x: x['onset_time'])
+        
+        # Keep peaks spaced by at least min_peak_spacing_ms
+        min_spacing_sec = min_peak_spacing_ms / 1000.0
+        deduplicated = [results[0]]
+        
+        for result in results[1:]:
+            if result['onset_time'] - deduplicated[-1]['onset_time'] >= min_spacing_sec:
+                deduplicated.append(result)
+        
+        results = deduplicated
+    
     return results
 
 

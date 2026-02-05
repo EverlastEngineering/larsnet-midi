@@ -55,6 +55,7 @@ toms:
   fundamental_freq_max: 150
   body_freq_min: 150
   body_freq_max: 400
+  max_peaks_per_region: 1  # Prevent double detections from overlapping energy regions
 hihat:
   midi_note_closed: 42
   midi_note_open: 46
@@ -76,6 +77,7 @@ hihat:
   body_freq_max: 2000
   sizzle_freq_min: 6000
   sizzle_freq_max: 12000
+  enable_amplitude_refinement: false  # Hihat has clean transients, doesn't need two-pass
 cymbals:
   midi_note: 49
   onset_threshold: 0.15
