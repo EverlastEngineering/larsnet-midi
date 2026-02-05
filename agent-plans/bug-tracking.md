@@ -48,6 +48,27 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
   - Add `stereo_width` field to onset features (range 0.0=mono to 1.0=wide stereo)
   - Include in clustering features for better classification
 
+### RMS energy detection misses closely-spaced peaks in reverb-heavy material
+- **Status**: Open
+- **Priority**: Medium
+- **Description**: Energy-based detection blends nearby peaks together when baseline energy is elevated from reverb tails, causing missed detections
+- **Details**:
+  - RMS energy uses 50-100ms smoothing window for noise robustness
+  - When two hits are ~150-200ms apart with sustained reverb between them, smoothing creates single broad envelope peak
+  - `scipy.signal.find_peaks` finds only one maximum per broad hump
+  - Example: Thunderstruck toms at 149.467s missed, but 149.641s detected (174ms apart, elevated baseline)
+  - Lowering `threshold_db` doesn't help - peaks are genuinely merged in energy envelope
+- **Expected Behavior**: Detect all visually obvious amplitude peaks in waveform
+- **Actual Behavior**: Misses peaks when they're close together (~150-200ms) with elevated baseline energy
+- **Impact**: Missed drum hits in reverb-heavy sections or fast rolls with sustained resonance
+- **Root Cause**: Fundamental trade-off in RMS energy detection - smoothing provides noise robustness but reduces time resolution
+- **Potential Solutions** (future work):
+  1. **Hybrid detection**: Fall back to raw amplitude peaks when baseline energy is elevated
+  2. **Adaptive smoothing**: Use shorter RMS window in fast sections, longer in sparse sections
+  3. **Multi-scale detection**: Detect at multiple time resolutions and merge results
+  4. **Envelope derivative**: Detect rapid changes in envelope slope regardless of absolute energy
+- **Workaround**: Accept ~150-200ms time resolution limitation in reverb-heavy material
+
 ### Missing pan_confidence data in analysis JSON output
 - **Status**: Open
 - **Priority**: Medium
