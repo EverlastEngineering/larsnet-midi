@@ -858,9 +858,9 @@ def process_stem_to_midi(
                     lo, hi = freq_range
                     lo_str = f"{lo/1000:.0f}k" if lo >= 1000 else f"{lo:.0f}"
                     hi_str = f"{hi/1000:.0f}k" if hi >= 1000 else f"{hi:.0f}"
-                    legend_parts.append(f"{label}={label} Energy ({lo_str}-{hi_str}Hz)")
+                    legend_parts.append(f"{label} ({lo_str}-{hi_str}Hz)")
                 else:
-                    legend_parts.append(f"{label}={label} Energy")
+                    legend_parts.append(f"{label}")
             if stem_type in ['hihat', 'cymbals']:
                 legend_parts.append("SustainMs=Sustain Duration")
             print(f"      {', '.join(legend_parts)}")
