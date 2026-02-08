@@ -167,8 +167,9 @@ class TestWaveformTuningIntegration:
     def test_tuning_active_state(self, waveform_js):
         assert 'waveformTuningActive' in waveform_js
 
-    def test_tuning_indicator_drawn(self, waveform_js):
-        assert 'TUNING' in waveform_js
+    def test_tuning_indicator_referenced(self, waveform_js):
+        """Tuning label element is toggled by waveform.js."""
+        assert 'waveform-tuning-label' in waveform_js
 
     def test_stem_change_notifies_tuning(self, waveform_js):
         assert 'onTuningStemChanged' in waveform_js

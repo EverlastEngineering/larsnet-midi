@@ -212,18 +212,39 @@
             }
         }
         
-        /* Waveform viewer */
-        .waveform-canvas-container {
+        /* Waveform viewer — dual panel layout */
+        .waveform-panels-container {
             position: relative;
             width: 100%;
-            height: 200px;
+            display: flex;
+            flex-direction: column;
         }
-        .waveform-canvas-container canvas {
+        .waveform-panel {
+            position: relative;
+            width: 100%;
+        }
+        .waveform-panel-envelope {
+            height: 160px;
+        }
+        .waveform-panel-events {
+            height: 120px;
+            border-top: 1px solid #374151;
+        }
+        .waveform-panel canvas {
             position: absolute;
             top: 0;
             left: 0;
             width: 100%;
             height: 100%;
+        }
+        .waveform-legend-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 4px 8px;
+            min-height: 22px;
+            border-bottom: 1px solid #374151;
+            background: #0d1117;
         }
         .waveform-stem-tab {
             border: 1px solid transparent;
@@ -608,9 +629,21 @@
                                             </button>
                                         </div>
                                     </div>
-                                    <!-- Canvas container -->
-                                    <div class="waveform-canvas-container bg-larsnet-darker rounded border border-gray-700">
-                                        <canvas id="waveform-canvas"></canvas>
+                                    <!-- Dual-panel canvas container -->
+                                    <div class="waveform-panels-container bg-larsnet-darker rounded border border-gray-700">
+                                        <!-- Legend bar (outside plot area) -->
+                                        <div id="waveform-legend-bar" class="waveform-legend-bar rounded-t">
+                                            <span id="waveform-tuning-label" class="text-xs font-semibold text-blue-400 hidden">● TUNING</span>
+                                            <div id="waveform-legend-items" class="flex items-center gap-3 ml-auto text-xs"></div>
+                                        </div>
+                                        <!-- Top panel: energy envelope waveform -->
+                                        <div class="waveform-panel waveform-panel-envelope">
+                                            <canvas id="envelope-canvas"></canvas>
+                                        </div>
+                                        <!-- Bottom panel: event markers as amplitude bars -->
+                                        <div class="waveform-panel waveform-panel-events">
+                                            <canvas id="events-canvas"></canvas>
+                                        </div>
                                     </div>
                                     <!-- Threshold tuning panel (inline, below canvas) -->
                                     <div id="tuning-panel" class="hidden mt-3 bg-gray-800 rounded-lg border border-gray-600 p-3">
@@ -994,14 +1027,14 @@
     </div>
     
     <!-- JavaScript -->
-    <script src="/static/js/api.js?v=18"></script>
-    <script src="/static/js/settings.js?v=18"></script>
-    <script src="/static/js/advanced-midi.js?v=18"></script>
-    <script src="/static/js/waveform.js?v=18"></script>
-    <script src="/static/js/threshold-tuning.js?v=18"></script>
-    <script src="/static/js/projects.js?v=18"></script>
-    <script src="/static/js/operations.js?v=18"></script>
-    <script src="/static/js/app.js?v=18"></script>
+    <script src="/static/js/api.js?v=19"></script>
+    <script src="/static/js/settings.js?v=19"></script>
+    <script src="/static/js/advanced-midi.js?v=19"></script>
+    <script src="/static/js/waveform.js?v=19"></script>
+    <script src="/static/js/threshold-tuning.js?v=19"></script>
+    <script src="/static/js/projects.js?v=19"></script>
+    <script src="/static/js/operations.js?v=19"></script>
+    <script src="/static/js/app.js?v=19"></script>
     
 </body>
 </html>

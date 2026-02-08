@@ -1,15 +1,17 @@
 /**
- * Waveform Viewer Component
+ * Waveform Viewer Component — Dual-Panel Layout
  *
- * Canvas-based energy envelope visualization with color-coded onset markers.
- * Supports analysis.json v2 (events) and v3 (events_configured / events_sensitive).
+ * Two vertically stacked canvas panels with synchronized zoom/pan:
+ *   Top panel:  Energy envelope (mirrored DAW-style L/R waveform)
+ *   Bottom panel: Event markers as amplitude bars (height = velocity)
  *
- * Visual layers (bottom to top):
- *   1. Background with time axis
- *   2. Energy envelope (L/R as filled area)
- *   3. Geomean threshold line (dashed)
- *   4. Onset markers (vertical lines, color-coded by status)
- *   5. Hover tooltip (event details)
+ * Features:
+ *   - 60dB dynamic range log scaling for envelope
+ *   - Bar-graph event markers (height proportional to velocity/amplitude)
+ *   - Synchronized zoom (mouse wheel) and pan (click-drag)
+ *   - Vertical crosshair cursor spanning both panels
+ *   - Legend and tuning indicator in dedicated bar (outside plot area)
+ *   - Hover tooltip on events
  */
 
 // ─── Constants ───────────────────────────────────────────────────────────
@@ -26,11 +28,12 @@ const WAVEFORM_COLORS = {
     markerKept: '#10b981',       // green
     markerFiltered: '#ef4444',   // red
     markerReverbCont: '#f59e0b', // orange/amber
-    markerSensitive: 'rgba(156, 163, 175, 0.3)', // gray (background sensitive events)
+    markerSensitive: 'rgba(156, 163, 175, 0.3)',
     markerUnknown: '#6b7280',    // gray
     tooltipBg: 'rgba(17, 24, 39, 0.95)',
     tooltipBorder: '#4b5563',
     tooltipText: '#e5e7eb',
+    crosshair: 'rgba(255, 255, 255, 0.3)',
 };
 
 const STEM_COLORS = {
@@ -43,38 +46,56 @@ const STEM_COLORS = {
 
 const STEM_ORDER = ['kick', 'snare', 'toms', 'hihat', 'cymbals'];
 
+// Padding for each canvas panel (in CSS pixels)
+const ENV_PAD = { top: 6, bottom: 6, left: 45, right: 12 };
+const EVT_PAD = { top: 6, bottom: 28, left: 45, right: 12 };
+
 // ─── State ───────────────────────────────────────────────────────────────
 
-let waveformAnalysisData = null;   // Full analysis.json response
-let waveformEnvelopeCache = {};    // {stemType: envelopeData}
-let waveformActiveStem = null;     // Currently displayed stem
-let waveformCanvas = null;         // Canvas element
-let waveformCtx = null;            // Canvas 2D context
-let waveformHoverEvent = null;     // Event under mouse cursor
-let waveformShowSensitive = false; // Toggle for sensitive events layer
-let waveformTuningEvents = null;   // Filtered events from threshold tuning (or null)
-let waveformTuningActive = false;  // Whether tuning mode is visually active
+let waveformAnalysisData = null;
+let waveformEnvelopeCache = {};
+let waveformActiveStem = null;
+let waveformHoverEvent = null;
+let waveformShowSensitive = false;
+let waveformTuningEvents = null;
+let waveformTuningActive = false;
+
+// Dual-canvas references
+let envelopeCanvas = null;
+let envelopeCtx = null;
+let eventsCanvas = null;
+let eventsCtx = null;
+
+// Zoom/pan state
+let waveformZoom = 1;        // 1 = full view, higher = zoomed in
+let waveformPanOffset = 0;   // 0..1, fraction of total time range scrolled
+let waveformIsDragging = false;
+let waveformDragStartX = 0;
+let waveformDragStartPan = 0;
+
+// Crosshair state
+let waveformMouseX = null;   // CSS-pixel X relative to canvas parent
+
+// Backward-compatible aliases (threshold-tuning.js references these)
+let waveformCanvas = null;
+let waveformCtx = null;
 
 // ─── Public API ──────────────────────────────────────────────────────────
 
-/**
- * Initialize waveform viewer for a project.
- * Called from selectProject() in projects.js.
- *
- * @param {object} project - The currentProject object
- */
 async function initWaveformViewer(project) {
     const section = document.getElementById('analysis-section');
     if (!section) return;
 
+    // Reset state
     waveformAnalysisData = null;
     waveformEnvelopeCache = {};
     waveformActiveStem = null;
     waveformHoverEvent = null;
     waveformTuningEvents = null;
     waveformTuningActive = false;
+    waveformZoom = 1;
+    waveformPanOffset = 0;
 
-    // Check if project has analysis data
     if (!project.has_analysis) {
         section.classList.add('hidden');
         return;
@@ -95,20 +116,25 @@ async function initWaveformViewer(project) {
         return;
     }
 
-    // Build stem tabs
     const availableStems = Object.keys(waveformAnalysisData.stems);
     renderStemTabs(availableStems);
 
-    // Set up canvas
-    waveformCanvas = document.getElementById('waveform-canvas');
-    if (!waveformCanvas) return;
-    waveformCtx = waveformCanvas.getContext('2d');
+    // Set up dual canvases
+    envelopeCanvas = document.getElementById('envelope-canvas');
+    eventsCanvas = document.getElementById('events-canvas');
+    if (!envelopeCanvas || !eventsCanvas) return;
+    envelopeCtx = envelopeCanvas.getContext('2d');
+    eventsCtx = eventsCanvas.getContext('2d');
 
-    // Mouse interaction
-    waveformCanvas.addEventListener('mousemove', onCanvasMouseMove);
-    waveformCanvas.addEventListener('mouseleave', onCanvasMouseLeave);
+    // Backward-compatible alias
+    waveformCanvas = eventsCanvas;
+    waveformCtx = eventsCtx;
 
-    // Toggle sensitive events checkbox
+    // Mouse interaction — both canvases
+    setupCanvasInteraction(envelopeCanvas);
+    setupCanvasInteraction(eventsCanvas);
+
+    // Sensitive toggle
     const sensitiveToggle = document.getElementById('waveform-sensitive-toggle');
     if (sensitiveToggle) {
         sensitiveToggle.checked = waveformShowSensitive;
@@ -118,7 +144,7 @@ async function initWaveformViewer(project) {
         };
     }
 
-    // Show/hide Tune button based on whether any stem has sensitive events
+    // Tune button visibility
     const tuneBtn = document.getElementById('tuning-toggle-btn');
     if (tuneBtn) {
         const hasAnySensitive = availableStems.some(s => {
@@ -128,7 +154,7 @@ async function initWaveformViewer(project) {
         tuneBtn.classList.toggle('hidden', !hasAnySensitive);
     }
 
-    // Close tuning panel when loading a new project
+    // Close tuning panel on new project
     const tuningPanel = document.getElementById('tuning-panel');
     if (tuningPanel && !tuningPanel.classList.contains('hidden')) {
         tuningPanelOpen = false;
@@ -136,16 +162,11 @@ async function initWaveformViewer(project) {
         if (tuneBtn) tuneBtn.classList.remove('tuning-btn-active');
     }
 
-    // Select first available stem in kit order
+    // Select first stem
     const firstStem = STEM_ORDER.find(s => availableStems.includes(s)) || availableStems[0];
-    if (firstStem) {
-        selectStem(firstStem);
-    }
+    if (firstStem) selectStem(firstStem);
 }
 
-/**
- * Select a stem and render its waveform.
- */
 async function selectStem(stemType) {
     if (!waveformAnalysisData || !waveformAnalysisData.stems[stemType]) return;
 
@@ -153,15 +174,15 @@ async function selectStem(stemType) {
     waveformHoverEvent = null;
     waveformTuningEvents = null;
     waveformTuningActive = false;
+    waveformZoom = 1;
+    waveformPanOffset = 0;
 
-    // Update tab UI
     document.querySelectorAll('.waveform-stem-tab').forEach(tab => {
         const isActive = tab.dataset.stem === stemType;
         tab.classList.toggle('waveform-tab-active', isActive);
         tab.classList.toggle('waveform-tab-inactive', !isActive);
     });
 
-    // Update the sensitive toggle visibility (only show for v3 with sensitive events)
     const sensitiveContainer = document.getElementById('waveform-sensitive-container');
     if (sensitiveContainer) {
         const stemData = waveformAnalysisData.stems[stemType];
@@ -169,20 +190,18 @@ async function selectStem(stemType) {
         sensitiveContainer.classList.toggle('hidden', !hasSensitive);
     }
 
-    // Try to load envelope data (may not exist for older projects)
+    // Load envelope data
     if (!waveformEnvelopeCache[stemType]) {
         try {
             const envelope = await api.getProjectEnvelope(currentProject.number, stemType);
             waveformEnvelopeCache[stemType] = envelope;
         } catch {
-            // Envelope data not available — that's OK, we'll draw without it
             waveformEnvelopeCache[stemType] = null;
         }
     }
 
     drawWaveform();
 
-    // Notify threshold tuning module (if panel is open, rebuild sliders)
     if (typeof onTuningStemChanged === 'function') {
         onTuningStemChanged(stemType);
     }
@@ -194,9 +213,7 @@ function renderStemTabs(availableStems) {
     const container = document.getElementById('waveform-stem-tabs');
     if (!container) return;
 
-    // Sort stems in kit order
     const ordered = STEM_ORDER.filter(s => availableStems.includes(s));
-    // Add any stems not in STEM_ORDER
     availableStems.forEach(s => { if (!ordered.includes(s)) ordered.push(s); });
 
     container.innerHTML = ordered.map(stem => {
@@ -210,16 +227,71 @@ function renderStemTabs(availableStems) {
     }).join('');
 }
 
-// ─── Canvas Drawing ──────────────────────────────────────────────────────
+// ─── Zoom / Pan Helpers ──────────────────────────────────────────────────
+
+/** Compute the visible time window based on zoom and pan. */
+function computeVisibleRange(tMinFull, tMaxFull) {
+    const fullSpan = tMaxFull - tMinFull;
+    const visibleSpan = fullSpan / waveformZoom;
+    const maxOffset = fullSpan - visibleSpan;
+    const offset = waveformPanOffset * maxOffset;
+    return { tMin: tMinFull + offset, tMax: tMinFull + offset + visibleSpan };
+}
+
+function clampPan() {
+    waveformPanOffset = Math.max(0, Math.min(1, waveformPanOffset));
+}
+
+// ─── Main Draw ───────────────────────────────────────────────────────────
 
 function drawWaveform() {
-    if (!waveformCanvas || !waveformCtx || !waveformActiveStem) return;
+    if (!envelopeCanvas || !eventsCanvas || !waveformActiveStem) return;
 
-    const canvas = waveformCanvas;
-    const ctx = waveformCtx;
+    const stemData = waveformAnalysisData.stems[waveformActiveStem];
+    const configuredEvents = getEventsForStem(stemData);
+    const sensitiveEvents = getSensitiveEventsForStem(stemData);
+    const envelope = waveformEnvelopeCache[waveformActiveStem];
+
+    const displayEvents = (waveformTuningActive && waveformTuningEvents)
+        ? waveformTuningEvents
+        : configuredEvents;
+
+    // Full time range (for zoom reference)
+    const { tMin: tMinFull, tMax: tMaxFull } = computeTimeRange(configuredEvents, sensitiveEvents, envelope);
+    if (tMaxFull <= tMinFull) return;
+
+    // Visible time range (affected by zoom/pan)
+    const { tMin, tMax } = computeVisibleRange(tMinFull, tMaxFull);
+
+    // Draw envelope panel
+    drawEnvelopePanel(envelope, tMin, tMax, stemData, configuredEvents, sensitiveEvents);
+
+    // Draw events panel
+    drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, tMin, tMax, stemData);
+
+    // Update legend bar (HTML, outside canvas)
+    updateLegendBar(stemData, displayEvents);
+
+    // Draw crosshair on both panels
+    if (waveformMouseX != null) {
+        drawCrosshair(envelopeCtx, envelopeCanvas);
+        drawCrosshair(eventsCtx, eventsCanvas);
+    }
+
+    // Draw tooltip on events panel
+    if (waveformHoverEvent) {
+        const rect = eventsCanvas.parentElement.getBoundingClientRect();
+        drawTooltip(eventsCtx, waveformHoverEvent, rect.width, rect.height);
+    }
+}
+
+// ─── Envelope Panel ──────────────────────────────────────────────────────
+
+function drawEnvelopePanel(envelope, tMin, tMax, stemData, configuredEvents, sensitiveEvents) {
+    const canvas = envelopeCanvas;
+    const ctx = envelopeCtx;
     const dpr = window.devicePixelRatio || 1;
 
-    // Size canvas to container
     const rect = canvas.parentElement.getBoundingClientRect();
     canvas.width = rect.width * dpr;
     canvas.height = rect.height * dpr;
@@ -229,93 +301,168 @@ function drawWaveform() {
 
     const W = rect.width;
     const H = rect.height;
-    const PADDING = { top: 10, bottom: 28, left: 45, right: 15 };
-    const plotW = W - PADDING.left - PADDING.right;
-    const plotH = H - PADDING.top - PADDING.bottom;
+    const PAD = ENV_PAD;
+    const plotW = W - PAD.left - PAD.right;
+    const plotH = H - PAD.top - PAD.bottom;
 
-    // Clear
+    // Background
     ctx.fillStyle = WAVEFORM_COLORS.background;
     ctx.fillRect(0, 0, W, H);
 
-    // Get data
-    const stemData = waveformAnalysisData.stems[waveformActiveStem];
-    const configuredEvents = getEventsForStem(stemData);
-    const sensitiveEvents = getSensitiveEventsForStem(stemData);
-    const envelope = waveformEnvelopeCache[waveformActiveStem];
+    const timeToX = t => PAD.left + ((t - tMin) / (tMax - tMin)) * plotW;
 
-    // In tuning mode, use tuning-filtered events as the primary layer
-    const displayEvents = (waveformTuningActive && waveformTuningEvents)
-        ? waveformTuningEvents
-        : configuredEvents;
-
-    // Compute time range from events (and envelope if available)
-    const { tMin, tMax } = computeTimeRange(configuredEvents, sensitiveEvents, envelope);
-    if (tMax <= tMin) return;
-
-    const timeToX = t => PADDING.left + ((t - tMin) / (tMax - tMin)) * plotW;
-
-    // Envelope gets its own Y-scale so it fills the canvas like a DAW waveform
-    const envelopeMax = computeEnvelopeMax(envelope);
-    const envToY = v => PADDING.top + plotH - (v / (envelopeMax || 1)) * plotH;
-
-    // Geomean values live on a separate scale (for threshold line)
-    const geomeanMax = computeMaxGeomean(configuredEvents, sensitiveEvents);
-    const geomeanToY = v => PADDING.top + plotH - (v / (geomeanMax * 1.2 || 1)) * plotH;
-
-    // Layer 1: Time axis
-    drawTimeAxis(ctx, W, H, PADDING, plotW, plotH, tMin, tMax, timeToX);
-
-    // Layer 2: Envelope (if available)
+    // Envelope
     if (envelope && envelope.times) {
-        drawEnvelope(ctx, envelope, timeToX, envToY, PADDING, plotH, envelopeMax);
+        const envelopeMax = computeEnvelopeMax(envelope);
+        drawEnvelope(ctx, envelope, timeToX, PAD, plotH, envelopeMax);
     }
 
-    // Layer 3: Geomean threshold line
-    // In tuning mode, show the slider value; otherwise show configured value
+    // Threshold line (on geomean scale)
+    const geomeanMax = computeMaxGeomean(configuredEvents, sensitiveEvents);
     const logic = stemData.logic || {};
     const tuningGeomean = waveformTuningActive && tuningSliderValues?.[waveformActiveStem]?.geomean_threshold;
     const thresholdVal = tuningGeomean != null ? tuningGeomean : logic.geomean_threshold;
     if (thresholdVal != null && geomeanMax > 0) {
-        drawThresholdLine(ctx, thresholdVal, geomeanToY, PADDING, plotW);
+        const geomeanToY = v => PAD.top + plotH - (v / (geomeanMax * 1.2 || 1)) * plotH;
+        drawThresholdLine(ctx, thresholdVal, geomeanToY, PAD, plotW);
     }
 
-    // Layer 3.5: Sensitive events (background, if toggled on — but not in tuning mode)
+    // dB scale labels on left axis
+    drawEnvelopeAxis(ctx, PAD, plotH);
+}
+
+function drawEnvelopeAxis(ctx, PAD, plotH) {
+    ctx.fillStyle = WAVEFORM_COLORS.axisText;
+    ctx.font = '9px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+
+    const centerY = PAD.top + plotH / 2;
+
+    const labels = [0, -12, -24, -48];
+    for (const dB of labels) {
+        const frac = dB === 0 ? 1 : Math.max(0, 1 + dB / 60);
+        const yUp = centerY - frac * (plotH / 2);
+
+        if (dB === 0) {
+            ctx.fillText('0dB', PAD.left - 4, yUp + 3);
+        } else if (yUp >= PAD.top - 2) {
+            ctx.fillText(`${dB}`, PAD.left - 4, yUp + 3);
+        }
+    }
+
+    // Center line indicator
+    ctx.fillStyle = 'rgba(107, 114, 128, 0.5)';
+    ctx.fillText('—', PAD.left - 4, centerY + 3);
+}
+
+// ─── Events Panel ────────────────────────────────────────────────────────
+
+function drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, tMin, tMax, stemData) {
+    const canvas = eventsCanvas;
+    const ctx = eventsCtx;
+    const dpr = window.devicePixelRatio || 1;
+
+    const rect = canvas.parentElement.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    ctx.scale(dpr, dpr);
+
+    const W = rect.width;
+    const H = rect.height;
+    const PAD = EVT_PAD;
+    const plotW = W - PAD.left - PAD.right;
+    const plotH = H - PAD.top - PAD.bottom;
+
+    // Background
+    ctx.fillStyle = WAVEFORM_COLORS.background;
+    ctx.fillRect(0, 0, W, H);
+
+    const timeToX = t => PAD.left + ((t - tMin) / (tMax - tMin)) * plotW;
+
+    // Time axis (at bottom)
+    drawTimeAxis(ctx, W, H, PAD, plotW, plotH, tMin, tMax, timeToX);
+
+    // Velocity scale labels on left axis
+    drawVelocityAxis(ctx, PAD, plotW, plotH);
+
+    // Sensitive events (background layer)
     if (!waveformTuningActive && waveformShowSensitive && sensitiveEvents.length > 0) {
-        drawOnsetMarkers(ctx, sensitiveEvents, timeToX, PADDING, plotH, true);
+        drawEventBars(ctx, sensitiveEvents, timeToX, PAD, plotW, plotH, true);
     }
 
-    // Layer 4: Primary onset markers (configured or tuning-filtered)
-    drawOnsetMarkers(ctx, displayEvents, timeToX, PADDING, plotH, false);
+    // Primary events as amplitude bars
+    drawEventBars(ctx, displayEvents, timeToX, PAD, plotW, plotH, false);
+}
 
-    // Layer 5: Hover tooltip
-    if (waveformHoverEvent) {
-        drawTooltip(ctx, waveformHoverEvent, W, H);
+function drawVelocityAxis(ctx, PAD, plotW, plotH) {
+    ctx.fillStyle = WAVEFORM_COLORS.axisText;
+    ctx.font = '9px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+
+    const ticks = [127, 96, 64, 32];
+    for (const v of ticks) {
+        const y = PAD.top + plotH - (v / 127) * plotH;
+        ctx.fillText(v, PAD.left - 4, y + 3);
+
+        // Subtle grid line
+        ctx.strokeStyle = 'rgba(55, 65, 81, 0.4)';
+        ctx.lineWidth = 0.5;
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath();
+        ctx.moveTo(PAD.left, y);
+        ctx.lineTo(PAD.left + plotW, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
     }
+}
 
-    // Tuning mode indicator
-    if (waveformTuningActive) {
-        ctx.fillStyle = 'rgba(59, 130, 246, 0.8)';
-        ctx.font = 'bold 9px system-ui, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.fillText('● TUNING', PADDING.left + 4, PADDING.top + 12);
+/**
+ * Draw event markers as amplitude bars.
+ * Height is proportional to velocity (0-127). Color-coded by status.
+ */
+function drawEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer) {
+    const barWidth = isSensitiveLayer ? 1.5 : 3;
+
+    for (const event of events) {
+        if (event.time == null) continue;
+
+        const x = timeToX(event.time);
+        if (x < PAD.left - barWidth || x > PAD.left + plotW + barWidth) continue;
+
+        const color = isSensitiveLayer
+            ? WAVEFORM_COLORS.markerSensitive
+            : getMarkerColor(event.status);
+
+        // Bar height from velocity (0-127)
+        const velocity = event.velocity != null ? event.velocity : 64;
+        const barH = Math.max(2, (velocity / 127) * plotH);
+        const barTop = PAD.top + plotH - barH;
+
+        ctx.globalAlpha = isSensitiveLayer ? 0.4 : 0.9;
+        ctx.fillStyle = color;
+        ctx.fillRect(x - barWidth / 2, barTop, barWidth, barH);
+
+        if (!isSensitiveLayer) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 0.5;
+            ctx.globalAlpha = 0.5;
+            ctx.strokeRect(x - barWidth / 2, barTop, barWidth, barH);
+        }
+
+        ctx.globalAlpha = 1.0;
     }
-
-    // Legend
-    drawLegend(ctx, W, H, stemData);
 }
 
 // ─── Data Helpers ────────────────────────────────────────────────────────
 
-/** Get configured events, supporting v2 and v3 formats. */
 function getEventsForStem(stemData) {
-    // v3 format
     if (stemData.events_configured) return stemData.events_configured;
-    // v2 format
     if (stemData.events) return stemData.events;
     return [];
 }
 
-/** Get sensitive events (v3 only). */
 function getSensitiveEventsForStem(stemData) {
     return stemData.events_sensitive || [];
 }
@@ -334,16 +481,10 @@ function computeTimeRange(events, sensitiveEvents, envelope) {
         tMax = Math.max(tMax, envelope.times[envelope.times.length - 1]);
     }
 
-    // Add small padding
     const span = tMax - tMin || 1;
     return { tMin: tMin - span * 0.02, tMax: tMax + span * 0.02 };
 }
 
-/**
- * Compute envelope-only max for the waveform Y-axis.
- * Envelope values (RMS/peak-hold) live on a completely different scale
- * from event geomean/strength values, so they must be scaled independently.
- */
 function computeEnvelopeMax(envelope) {
     let maxVal = 0;
     if (envelope) {
@@ -353,10 +494,6 @@ function computeEnvelopeMax(envelope) {
     return maxVal;
 }
 
-/**
- * Compute max geomean value from events, used to position the threshold line.
- * Only relevant when drawing the geomean threshold reference.
- */
 function computeMaxGeomean(events, sensitiveEvents) {
     let maxVal = 0;
     for (const e of events) {
@@ -393,14 +530,23 @@ function drawTimeAxis(ctx, W, H, PAD, plotW, plotH, tMin, tMax, timeToX) {
         const x = timeToX(t);
         if (x < PAD.left || x > PAD.left + plotW) continue;
 
-        // Tick mark
         ctx.beginPath();
         ctx.moveTo(x, PAD.top + plotH);
         ctx.lineTo(x, PAD.top + plotH + 4);
         ctx.stroke();
 
-        // Label
         ctx.fillText(formatTime(t), x, PAD.top + plotH + 16);
+
+        // Subtle vertical grid line
+        ctx.strokeStyle = 'rgba(55, 65, 81, 0.3)';
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(x, PAD.top);
+        ctx.lineTo(x, PAD.top + plotH);
+        ctx.stroke();
+
+        ctx.strokeStyle = WAVEFORM_COLORS.axisLine;
+        ctx.lineWidth = 1;
     }
 }
 
@@ -410,21 +556,28 @@ function computeTickInterval(duration) {
     if (duration > 60) return 10;
     if (duration > 30) return 5;
     if (duration > 10) return 2;
-    return 1;
+    if (duration > 4) return 1;
+    if (duration > 1) return 0.5;
+    return 0.25;
 }
 
 function formatTime(seconds) {
     const m = Math.floor(seconds / 60);
-    const s = Math.floor(seconds % 60);
-    return m > 0 ? `${m}:${String(s).padStart(2, '0')}` : `${s}s`;
+    const s = seconds % 60;
+    if (m > 0) {
+        return `${m}:${String(Math.floor(s)).padStart(2, '0')}`;
+    }
+    if (seconds < 10 && seconds % 1 !== 0) {
+        return `${s.toFixed(1)}s`;
+    }
+    return `${Math.floor(s)}s`;
 }
 
 /**
  * Draw energy envelope as a mirrored DAW-style waveform.
  * Left channel extends upward from center, right channel extends downward.
- * If only one channel exists, it mirrors symmetrically.
  */
-function drawEnvelope(ctx, envelope, timeToX, envToY, PAD, plotH, maxAmp) {
+function drawEnvelope(ctx, envelope, timeToX, PAD, plotH, maxAmp) {
     if (!envelope.times || envelope.times.length === 0) return;
     if (maxAmp <= 0) return;
 
@@ -432,73 +585,60 @@ function drawEnvelope(ctx, envelope, timeToX, envToY, PAD, plotH, maxAmp) {
     const centerY = PAD.top + plotH / 2;
     const halfH = plotH / 2;
 
-    // Downsample for performance: at most 2 points per pixel
     const plotW = timeToX(times[times.length - 1]) - timeToX(times[0]);
-    const step = Math.max(1, Math.floor(times.length / (plotW * 2)));
+    const step = Math.max(1, Math.floor(times.length / (Math.max(plotW, 1) * 2)));
 
     const hasLeft = envelope.left && envelope.left.length > 0;
     const hasRight = envelope.right && envelope.right.length > 0;
 
-    // Draw left channel (upward from center)
     if (hasLeft) {
         drawEnvelopeHalf(ctx, times, envelope.left, timeToX, centerY, -halfH, maxAmp, step,
             WAVEFORM_COLORS.envelopeLeft, WAVEFORM_COLORS.envelopeFillLeft);
     }
-
-    // Draw right channel (downward from center, mirrored)
     if (hasRight) {
         drawEnvelopeHalf(ctx, times, envelope.right, timeToX, centerY, halfH, maxAmp, step,
             WAVEFORM_COLORS.envelopeRight, WAVEFORM_COLORS.envelopeFillRight);
     }
-
-    // If only one channel, mirror it
     if (hasLeft && !hasRight) {
         drawEnvelopeHalf(ctx, times, envelope.left, timeToX, centerY, halfH, maxAmp, step,
             WAVEFORM_COLORS.envelopeRight, WAVEFORM_COLORS.envelopeFillRight);
     }
 
-    // Center line (subtle)
+    // Center line
     ctx.strokeStyle = 'rgba(107, 114, 128, 0.3)';
     ctx.lineWidth = 0.5;
     ctx.beginPath();
     ctx.moveTo(PAD.left, centerY);
-    ctx.lineTo(PAD.left + plotW, centerY);
+    const endX = timeToX(times[times.length - 1]);
+    ctx.lineTo(endX, centerY);
     ctx.stroke();
 }
 
-/**
- * Draw one half of the mirrored waveform.
- * @param {number} direction - negative = upward, positive = downward
- */
 function drawEnvelopeHalf(ctx, times, values, timeToX, centerY, direction, maxAmp, step, strokeColor, fillColor) {
     if (!values || values.length === 0) return;
 
     const sign = direction < 0 ? -1 : 1;
     const halfH = Math.abs(direction);
 
-    // Use dB-like log scaling so quiet passages are visible (like a real DAW).
-    // Maps amplitude to 0..1 using: dB_norm = 1 + dB/dynamicRange, clamped to [0,1].
-    // 60dB range means -60dB (1/1000th of max) still gets ~0% and full amplitude = 100%.
-    const dynamicRange = 60; // dB
-    const noiseFloor = maxAmp * Math.pow(10, -dynamicRange / 20); // -60dB below peak
+    // 60dB dynamic range log scaling
+    const dynamicRange = 60;
+    const noiseFloor = maxAmp * Math.pow(10, -dynamicRange / 20);
     const normalize = v => {
         if (v <= noiseFloor) return 0;
         const dB = 20 * Math.log10(v / maxAmp);
         return Math.max(0, (1 + dB / dynamicRange)) * halfH;
     };
 
-    // Filled area from center
+    // Filled area
     ctx.beginPath();
     ctx.moveTo(timeToX(times[0]), centerY);
     for (let i = 0; i < times.length; i += step) {
-        // For downsampled ranges, use max value in window for peak-preserving display
         let maxV = values[i];
         for (let j = 1; j < step && i + j < times.length; j++) {
             maxV = Math.max(maxV, values[i + j]);
         }
         ctx.lineTo(timeToX(times[i]), centerY + sign * normalize(maxV));
     }
-    // Ensure we include the last point
     const lastI = times.length - 1;
     ctx.lineTo(timeToX(times[lastI]), centerY + sign * normalize(values[lastI]));
     ctx.lineTo(timeToX(times[lastI]), centerY);
@@ -506,7 +646,7 @@ function drawEnvelopeHalf(ctx, times, values, timeToX, centerY, direction, maxAm
     ctx.fillStyle = fillColor;
     ctx.fill();
 
-    // Stroke line along envelope edge
+    // Stroke
     ctx.beginPath();
     for (let i = 0; i < times.length; i += step) {
         let maxV = values[i];
@@ -525,8 +665,6 @@ function drawEnvelopeHalf(ctx, times, values, timeToX, centerY, direction, maxAm
 }
 
 function drawThresholdLine(ctx, threshold, geomeanToY, PAD, plotW) {
-    // The threshold is on the geomean scale, positioned relative to max geomean.
-    // Skip if threshold would be off the visible plot area.
     const y = geomeanToY(threshold);
     if (y < PAD.top - 5 || y > PAD.top + 500) return;
 
@@ -539,46 +677,11 @@ function drawThresholdLine(ctx, threshold, geomeanToY, PAD, plotW) {
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Label
+    // Label in left axis margin (not overlapping data)
     ctx.fillStyle = WAVEFORM_COLORS.thresholdLine;
-    ctx.font = '9px system-ui, sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText(`threshold: ${threshold}`, PAD.left + 4, y - 4);
-}
-
-function drawOnsetMarkers(ctx, events, timeToX, PAD, plotH, isSensitiveLayer) {
-    for (const event of events) {
-        if (event.time == null) continue;
-
-        const x = timeToX(event.time);
-        if (x < PAD.left || x > PAD.left + PAD.left + 5000) continue; // sanity
-
-        const color = isSensitiveLayer
-            ? WAVEFORM_COLORS.markerSensitive
-            : getMarkerColor(event.status);
-
-        ctx.strokeStyle = color;
-        ctx.lineWidth = isSensitiveLayer ? 0.5 : 1.5;
-        ctx.globalAlpha = isSensitiveLayer ? 0.4 : 1.0;
-
-        ctx.beginPath();
-        ctx.moveTo(x, PAD.top);
-        ctx.lineTo(x, PAD.top + plotH);
-        ctx.stroke();
-
-        // Small triangle at top for kept events (non-sensitive only)
-        if (!isSensitiveLayer && event.status === 'KEPT') {
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.moveTo(x - 3, PAD.top);
-            ctx.lineTo(x + 3, PAD.top);
-            ctx.lineTo(x, PAD.top + 6);
-            ctx.closePath();
-            ctx.fill();
-        }
-
-        ctx.globalAlpha = 1.0;
-    }
+    ctx.font = '8px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('thr', PAD.left - 4, y + 3);
 }
 
 function getMarkerColor(status) {
@@ -590,8 +693,19 @@ function getMarkerColor(status) {
     }
 }
 
-function drawLegend(ctx, W, H, stemData) {
-    // In tuning mode, use tuning events for the legend counts
+// ─── Legend Bar (HTML, outside canvas) ────────────────────────────────────
+
+function updateLegendBar(stemData, displayEvents) {
+    // Tuning indicator
+    const tuningLabel = document.getElementById('waveform-tuning-label');
+    if (tuningLabel) {
+        tuningLabel.classList.toggle('hidden', !waveformTuningActive);
+    }
+
+    // Legend items
+    const container = document.getElementById('waveform-legend-items');
+    if (!container) return;
+
     const events = (waveformTuningActive && waveformTuningEvents)
         ? waveformTuningEvents
         : getEventsForStem(stemData);
@@ -608,26 +722,32 @@ function drawLegend(ctx, W, H, stemData) {
         items.push({ color: '#9ca3af', label: `Sensitive (${sensitiveCount})` });
     }
 
-    if (items.length === 0) return;
+    container.innerHTML = items.map(item =>
+        `<span class="flex items-center gap-1">
+            <span class="inline-block w-2 h-2 rounded-full" style="background:${item.color}"></span>
+            <span class="text-gray-300">${item.label}</span>
+        </span>`
+    ).join('');
+}
 
-    ctx.font = '10px system-ui, sans-serif';
-    let x = W - 12;
+// ─── Crosshair ───────────────────────────────────────────────────────────
 
-    // Draw right-to-left
-    for (let i = items.length - 1; i >= 0; i--) {
-        const item = items[i];
-        const textW = ctx.measureText(item.label).width;
-        x -= textW;
-        ctx.fillStyle = item.color;
-        ctx.textAlign = 'left';
-        ctx.fillText(item.label, x, 18);
-        x -= 14;
-        // Color dot
-        ctx.beginPath();
-        ctx.arc(x + 4, 14, 4, 0, Math.PI * 2);
-        ctx.fill();
-        x -= 8;
-    }
+function drawCrosshair(ctx, canvas) {
+    if (waveformMouseX == null) return;
+
+    const rect = canvas.parentElement.getBoundingClientRect();
+    const H = rect.height;
+
+    ctx.save();
+    ctx.strokeStyle = WAVEFORM_COLORS.crosshair;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(waveformMouseX, 0);
+    ctx.lineTo(waveformMouseX, H);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
 }
 
 // ─── Tooltip ─────────────────────────────────────────────────────────────
@@ -649,14 +769,12 @@ function drawTooltip(ctx, event, W, H) {
     const tooltipW = 180;
     const tooltipH = lines.length * lineH + pad * 2;
 
-    // Position near mouse but keep on screen
     let tx = event._mouseX + 12;
     let ty = event._mouseY - tooltipH / 2;
     if (tx + tooltipW > W) tx = event._mouseX - tooltipW - 12;
     if (ty < 0) ty = 4;
     if (ty + tooltipH > H) ty = H - tooltipH - 4;
 
-    // Background
     ctx.fillStyle = WAVEFORM_COLORS.tooltipBg;
     ctx.strokeStyle = WAVEFORM_COLORS.tooltipBorder;
     ctx.lineWidth = 1;
@@ -664,7 +782,6 @@ function drawTooltip(ctx, event, W, H) {
     ctx.fill();
     ctx.stroke();
 
-    // Text
     ctx.fillStyle = WAVEFORM_COLORS.tooltipText;
     ctx.font = '11px system-ui, sans-serif';
     ctx.textAlign = 'left';
@@ -689,64 +806,158 @@ function roundRect(ctx, x, y, w, h, r) {
 
 // ─── Mouse Interaction ───────────────────────────────────────────────────
 
+function setupCanvasInteraction(canvas) {
+    canvas.addEventListener('mousemove', onCanvasMouseMove);
+    canvas.addEventListener('mouseleave', onCanvasMouseLeave);
+    canvas.addEventListener('wheel', onCanvasWheel, { passive: false });
+    canvas.addEventListener('mousedown', onCanvasDragStart);
+}
+
 function onCanvasMouseMove(e) {
-    if (!waveformCanvas || !waveformActiveStem || !waveformAnalysisData) return;
+    if (!waveformActiveStem || !waveformAnalysisData) return;
 
-    const rect = waveformCanvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+    const canvasRect = e.target.parentElement.getBoundingClientRect();
+    const mouseX = e.clientX - canvasRect.left;
+    const mouseY = e.clientY - canvasRect.top;
 
-    const W = rect.width;
-    const PADDING = { top: 10, bottom: 28, left: 45, right: 15 };
-    const plotW = W - PADDING.left - PADDING.right;
+    // Crosshair X (same for both canvases since they share width)
+    waveformMouseX = mouseX;
 
-    const stemData = waveformAnalysisData.stems[waveformActiveStem];
-    const configuredEvents = getEventsForStem(stemData);
-    // In tuning mode, hover over tuning events; otherwise use configured + optional sensitive
-    const displayEvents = (waveformTuningActive && waveformTuningEvents)
-        ? waveformTuningEvents
-        : configuredEvents;
-    const allEvents = (!waveformTuningActive && waveformShowSensitive)
-        ? displayEvents.concat(getSensitiveEventsForStem(stemData))
-        : displayEvents;
-
-    const { tMin, tMax } = computeTimeRange(
-        configuredEvents,
-        getSensitiveEventsForStem(stemData),
-        waveformEnvelopeCache[waveformActiveStem]
-    );
-
-    const xToTime = x => tMin + ((x - PADDING.left) / plotW) * (tMax - tMin);
-    const mouseTime = xToTime(mouseX);
-    const hitRadius = (tMax - tMin) / plotW * 5; // 5px tolerance
-
-    // Find closest event
-    let closest = null;
-    let closestDist = Infinity;
-    for (const evt of allEvents) {
-        if (evt.time == null) continue;
-        const dist = Math.abs(evt.time - mouseTime);
-        if (dist < hitRadius && dist < closestDist) {
-            closestDist = dist;
-            closest = evt;
-        }
+    // Handle drag (pan)
+    if (waveformIsDragging) {
+        const plotW = canvasRect.width - EVT_PAD.left - EVT_PAD.right;
+        const dx = (mouseX - waveformDragStartX) / plotW;
+        waveformPanOffset = waveformDragStartPan - dx;
+        clampPan();
+        drawWaveform();
+        return;
     }
 
-    if (closest) {
-        waveformHoverEvent = { ...closest, _mouseX: mouseX, _mouseY: mouseY };
-        waveformCanvas.style.cursor = 'crosshair';
+    // Event hit testing (on events panel only)
+    const isEventsPanel = e.target === eventsCanvas;
+    if (isEventsPanel) {
+        const stemData = waveformAnalysisData.stems[waveformActiveStem];
+        const configuredEvents = getEventsForStem(stemData);
+        const sensitiveEvents = getSensitiveEventsForStem(stemData);
+        const envelope = waveformEnvelopeCache[waveformActiveStem];
+
+        const { tMin: tMinFull, tMax: tMaxFull } = computeTimeRange(configuredEvents, sensitiveEvents, envelope);
+        const { tMin, tMax } = computeVisibleRange(tMinFull, tMaxFull);
+
+        const PAD = EVT_PAD;
+        const plotW = canvasRect.width - PAD.left - PAD.right;
+        const xToTime = x => tMin + ((x - PAD.left) / plotW) * (tMax - tMin);
+        const mouseTime = xToTime(mouseX);
+        const hitRadius = (tMax - tMin) / plotW * 5;
+
+        const displayEvents = (waveformTuningActive && waveformTuningEvents)
+            ? waveformTuningEvents
+            : configuredEvents;
+        const allEvents = (!waveformTuningActive && waveformShowSensitive)
+            ? displayEvents.concat(sensitiveEvents)
+            : displayEvents;
+
+        let closest = null;
+        let closestDist = Infinity;
+        for (const evt of allEvents) {
+            if (evt.time == null) continue;
+            const dist = Math.abs(evt.time - mouseTime);
+            if (dist < hitRadius && dist < closestDist) {
+                closestDist = dist;
+                closest = evt;
+            }
+        }
+
+        if (closest) {
+            waveformHoverEvent = { ...closest, _mouseX: mouseX, _mouseY: mouseY };
+        } else {
+            waveformHoverEvent = null;
+        }
     } else {
         waveformHoverEvent = null;
-        waveformCanvas.style.cursor = 'default';
     }
+
+    // Set cursor
+    const cursorStyle = waveformIsDragging ? 'grabbing' : (waveformZoom > 1 ? 'grab' : 'crosshair');
+    if (envelopeCanvas) envelopeCanvas.style.cursor = cursorStyle;
+    if (eventsCanvas) eventsCanvas.style.cursor = waveformHoverEvent ? 'crosshair' : cursorStyle;
 
     drawWaveform();
 }
 
 function onCanvasMouseLeave() {
+    waveformMouseX = null;
     waveformHoverEvent = null;
-    if (waveformCanvas) waveformCanvas.style.cursor = 'default';
+    if (envelopeCanvas) envelopeCanvas.style.cursor = 'default';
+    if (eventsCanvas) eventsCanvas.style.cursor = 'default';
     drawWaveform();
+}
+
+function onCanvasWheel(e) {
+    e.preventDefault();
+    if (!waveformActiveStem) return;
+
+    const canvasRect = e.target.parentElement.getBoundingClientRect();
+    const mouseX = e.clientX - canvasRect.left;
+    const PAD = EVT_PAD;
+    const plotW = canvasRect.width - PAD.left - PAD.right;
+
+    // Mouse position as fraction of visible plot
+    const mouseFrac = Math.max(0, Math.min(1, (mouseX - PAD.left) / plotW));
+
+    const oldZoom = waveformZoom;
+    const zoomFactor = e.deltaY < 0 ? 1.25 : 1 / 1.25;
+    waveformZoom = Math.max(1, Math.min(100, waveformZoom * zoomFactor));
+
+    // Adjust pan so the time under the mouse stays in place
+    if (waveformZoom > 1) {
+        const oldVisibleFrac = 1 / oldZoom;
+        const newVisibleFrac = 1 / waveformZoom;
+        const maxOldStart = 1 - oldVisibleFrac;
+        const oldStart = maxOldStart > 0 ? waveformPanOffset * maxOldStart : 0;
+        const timeAtMouse = oldStart + mouseFrac * oldVisibleFrac;
+        const newStart = timeAtMouse - mouseFrac * newVisibleFrac;
+        const maxNewStart = 1 - newVisibleFrac;
+        waveformPanOffset = maxNewStart > 0 ? newStart / maxNewStart : 0;
+    } else {
+        waveformPanOffset = 0;
+    }
+
+    clampPan();
+    drawWaveform();
+}
+
+function onCanvasDragStart(e) {
+    if (waveformZoom <= 1) return;
+    waveformIsDragging = true;
+    waveformDragStartX = e.clientX - e.target.parentElement.getBoundingClientRect().left;
+    waveformDragStartPan = waveformPanOffset;
+
+    const onMove = (me) => {
+        const canvasRect = e.target.parentElement.getBoundingClientRect();
+        const mouseX = me.clientX - canvasRect.left;
+        const plotW = canvasRect.width - EVT_PAD.left - EVT_PAD.right;
+        const dx = (mouseX - waveformDragStartX) / plotW;
+        waveformPanOffset = waveformDragStartPan - dx;
+        clampPan();
+        waveformMouseX = me.clientX - canvasRect.left;
+        drawWaveform();
+    };
+
+    const onUp = () => {
+        waveformIsDragging = false;
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        const cursorStyle = waveformZoom > 1 ? 'grab' : 'crosshair';
+        if (envelopeCanvas) envelopeCanvas.style.cursor = cursorStyle;
+        if (eventsCanvas) eventsCanvas.style.cursor = cursorStyle;
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+
+    if (envelopeCanvas) envelopeCanvas.style.cursor = 'grabbing';
+    if (eventsCanvas) eventsCanvas.style.cursor = 'grabbing';
 }
 
 // ─── Resize Handler ──────────────────────────────────────────────────────
