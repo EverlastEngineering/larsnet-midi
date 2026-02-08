@@ -7,6 +7,7 @@ Uses project_manager functions as the functional core.
 
 from flask import jsonify, request # type: ignore
 from pathlib import Path
+import json
 import sys
 
 # Add parent directory to path for imports
@@ -158,10 +159,27 @@ def get_project(project_number):
         if video_dir.exists():
             files['video'] = [f.name for f in video_dir.glob('*.mp4')]
         
+        # Check for analysis data
+        has_analysis = False
+        envelope_stems = []
+        if midi_dir.exists():
+            analysis_files = list(midi_dir.glob('*.analysis.json'))
+            if analysis_files:
+                has_analysis = True
+            # Check for envelope .npz files
+            for npz_file in midi_dir.glob('*.envelope.npz'):
+                # Extract stem type from filename: base.STEM.envelope.npz
+                parts = npz_file.suffixes  # ['.STEM', '.envelope', '.npz']
+                if len(parts) >= 3:
+                    stem_type = parts[-3].lstrip('.')
+                    envelope_stems.append(stem_type)
+        
         project_data = {
             **project,
             'path': str(project['path']),
-            'files': files
+            'files': files,
+            'has_analysis': has_analysis,
+            'envelope_stems': sorted(envelope_stems),
         }
         
         return jsonify({
@@ -228,6 +246,140 @@ def get_project_config(project_number, config_name):
     except Exception as e:
         return jsonify({
             'error': 'Failed to get config',
+            'message': str(e)
+        }), 500
+
+
+@projects_bp.route('/<int:project_number>/analysis', methods=['GET'])
+def get_project_analysis(project_number):
+    """
+    GET /api/projects/:project_number/analysis
+
+    Get analysis sidecar data (onset events, filtering decisions, spectral features).
+    Supports both v2 (events) and v3 (events_configured/events_sensitive) formats.
+
+    Returns:
+        200: Analysis JSON data
+        404: Project or analysis file not found
+    """
+    try:
+        project = get_project_by_number(project_number, USER_FILES_DIR)
+        if project is None:
+            return jsonify({
+                'error': 'Project not found',
+                'message': f'No project with number {project_number}'
+            }), 404
+
+        midi_dir = project['path'] / 'midi'
+        if not midi_dir.exists():
+            return jsonify({
+                'error': 'No analysis data',
+                'message': 'No MIDI directory found — run MIDI conversion first'
+            }), 404
+
+        analysis_files = list(midi_dir.glob('*.analysis.json'))
+        if not analysis_files:
+            return jsonify({
+                'error': 'No analysis data',
+                'message': 'No analysis.json found — run MIDI conversion first'
+            }), 404
+
+        with open(analysis_files[0], 'r') as f:
+            analysis_data = json.load(f)
+
+        return jsonify(analysis_data), 200
+
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to get analysis',
+            'message': str(e)
+        }), 500
+
+
+@projects_bp.route('/<int:project_number>/envelope/<stem_type>', methods=['GET'])
+def get_project_envelope(project_number, stem_type):
+    """
+    GET /api/projects/:project_number/envelope/:stem_type
+
+    Get energy envelope data for a specific stem, converted from .npz to JSON.
+    Returns downsampled arrays suitable for Canvas rendering.
+
+    Args:
+        stem_type: One of kick, snare, hihat, cymbals, toms
+
+    Returns:
+        200: {times: [...], left: [...], right: [...], sr, hop_length, method}
+        404: Project, stem, or envelope file not found
+    """
+    import numpy as np
+
+    try:
+        valid_stems = ['kick', 'snare', 'hihat', 'cymbals', 'toms']
+        if stem_type not in valid_stems:
+            return jsonify({
+                'error': 'Invalid stem type',
+                'message': f'Stem must be one of: {", ".join(valid_stems)}'
+            }), 400
+
+        project = get_project_by_number(project_number, USER_FILES_DIR)
+        if project is None:
+            return jsonify({
+                'error': 'Project not found',
+                'message': f'No project with number {project_number}'
+            }), 404
+
+        midi_dir = project['path'] / 'midi'
+        if not midi_dir.exists():
+            return jsonify({
+                'error': 'No envelope data',
+                'message': 'No MIDI directory found'
+            }), 404
+
+        # Find the .npz file for this stem
+        pattern = f'*.{stem_type}.envelope.npz'
+        npz_files = list(midi_dir.glob(pattern))
+        if not npz_files:
+            return jsonify({
+                'error': 'No envelope data',
+                'message': f'No envelope data for {stem_type} — re-run MIDI conversion to generate'
+            }), 404
+
+        data = np.load(npz_files[0], allow_pickle=False)
+
+        # Downsample if needed (target ~2000 points for efficient Canvas rendering)
+        times = data['times'].astype(float)
+        left = data['left'].astype(float)
+        right = data['right'].astype(float)
+
+        max_points = 2000
+        if len(times) > max_points:
+            step = len(times) / max_points
+            indices = np.arange(0, len(times), step).astype(int)[:max_points]
+            times = times[indices]
+            # Use max within each window for envelope (peak-preserving downsample)
+            left_ds = np.zeros(len(indices))
+            right_ds = np.zeros(len(indices))
+            for i, idx in enumerate(indices):
+                end = min(int(idx + step), len(data['left']))
+                left_ds[i] = data['left'][idx:end].max()
+                right_ds[i] = data['right'][idx:end].max()
+            left = left_ds
+            right = right_ds
+
+        return jsonify({
+            'stem_type': stem_type,
+            'times': [round(float(t), 4) for t in times],
+            'left': [round(float(v), 6) for v in left],
+            'right': [round(float(v), 6) for v in right],
+            'sr': int(data['sr']),
+            'hop_length': int(data['hop_length']),
+            'method': str(data['method']),
+            'sample_count': len(times),
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to get envelope',
             'message': str(e)
         }), 500
 

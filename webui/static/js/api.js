@@ -163,6 +163,14 @@ class LarsNetAPI {
         return await this.get(`/projects/${projectNumber}/jobs`);
     }
     
+    async getProjectAnalysis(projectNumber) {
+        return await this.get(`/projects/${projectNumber}/analysis`);
+    }
+    
+    async getProjectEnvelope(projectNumber, stemType) {
+        return await this.get(`/projects/${projectNumber}/envelope/${stemType}`);
+    }
+    
     async deleteProject(projectNumber) {
         try {
             const response = await fetch(`${API_BASE}/projects/${projectNumber}`, {

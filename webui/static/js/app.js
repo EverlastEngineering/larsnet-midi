@@ -88,6 +88,9 @@ function setupEventListeners() {
     // Operations toggle
     document.getElementById('operations-header').addEventListener('click', toggleOperations);
     
+    // Analysis toggle
+    document.getElementById('analysis-header').addEventListener('click', toggleAnalysis);
+    
     // Project details toggle
     document.getElementById('project-details-toggle').addEventListener('click', toggleProjectDetails);
     
@@ -405,6 +408,22 @@ function toggleDownloads() {
 }
 
 /**
+ * Toggle Analysis section
+ */
+function toggleAnalysis() {
+    const container = document.getElementById('analysis-container');
+    const icon = document.getElementById('analysis-toggle-icon');
+    
+    if (container.style.maxHeight && container.style.maxHeight !== '0px') {
+        container.style.maxHeight = '0px';
+        icon.style.transform = 'rotate(-90deg)';
+    } else {
+        container.style.maxHeight = container.scrollHeight + 'px';
+        icon.style.transform = 'rotate(0deg)';
+    }
+}
+
+/**
  * Toggle Operations section
  */
 function toggleOperations() {
@@ -426,6 +445,7 @@ function toggleOperations() {
 function updateCollapsibleHeights() {
     const containers = [
         document.getElementById('downloads-container'),
+        document.getElementById('analysis-container'),
         document.getElementById('operations-container'),
         document.getElementById('console-output-container')
     ];

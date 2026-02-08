@@ -211,6 +211,37 @@
                 transform: translateX(-100%);
             }
         }
+        
+        /* Waveform viewer */
+        .waveform-canvas-container {
+            position: relative;
+            width: 100%;
+            height: 200px;
+        }
+        .waveform-canvas-container canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        .waveform-stem-tab {
+            border: 1px solid transparent;
+        }
+        .waveform-tab-active {
+            background-color: var(--tab-accent);
+            color: white;
+            border-color: var(--tab-accent);
+        }
+        .waveform-tab-inactive {
+            background-color: #374151;
+            color: #9ca3af;
+            border-color: #4b5563;
+        }
+        .waveform-tab-inactive:hover {
+            background-color: #4b5563;
+            color: #e5e7eb;
+        }
     </style>
 </head>
 <body class="bg-gray-900 text-gray-100 svg-logo-font">
@@ -491,6 +522,34 @@
                             <div id="downloads-container" class="overflow-hidden transition-smooth">
                                 <div id="downloads-list" class="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4 p-3 md:p-4 pt-0">
                                     <!-- Download buttons will be added here -->
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Detection Analysis (waveform viewer) -->
+                        <div id="analysis-section" class="hidden bg-larsnet-dark rounded-lg border border-gray-700">
+                            <div class="flex items-center justify-between p-3 md:p-4 cursor-pointer hover:bg-gray-800 transition-smooth" id="analysis-header">
+                                <div class="flex items-center min-w-0">
+                                    <i id="analysis-toggle-icon" class="fas fa-chevron-down text-gray-400 mr-2 md:mr-3 transition-smooth flex-shrink-0"></i>
+                                    <h3 class="text-base md:text-lg font-semibold">Detection Analysis</h3>
+                                </div>
+                            </div>
+                            <div id="analysis-container" class="overflow-hidden transition-smooth">
+                                <div class="p-3 md:p-4 pt-0">
+                                    <!-- Stem tabs -->
+                                    <div class="flex items-center justify-between mb-3">
+                                        <div id="waveform-stem-tabs" class="flex gap-1.5 flex-wrap"></div>
+                                        <div id="waveform-sensitive-container" class="hidden flex items-center gap-1.5">
+                                            <label class="text-xs text-gray-400 cursor-pointer flex items-center gap-1.5">
+                                                <input type="checkbox" id="waveform-sensitive-toggle" class="rounded bg-gray-700 border-gray-600 text-larsnet-primary focus:ring-larsnet-primary focus:ring-offset-0">
+                                                <span>Show sensitive</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <!-- Canvas container -->
+                                    <div class="waveform-canvas-container bg-larsnet-darker rounded border border-gray-700">
+                                        <canvas id="waveform-canvas"></canvas>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -850,12 +909,13 @@
     </div>
     
     <!-- JavaScript -->
-    <script src="/static/js/api.js?v=15"></script>
-    <script src="/static/js/settings.js?v=15"></script>
-    <script src="/static/js/advanced-midi.js?v=15"></script>
-    <script src="/static/js/projects.js?v=15"></script>
-    <script src="/static/js/operations.js?v=15"></script>
-    <script src="/static/js/app.js?v=15"></script>
+    <script src="/static/js/api.js?v=16"></script>
+    <script src="/static/js/settings.js?v=16"></script>
+    <script src="/static/js/advanced-midi.js?v=16"></script>
+    <script src="/static/js/waveform.js?v=16"></script>
+    <script src="/static/js/projects.js?v=16"></script>
+    <script src="/static/js/operations.js?v=16"></script>
+    <script src="/static/js/app.js?v=16"></script>
     
 </body>
 </html>
