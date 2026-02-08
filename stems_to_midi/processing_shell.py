@@ -840,17 +840,21 @@ def process_stem_to_midi(
             geomean_threshold = spectral_config['geomean_threshold'] if spectral_config else None
             energy_labels = spectral_config['energy_labels'] if spectral_config else {}
             geomean_bands = spectral_config['geomean_bands'] if spectral_config else []
-            stem_config = config.get(stem_type, {})
+            freq_ranges = spectral_config.get('freq_ranges', {}) if spectral_config else {}
+            has_sustain = spectral_config.get('min_sustain_ms') is not None if spectral_config else False
+            show_badness = spectral_config.get('statistical_enabled', False) if spectral_config else False
+            display_hints = spectral_config.get('display_hints', []) if spectral_config else []
+            band_labels = [energy_labels.get(b, b.title()) for b in geomean_bands]
 
+            # Header block
             print("\n      ALL DETECTED ONSETS - SPECTRAL ANALYSIS:")
             if geomean_threshold is not None:
                 print(f"      Using GeoMean threshold: {geomean_threshold}")
             else:
                 print("      No threshold filtering (showing all detections)")
 
-            # Build legend from spectral config (domain-specific band names + freq ranges)
-            freq_ranges = spectral_config.get('freq_ranges', {}) if spectral_config else {}
-            legend_parts = ["Str=Onset Strength", "Amp=Peak Amplitude"]
+            # Column legend: band names with Hz ranges
+            col_parts = []
             for band_name in geomean_bands:
                 label = energy_labels.get(band_name, band_name.title())
                 freq_range = freq_ranges.get(band_name)
@@ -858,35 +862,20 @@ def process_stem_to_midi(
                     lo, hi = freq_range
                     lo_str = f"{lo/1000:.0f}k" if lo >= 1000 else f"{lo:.0f}"
                     hi_str = f"{hi/1000:.0f}k" if hi >= 1000 else f"{hi:.0f}"
-                    legend_parts.append(f"{label} ({lo_str}-{hi_str}Hz)")
+                    col_parts.append(f"{label} ({lo_str}-{hi_str}Hz)")
                 else:
-                    legend_parts.append(f"{label}")
-            if stem_type in ['hihat', 'cymbals']:
-                legend_parts.append("SustainMs=Sustain Duration")
-            print(f"      {', '.join(legend_parts)}")
-            if stem_type == 'hihat':
-                min_sustain_ms_display = stem_config.get('min_sustain_ms', 25)
-                print(f"      Minimum sustain duration: {min_sustain_ms_display}ms (filters out handclap bleed)")
-                open_sustain_ms = stem_config.get('open_sustain_ms', 150)
-                print(f"      Open/Closed threshold: {open_sustain_ms}ms (>={open_sustain_ms}ms = open hihat)")
-            elif stem_type == 'cymbals':
-                min_sustain_ms_display = stem_config.get('min_sustain_ms', 50)
-                print(f"      Minimum sustain duration: {min_sustain_ms_display}ms")
+                    col_parts.append(label)
+            print(f"      Columns: Str=Onset Strength, Amp=Peak Amplitude, {', '.join(col_parts)}")
 
-            # Build band labels for column headers from geomean_bands
-            band_labels = [energy_labels.get(b, b.title()) for b in geomean_bands]
-            
-            # Display GeoMean formula
-            if len(geomean_bands) >= 3:
-                print(f"      GeoMean=cbrt({'*'.join(band_labels)}) - measures combined spectral energy")
-            else:
-                print(f"      GeoMean=sqrt({'*'.join(band_labels)}) - measures combined spectral energy")
+            # Stem-specific context from spectral config (sustain thresholds, etc.)
+            for hint in display_hints:
+                print(f"      {hint}")
 
-            # Check if statistical filtering is enabled for kicks
-            show_badness = stem_type == 'kick' and spectral_config.get('statistical_enabled', False)
-            
-            # Build header row dynamically from band names
-            has_sustain = stem_type in ['cymbals', 'hihat']
+            # GeoMean formula
+            func = 'cbrt' if len(geomean_bands) >= 3 else 'sqrt'
+            print(f"      GeoMean={func}({'*'.join(band_labels)}) - measures combined spectral energy")
+
+            # Table header
             band_headers = ' '.join(f'{lbl:>8s}' for lbl in band_labels)
             header = f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {band_headers} {'Total':>8s} {'GeoMean':>8s}"
             if has_sustain:
@@ -896,6 +885,7 @@ def process_stem_to_midi(
             header += f" {'Status':>10s}"
             print(header)
 
+            # Table rows
             for idx, data in enumerate(all_onset_data):
                 is_real_hit = should_keep_onset(
                     geomean=data['geomean'],
@@ -906,7 +896,6 @@ def process_stem_to_midi(
                 )
                 status = 'KEPT' if is_real_hit else 'REJECTED'
                 
-                # Build row dynamically from band energies
                 band_values = ' '.join(f"{data.get(f'{b}_energy', 0.0):8.1f}" for b in geomean_bands)
                 row = f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {band_values} "
                 row += f"{data['total_energy']:8.1f} {data['geomean']:8.1f}"

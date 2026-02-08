@@ -178,6 +178,7 @@ class TestGetSpectralConfigForStem:
         assert result['energy_labels']['fundamental'] == 'Fundamental'
         assert result['energy_labels']['body'] == 'Body'
         assert result['energy_labels']['attack'] == 'Attack'
+        assert result['display_hints'] == []
     
     def test_snare_config(self):
         """Test snare configuration extraction."""
@@ -201,6 +202,7 @@ class TestGetSpectralConfigForStem:
         assert result['geomean_bands'] == ['body', 'wire']
         assert result['energy_labels']['body'] == 'Body'
         assert result['energy_labels']['wire'] == 'Wire'
+        assert result['display_hints'] == []
     
     def test_hihat_config(self):
         """Test hihat configuration extraction."""
@@ -221,6 +223,8 @@ class TestGetSpectralConfigForStem:
         assert result['energy_labels']['body'] == 'Body'
         assert result['energy_labels']['sizzle'] == 'Sizzle'
         assert result['min_sustain_ms'] == 25
+        assert len(result['display_hints']) == 2
+        assert '25ms' in result['display_hints'][0]
     
     def test_toms_config(self):
         """Test toms configuration extraction."""
@@ -242,6 +246,7 @@ class TestGetSpectralConfigForStem:
         assert result['energy_labels']['fundamental'] == 'Fundamental'
         assert result['energy_labels']['body'] == 'Body'
         assert result['geomean_threshold'] == 100.0
+        assert result['display_hints'] == []
     
     def test_cymbals_config(self):
         """Test cymbals configuration extraction."""
@@ -262,6 +267,8 @@ class TestGetSpectralConfigForStem:
         assert result['energy_labels']['brilliance'] == 'Brilliance'
         assert result['geomean_threshold'] == 15.0
         assert result['min_sustain_ms'] == 150
+        assert len(result['display_hints']) == 1
+        assert '150ms' in result['display_hints'][0]
     
     def test_unknown_stem(self):
         """Test handling of unknown stem type."""

@@ -736,6 +736,7 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
         - geomean_threshold: Threshold for filtering (or None)
         - min_sustain_ms: Minimum sustain duration (or None)
         - min_strength_threshold: Minimum onset strength (or None)
+        - display_hints: List of context strings for debug output (empty if none)
     """
     stem_config = config.get(stem_type, {})
     
@@ -753,7 +754,8 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
             'geomean_bands': ['body', 'wire'],
             'geomean_threshold': stem_config.get('geomean_threshold'),
             'min_sustain_ms': None,
-            'min_strength_threshold': stem_config.get('min_strength_threshold')
+            'min_strength_threshold': stem_config.get('min_strength_threshold'),
+            'display_hints': []
         }
     
     elif stem_type == 'kick':
@@ -771,7 +773,8 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
             'geomean_bands': ['fundamental', 'body', 'attack'],
             'geomean_threshold': stem_config.get('geomean_threshold'),
             'min_sustain_ms': None,
-            'min_strength_threshold': stem_config.get('min_strength_threshold')
+            'min_strength_threshold': stem_config.get('min_strength_threshold'),
+            'display_hints': []
         }
     
     elif stem_type == 'toms':
@@ -787,10 +790,17 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
             'geomean_bands': ['fundamental', 'body'],
             'geomean_threshold': stem_config.get('geomean_threshold'),
             'min_sustain_ms': None,
-            'min_strength_threshold': stem_config.get('min_strength_threshold')
+            'min_strength_threshold': stem_config.get('min_strength_threshold'),
+            'display_hints': []
         }
     
     elif stem_type == 'hihat':
+        min_sustain = stem_config.get('min_sustain_ms', 25)
+        open_sustain = stem_config.get('open_sustain_ms', 150)
+        hints = [
+            f"Minimum sustain duration: {min_sustain}ms (filters out handclap bleed)",
+            f"Open/Closed threshold: {open_sustain}ms (>={open_sustain}ms = open hihat)"
+        ]
         return {
             'freq_ranges': {
                 'body': (stem_config['body_freq_min'], stem_config['body_freq_max']),
@@ -802,11 +812,16 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
             },
             'geomean_bands': ['body', 'sizzle'],
             'geomean_threshold': stem_config.get('geomean_threshold'),
-            'min_sustain_ms': stem_config.get('min_sustain_ms', 25),
-            'min_strength_threshold': stem_config.get('min_strength_threshold')
+            'min_sustain_ms': min_sustain,
+            'min_strength_threshold': stem_config.get('min_strength_threshold'),
+            'display_hints': hints
         }
     
     elif stem_type == 'cymbals':
+        min_sustain = stem_config.get('min_sustain_ms', 150)
+        hints = [
+            f"Minimum sustain duration: {min_sustain}ms"
+        ]
         return {
             'freq_ranges': {
                 'body': (stem_config.get('body_freq_min', 1000), stem_config.get('body_freq_max', 4000)),
@@ -818,8 +833,9 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
             },
             'geomean_bands': ['body', 'brilliance'],
             'geomean_threshold': stem_config.get('geomean_threshold'),
-            'min_sustain_ms': stem_config.get('min_sustain_ms', 150),
-            'min_strength_threshold': stem_config.get('min_strength_threshold')
+            'min_sustain_ms': min_sustain,
+            'min_strength_threshold': stem_config.get('min_strength_threshold'),
+            'display_hints': hints
         }
     
     else:
