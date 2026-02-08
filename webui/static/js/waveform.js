@@ -18,10 +18,10 @@ const WAVEFORM_COLORS = {
     background: '#111827',
     axisLine: '#374151',
     axisText: '#9ca3af',
-    envelopeLeft: 'rgba(59, 130, 246, 0.5)',   // blue
-    envelopeRight: 'rgba(139, 92, 246, 0.35)',  // purple
-    envelopeFillLeft: 'rgba(59, 130, 246, 0.15)',
-    envelopeFillRight: 'rgba(139, 92, 246, 0.10)',
+    envelopeLeft: 'rgba(59, 130, 246, 0.8)',   // blue
+    envelopeRight: 'rgba(139, 92, 246, 0.6)',   // purple
+    envelopeFillLeft: 'rgba(59, 130, 246, 0.35)',
+    envelopeFillRight: 'rgba(139, 92, 246, 0.25)',
     thresholdLine: 'rgba(251, 191, 36, 0.7)',   // amber dashed
     markerKept: '#10b981',       // green
     markerFiltered: '#ef4444',   // red
@@ -475,7 +475,17 @@ function drawEnvelopeHalf(ctx, times, values, timeToX, centerY, direction, maxAm
 
     const sign = direction < 0 ? -1 : 1;
     const halfH = Math.abs(direction);
-    const normalize = v => (v / maxAmp) * halfH;
+
+    // Use dB-like log scaling so quiet passages are visible (like a real DAW).
+    // Maps amplitude to 0..1 using: dB_norm = 1 + dB/dynamicRange, clamped to [0,1].
+    // 60dB range means -60dB (1/1000th of max) still gets ~0% and full amplitude = 100%.
+    const dynamicRange = 60; // dB
+    const noiseFloor = maxAmp * Math.pow(10, -dynamicRange / 20); // -60dB below peak
+    const normalize = v => {
+        if (v <= noiseFloor) return 0;
+        const dB = 20 * Math.log10(v / maxAmp);
+        return Math.max(0, (1 + dB / dynamicRange)) * halfH;
+    };
 
     // Filled area from center
     ctx.beginPath();
