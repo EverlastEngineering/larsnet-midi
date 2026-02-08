@@ -21,8 +21,14 @@ Tracks progress against interactive-tuning.plan.md.
 
 ## Phase 2: Persist Waveform Data
 
-- [ ] Energy envelope saved as .npz during conversion
-- [ ] WebUI API endpoint to serve envelope data
+- [x] `detect_stereo_transient_peaks()` returns L/R envelope arrays + time axis
+- [x] `detect_onsets_energy_based()` passes envelope through `extra_data`
+- [x] `process_stem_to_midi()` returns `envelope_data` dict (times, left, right, sr, hop_length, method)
+- [x] `save_envelope_data()` / `load_envelope_data()` in midi.py — compressed .npz per stem
+- [x] CLI saves `{base_name}.{stem_type}.envelope.npz` alongside analysis.json
+- [x] 6 tests: smoke, round-trip, multi-stem, missing stem, None handling, file size
+- [x] Tests pass (701 passed, 5 pre-existing failures)
+- [ ] WebUI API endpoint to serve envelope data (deferred to Step 4)
 
 ## Phase 3: Dual-Sensitivity Detection
 
@@ -35,3 +41,5 @@ Tracks progress against interactive-tuning.plan.md.
 | Date | Decision | Rationale |
 |------|----------|-----------|
 | 2026-02-07 | Domain-specific names per stem, not universal generic names | analysis.json must be self-documenting; generic names lose physical meaning |
+| 2026-02-07 | Per-stem .npz files, not one combined file | WebUI loads stems on demand; separate files avoid loading all stem data at once |
+| 2026-02-07 | float32 compression in .npz | 3-min song envelope is ~62KB uncompressed, <100KB compressed — negligible overhead |

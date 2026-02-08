@@ -22,7 +22,7 @@ import sys
 
 # Import modules (thin orchestration layer)
 from stems_to_midi.config import DrumMapping
-from stems_to_midi.midi import create_midi_file, save_analysis_sidecar
+from stems_to_midi.midi import create_midi_file, save_analysis_sidecar, save_envelope_data
 from stems_to_midi.processing_shell import process_stem_to_midi
 
 # Import project manager
@@ -229,6 +229,8 @@ def _process_stems_to_midi(
         print(f"Progress: {song_start_progress}%")
         
         events_by_stem = {}
+        analysis_by_stem = {}
+        envelope_by_stem = {}
         
         # Process each stem type
         total_stems = len(stems_to_process)
@@ -265,12 +267,13 @@ def _process_stems_to_midi(
             if result and result.get('events'):
                 events_by_stem[stem_type] = result['events']
                 # Store analysis data for sidecar v2
-                if 'analysis_by_stem' not in locals():
-                    analysis_by_stem = {}
                 analysis_by_stem[stem_type] = {
                     'all_onset_data': result.get('all_onset_data', []),
                     'spectral_config': result.get('spectral_config')
                 }
+                # Store envelope data for waveform visualization
+                if result.get('envelope_data'):
+                    envelope_by_stem[stem_type] = result['envelope_data']
             
             # Progress: after each stem (0-90% of total)
             processed_stems += 1
@@ -295,10 +298,14 @@ def _process_stems_to_midi(
             )
             
             # Save analysis sidecar with spectral data (Detection Output Contract v2)
-            if 'analysis_by_stem' in locals():
-                save_analysis_sidecar(events_by_stem, midi_path, tempo=tempo, analysis_by_stem=analysis_by_stem)
-            else:
-                save_analysis_sidecar(events_by_stem, midi_path, tempo=tempo)
+            save_analysis_sidecar(
+                events_by_stem, midi_path, tempo=tempo,
+                analysis_by_stem=analysis_by_stem if analysis_by_stem else None
+            )
+            
+            # Save energy envelope data for waveform visualization
+            if envelope_by_stem:
+                save_envelope_data(envelope_by_stem, midi_path)
             
             # Progress: after MIDI creation (90-100% of total)
             midi_progress = int(90 + (song_idx / total_songs) * 10)

@@ -133,6 +133,10 @@ def detect_onsets_energy_based(
         'right_energies': right_energies,
         'pan_confidence': pan_confidence,
         'detection_method': 'energy_based_scipy',
+        # Energy envelope arrays for waveform visualization persistence
+        'envelope_times': result.get('envelope_times'),
+        'envelope_left': result.get('envelope_left'),
+        'envelope_right': result.get('envelope_right'),
     }
     
     return onset_times, onset_strengths, extra_data

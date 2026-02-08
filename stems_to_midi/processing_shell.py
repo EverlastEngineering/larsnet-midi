@@ -663,7 +663,10 @@ def process_stem_to_midi(
     # Step 1: Load and validate audio
     audio, sr = _load_and_validate_audio(audio_path, config, stem_type, max_duration)
     if audio is None:
-        return {'events': [], 'all_onset_data': [], 'spectral_config': None}
+        return {'events': [], 'all_onset_data': [], 'spectral_config': None, 'envelope_data': None}
+    
+    # Envelope data for waveform visualization (populated by energy-based detection)
+    envelope_data = None
     
     # Track if we're processing stereo (for pan metadata later)
     is_stereo = audio.ndim == 2
@@ -760,6 +763,16 @@ def process_stem_to_midi(
         pan_positions = extra_data.get('pan_positions')
         pan_classifications = extra_data.get('pan_classifications')
         
+        # Energy envelope for waveform visualization (persisted as .npz)
+        envelope_data = {
+            'times': extra_data.get('envelope_times'),
+            'left': extra_data.get('envelope_left'),
+            'right': extra_data.get('envelope_right'),
+            'sr': sr,
+            'hop_length': onset_params['hop_length'],
+            'method': energy_method,
+        }
+        
         # Summary of pan distribution
         if pan_classifications:
             left_count = pan_classifications.count('left')
@@ -779,7 +792,7 @@ def process_stem_to_midi(
     print(f"    Found {len(onset_times)} hits (before filtering) -> MIDI note {getattr(drum_mapping, stem_type)}")
     
     if len(onset_times) == 0:
-        return {'events': [], 'all_onset_data': [], 'spectral_config': None}
+        return {'events': [], 'all_onset_data': [], 'spectral_config': None, 'envelope_data': envelope_data}
     
     # Step 3: Calculate event durations (NEW)
     from .analysis_core import calculate_event_durations
@@ -1066,5 +1079,6 @@ def process_stem_to_midi(
     return {
         'events': events,
         'all_onset_data': all_onset_data,
-        'spectral_config': spectral_config
+        'spectral_config': spectral_config,
+        'envelope_data': envelope_data
     }

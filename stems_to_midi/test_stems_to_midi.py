@@ -17,7 +17,7 @@ from stems_to_midi.detection_shell import (
     detect_hihat_state
 )
 from stems_to_midi.processing_shell import process_stem_to_midi
-from stems_to_midi.midi import create_midi_file, read_midi_notes
+from stems_to_midi.midi import create_midi_file, read_midi_notes, save_envelope_data, load_envelope_data
 
 
 # ============================================================================
@@ -824,6 +824,141 @@ class TestGetSpectralConfigWithStrength:
         
         # Should have None if not specified
         assert spectral_config.get('min_strength_threshold') is None
+
+
+class TestEnvelopePersistence:
+    """Test save/load of energy envelope .npz files."""
+
+    def test_save_creates_npz_files(self, tmp_path):
+        """Level 1: Smoke test — save_envelope_data creates .npz files."""
+        midi_path = tmp_path / "test_song.mid"
+        midi_path.touch()
+
+        envelope_by_stem = {
+            'kick': {
+                'times': np.linspace(0, 10, 1000),
+                'left': np.random.rand(1000).astype(np.float32),
+                'right': np.random.rand(1000).astype(np.float32),
+                'sr': 44100,
+                'hop_length': 512,
+                'method': 'rms',
+            }
+        }
+
+        paths = save_envelope_data(envelope_by_stem, midi_path)
+        assert len(paths) == 1
+        assert paths[0].exists()
+        assert paths[0].name == 'test_song.kick.envelope.npz'
+
+    def test_round_trip_preserves_data(self, tmp_path):
+        """Level 2: Property test — save then load returns equivalent arrays."""
+        midi_path = tmp_path / "song.mid"
+        midi_path.touch()
+
+        times = np.linspace(0, 5, 500, dtype=np.float32)
+        left = np.random.rand(500).astype(np.float32)
+        right = np.random.rand(500).astype(np.float32)
+
+        envelope_by_stem = {
+            'snare': {
+                'times': times,
+                'left': left,
+                'right': right,
+                'sr': 22050,
+                'hop_length': 256,
+                'method': 'peak_hold',
+            }
+        }
+
+        save_envelope_data(envelope_by_stem, midi_path)
+        loaded = load_envelope_data(midi_path, 'snare')
+
+        assert loaded is not None
+        np.testing.assert_array_almost_equal(loaded['times'], times, decimal=5)
+        np.testing.assert_array_almost_equal(loaded['left'], left, decimal=5)
+        np.testing.assert_array_almost_equal(loaded['right'], right, decimal=5)
+        assert loaded['sr'] == 22050
+        assert loaded['hop_length'] == 256
+        assert loaded['method'] == 'peak_hold'
+
+    def test_multiple_stems_saved_independently(self, tmp_path):
+        """Level 2: Each stem gets its own .npz file."""
+        midi_path = tmp_path / "multi.mid"
+        midi_path.touch()
+
+        envelope_by_stem = {}
+        for stem in ['kick', 'snare', 'hihat']:
+            envelope_by_stem[stem] = {
+                'times': np.linspace(0, 3, 300, dtype=np.float32),
+                'left': np.ones(300, dtype=np.float32) * (hash(stem) % 100),
+                'right': np.ones(300, dtype=np.float32) * (hash(stem) % 50),
+                'sr': 44100,
+                'hop_length': 512,
+                'method': 'rms',
+            }
+
+        paths = save_envelope_data(envelope_by_stem, midi_path)
+        assert len(paths) == 3
+
+        # Each stem loads independently
+        for stem in ['kick', 'snare', 'hihat']:
+            loaded = load_envelope_data(midi_path, stem)
+            assert loaded is not None
+            expected_left = np.ones(300, dtype=np.float32) * (hash(stem) % 100)
+            np.testing.assert_array_almost_equal(loaded['left'], expected_left, decimal=5)
+
+    def test_load_missing_stem_returns_none(self, tmp_path):
+        """Level 1: Loading a non-existent stem returns None."""
+        midi_path = tmp_path / "missing.mid"
+        midi_path.touch()
+
+        loaded = load_envelope_data(midi_path, 'toms')
+        assert loaded is None
+
+    def test_none_envelope_skipped(self, tmp_path):
+        """Level 1: None envelope entries are skipped gracefully."""
+        midi_path = tmp_path / "partial.mid"
+        midi_path.touch()
+
+        envelope_by_stem = {
+            'kick': {
+                'times': np.linspace(0, 1, 100, dtype=np.float32),
+                'left': np.zeros(100, dtype=np.float32),
+                'right': np.zeros(100, dtype=np.float32),
+                'sr': 44100,
+                'hop_length': 512,
+                'method': 'rms',
+            },
+            'snare': None,  # No envelope (e.g. librosa path)
+        }
+
+        paths = save_envelope_data(envelope_by_stem, midi_path)
+        assert len(paths) == 1
+        assert 'kick' in paths[0].name
+
+    def test_compressed_file_size(self, tmp_path):
+        """Level 2: Compressed .npz is reasonably small for typical envelope."""
+        midi_path = tmp_path / "size_check.mid"
+        midi_path.touch()
+
+        # Typical 3-minute song at 44100 Hz / 512 hop = ~5168 frames
+        n_frames = 5168
+        envelope_by_stem = {
+            'kick': {
+                'times': np.linspace(0, 180, n_frames, dtype=np.float32),
+                'left': np.random.rand(n_frames).astype(np.float32),
+                'right': np.random.rand(n_frames).astype(np.float32),
+                'sr': 44100,
+                'hop_length': 512,
+                'method': 'rms',
+            }
+        }
+
+        paths = save_envelope_data(envelope_by_stem, midi_path)
+        file_size = paths[0].stat().st_size
+        # 3 arrays × 5168 × 4 bytes = ~62KB uncompressed
+        # Compressed should be well under 100KB
+        assert file_size < 100_000, f"Envelope .npz too large: {file_size} bytes"
 
 
 if __name__ == '__main__':

@@ -8,6 +8,7 @@ Includes JSON sidecar export for spectral analysis data (Detection Output Contra
 from midiutil import MIDIFile
 import mido
 import json
+import numpy as np
 from pathlib import Path
 from typing import Dict, List, Union, Optional
 
@@ -25,7 +26,9 @@ __all__ = [
     'create_midi_file',
     'read_midi_notes',
     'save_analysis_sidecar',
-    'load_analysis_sidecar'
+    'load_analysis_sidecar',
+    'save_envelope_data',
+    'load_envelope_data'
 ]
 
 
@@ -311,4 +314,95 @@ def load_analysis_sidecar(midi_path: Union[str, Path]) -> Optional[Dict]:
     
     with open(sidecar_path, 'r') as f:
         return json.load(f)
+
+
+def save_envelope_data(
+    envelope_by_stem: Dict[str, Dict],
+    midi_path: Union[str, Path]
+) -> List[Path]:
+    """
+    Save per-stem energy envelope arrays as .npz files for waveform visualization.
+    
+    Each stem gets its own file: {base}.{stem_type}.envelope.npz containing
+    the L/R energy envelope arrays, time axis, and detection parameters.
+    
+    Args:
+        envelope_by_stem: Dict mapping stem_type to envelope data dict with keys:
+            - times: np.ndarray of frame times in seconds
+            - left: np.ndarray of left channel energy values
+            - right: np.ndarray of right channel energy values
+            - sr: int sample rate
+            - hop_length: int hop length used
+            - method: str energy calculation method ('rms', 'peak_hold', etc.)
+        midi_path: Path to corresponding MIDI file (used to derive output paths)
+    
+    Returns:
+        List of paths to created .npz files
+    """
+    midi_path = Path(midi_path)
+    base = midi_path.with_suffix('')  # Remove .mid extension
+    saved_paths = []
+    
+    for stem_type, envelope in envelope_by_stem.items():
+        if envelope is None:
+            continue
+        
+        times = envelope.get('times')
+        left = envelope.get('left')
+        right = envelope.get('right')
+        
+        # Skip if no envelope data (e.g. librosa detection path)
+        if times is None or left is None or right is None:
+            continue
+        
+        npz_path = Path(f"{base}.{stem_type}.envelope.npz")
+        np.savez_compressed(
+            npz_path,
+            times=np.asarray(times, dtype=np.float32),
+            left=np.asarray(left, dtype=np.float32),
+            right=np.asarray(right, dtype=np.float32),
+            sr=np.array(envelope.get('sr', 44100)),
+            hop_length=np.array(envelope.get('hop_length', 512)),
+            method=np.array(envelope.get('method', 'rms'))
+        )
+        saved_paths.append(npz_path)
+    
+    if saved_paths:
+        stem_names = [p.suffixes[-2].lstrip('.') for p in saved_paths]
+        print(f"  Saved envelope data: {', '.join(stem_names)} ({len(saved_paths)} files)")
+    
+    return saved_paths
+
+
+def load_envelope_data(
+    midi_path: Union[str, Path],
+    stem_type: str
+) -> Optional[Dict]:
+    """
+    Load energy envelope data for a specific stem.
+    
+    Args:
+        midi_path: Path to MIDI file (used to derive .npz path)
+        stem_type: Stem type to load ('kick', 'snare', etc.)
+    
+    Returns:
+        Dict with keys: times, left, right, sr, hop_length, method.
+        Returns None if file not found.
+    """
+    midi_path = Path(midi_path)
+    base = midi_path.with_suffix('')
+    npz_path = Path(f"{base}.{stem_type}.envelope.npz")
+    
+    if not npz_path.exists():
+        return None
+    
+    data = np.load(npz_path, allow_pickle=False)
+    return {
+        'times': data['times'],
+        'left': data['left'],
+        'right': data['right'],
+        'sr': int(data['sr']),
+        'hop_length': int(data['hop_length']),
+        'method': str(data['method'])
+    }
 

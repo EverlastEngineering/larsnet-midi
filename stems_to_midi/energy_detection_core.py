@@ -551,6 +551,10 @@ def detect_stereo_transient_peaks(
         'left_energies': left_energies,
         'right_energies': right_energies,
         'pan_confidence': pan_confidence,
+        # Energy envelope arrays for waveform visualization
+        'envelope_times': left_times,
+        'envelope_left': left_energy,
+        'envelope_right': right_energy,
     }
 
 
