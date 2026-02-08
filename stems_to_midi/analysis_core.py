@@ -737,6 +737,13 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
         - min_sustain_ms: Minimum sustain duration (or None)
         - min_strength_threshold: Minimum onset strength (or None)
         - display_hints: List of context strings for debug output (empty if none)
+        
+        Capability flags (drive pipeline flow without stem_type checks):
+        - velocity_source: 'geomean' | 'onset_strength' | 'peak_amplitude'
+        - has_sustain_analysis: bool — collect sustain durations during filtering
+        - use_sustain_duration: bool — use sustain envelope for MIDI note duration
+        - has_spectral_data: bool — collect per-band spectral data for classification
+        - filter_mode: 'require_both' | 'geomean_only' — how geomean + sustain combine
     """
     stem_config = config.get(stem_type, {})
     
@@ -755,7 +762,12 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
             'geomean_threshold': stem_config.get('geomean_threshold'),
             'min_sustain_ms': None,
             'min_strength_threshold': stem_config.get('min_strength_threshold'),
-            'display_hints': []
+            'display_hints': [],
+            'velocity_source': 'geomean',
+            'has_sustain_analysis': False,
+            'use_sustain_duration': False,
+            'has_spectral_data': False,
+            'filter_mode': 'geomean_only'
         }
     
     elif stem_type == 'kick':
@@ -774,7 +786,12 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
             'geomean_threshold': stem_config.get('geomean_threshold'),
             'min_sustain_ms': None,
             'min_strength_threshold': stem_config.get('min_strength_threshold'),
-            'display_hints': []
+            'display_hints': [],
+            'velocity_source': 'geomean',
+            'has_sustain_analysis': False,
+            'use_sustain_duration': False,
+            'has_spectral_data': False,
+            'filter_mode': 'geomean_only'
         }
     
     elif stem_type == 'toms':
@@ -791,7 +808,12 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
             'geomean_threshold': stem_config.get('geomean_threshold'),
             'min_sustain_ms': None,
             'min_strength_threshold': stem_config.get('min_strength_threshold'),
-            'display_hints': []
+            'display_hints': [],
+            'velocity_source': 'geomean',
+            'has_sustain_analysis': False,
+            'use_sustain_duration': False,
+            'has_spectral_data': False,
+            'filter_mode': 'geomean_only'
         }
     
     elif stem_type == 'hihat':
@@ -814,7 +836,12 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
             'geomean_threshold': stem_config.get('geomean_threshold'),
             'min_sustain_ms': min_sustain,
             'min_strength_threshold': stem_config.get('min_strength_threshold'),
-            'display_hints': hints
+            'display_hints': hints,
+            'velocity_source': 'onset_strength',
+            'has_sustain_analysis': True,
+            'use_sustain_duration': False,
+            'has_spectral_data': True,
+            'filter_mode': 'geomean_only'
         }
     
     elif stem_type == 'cymbals':
@@ -835,7 +862,12 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
             'geomean_threshold': stem_config.get('geomean_threshold'),
             'min_sustain_ms': min_sustain,
             'min_strength_threshold': stem_config.get('min_strength_threshold'),
-            'display_hints': hints
+            'display_hints': hints,
+            'velocity_source': 'geomean',
+            'has_sustain_analysis': True,
+            'use_sustain_duration': True,
+            'has_spectral_data': False,
+            'filter_mode': 'require_both'
         }
     
     else:
@@ -983,9 +1015,11 @@ def should_keep_onset(
     sustain_ms: Optional[float],
     geomean_threshold: Optional[float],
     min_sustain_ms: Optional[float],
-    stem_type: str,
+    filter_mode: str = 'geomean_only',
     strength: Optional[float] = None,
-    min_strength_threshold: Optional[float] = None
+    min_strength_threshold: Optional[float] = None,
+    # Deprecated: use filter_mode instead
+    stem_type: Optional[str] = None
 ) -> bool:
     """
     Determine if an onset should be kept based on spectral/sustain/strength criteria.
@@ -997,14 +1031,24 @@ def should_keep_onset(
         sustain_ms: Sustain duration in milliseconds (None if not calculated)
         geomean_threshold: Threshold for geomean filtering (None to disable)
         min_sustain_ms: Minimum sustain threshold (None to disable)
-        stem_type: Type of stem (affects logic for hihat vs others)
+        filter_mode: How geomean and sustain thresholds combine:
+            - 'require_both': require BOTH geomean AND sustain (if both thresholds set)
+            - 'geomean_only': use geomean threshold only (sustain ignored for filtering)
         strength: Onset strength value (0-1, normalized)
         min_strength_threshold: Minimum onset strength required (None to disable)
+        stem_type: Deprecated — infers filter_mode if filter_mode not explicitly set
     
     Returns:
         True if onset should be kept, False if it should be rejected
     """
-    # Check strength first (applies to all stem types)
+    # Backward compatibility: infer filter_mode from stem_type if stem_type is provided
+    # and filter_mode is at default. This allows callers to migrate incrementally.
+    if stem_type is not None and filter_mode == 'geomean_only':
+        if stem_type == 'cymbals':
+            filter_mode = 'require_both'
+        # All other stems use 'geomean_only' (the default), so no change needed
+    
+    # Check strength first (applies to all filter modes)
     if min_strength_threshold is not None and strength is not None:
         if strength < min_strength_threshold:
             return False
@@ -1013,8 +1057,8 @@ def should_keep_onset(
     if geomean_threshold is None and min_sustain_ms is None:
         return True
     
-    # For cymbals: require BOTH geomean AND sustain (if both thresholds set)
-    if stem_type == 'cymbals':
+    # require_both: require BOTH geomean AND sustain (if both thresholds set)
+    if filter_mode == 'require_both':
         if geomean_threshold is not None and min_sustain_ms is not None:
             geomean_ok = geomean > geomean_threshold
             sustain_ok = (sustain_ms is not None) and (sustain_ms >= min_sustain_ms)
@@ -1024,22 +1068,11 @@ def should_keep_onset(
         elif geomean_threshold is not None:
             return geomean > geomean_threshold
     
-    # For hihat: use sustain OR geomean (more permissive)
-    elif stem_type == 'hihat':
-        # if min_sustain_ms is not None and sustain_ms is not None:
-        #     if sustain_ms >= min_sustain_ms:
-        #         return True
-        # if geomean_threshold is not None:
-        #     return geomean > geomean_threshold
+    # geomean_only: use geomean threshold only
+    else:
         if geomean_threshold is not None:
             if geomean <= geomean_threshold:
                 return False
-        return True
-    
-    # For other stems (kick, snare, toms): use geomean only
-    else:
-        if geomean_threshold is not None:
-            return geomean > geomean_threshold
         return True
 
 
@@ -1486,11 +1519,12 @@ def filter_onsets_by_spectral(
         - filtered_strengths: np.ndarray
         - filtered_amplitudes: np.ndarray
         - filtered_geomeans: np.ndarray
-        - filtered_sustains: List (for hihat and cymbals)
-        - filtered_spectral: List (for hihat only)
+        - filtered_sustains: List (when has_sustain_analysis is True)
+        - filtered_spectral: List (when has_spectral_data is True)
         - filtered_onset_data: List[SpectralOnsetData] - contract-compliant spectral data
         - all_onset_data: List[Dict] (analysis for all onsets, for debugging)
         - spectral_config: Dict (configuration used)
+        - decay_analysis: Dict or None (when enable_decay_filter ran)
     """
     if len(onset_times) == 0:
         return {
@@ -1517,8 +1551,8 @@ def filter_onsets_by_spectral(
     filtered_strengths = []
     filtered_amplitudes = []
     filtered_geomeans = []
-    filtered_sustains = []  # For hihat open/closed detection
-    filtered_spectral = []  # For hihat handclap detection
+    filtered_sustains = []  # For stems with has_sustain_analysis
+    filtered_spectral = []  # For stems with has_spectral_data
     filtered_onset_data = []  # Full spectral data for KEPT onsets (for Detection Output Contract)
     
     # Store raw spectral data for ALL onsets (for debug output)
@@ -1586,7 +1620,7 @@ def filter_onsets_by_spectral(
             sustain_ms=sustain_duration,
             geomean_threshold=geomean_threshold,
             min_sustain_ms=min_sustain_ms,
-            stem_type=stem_type,
+            filter_mode=spectral_config['filter_mode'],
             strength=strength,
             min_strength_threshold=spectral_config.get('min_strength_threshold')
         )
@@ -1643,146 +1677,138 @@ def filter_onsets_by_spectral(
             filtered_strengths.append(strength)
             filtered_amplitudes.append(peak_amplitude)
             filtered_geomeans.append(geomean)
-            # Store sustain duration and spectral data for hihat/cymbal classification
-            if stem_type in ['hihat', 'cymbals'] and sustain_duration is not None:
+            # Store sustain duration and spectral data for stems that analyze sustain
+            if spectral_config['has_sustain_analysis'] and sustain_duration is not None:
                 filtered_sustains.append(sustain_duration)
-                if stem_type == 'hihat':
-                    # Hihat open/closed detection uses body and sizzle energies
-                    filtered_spectral.append({
-                        'body_energy': band_energies.get('body', 0.0),
-                        'sizzle_energy': band_energies.get('sizzle', 0.0)
-                    })
+                if spectral_config['has_spectral_data']:
+                    # Per-band spectral data for classification (e.g., hihat open/closed)
+                    spectral_entry = {}
+                    for band_name in geomean_bands:
+                        spectral_entry[f'{band_name}_energy'] = band_energies.get(band_name, 0.0)
+                    filtered_spectral.append(spectral_entry)
             # Store full spectral data for this KEPT onset (Detection Output Contract)
             filtered_onset_data.append(onset_data.copy())
     
-    # SECOND PASS: Remove cymbal retriggering using decay pattern analysis
-    # Cymbals can have energy modulation during sustain that looks like new onsets
+    # SECOND PASS: Remove retriggering using decay pattern analysis
+    # Sustaining stems can have energy modulation during sustain that looks like new onsets
     # Analyze spectral decay pattern to distinguish true hits from decay artifacts
-    if stem_type == 'cymbals' and not learning_mode and len(filtered_times) > 1:
-        # Get decay filter window for cymbals (separate from sustain analysis window)
-        cymbal_config = config.get('cymbals', {})
-        enable_decay_filter = cymbal_config.get('enable_decay_filter', True)
+    stem_config_section = config.get(stem_type, {})
+    enable_decay_filter = stem_config_section.get('enable_decay_filter', False)
+    if enable_decay_filter and not learning_mode and len(filtered_times) > 1:
+        decay_filter_window_sec = stem_config_section.get('decay_filter_window_sec', 0.5)
         
-        if not enable_decay_filter:
-            # Skip decay filtering if disabled
-            pass
-        else:
-            decay_filter_window_sec = cymbal_config.get('decay_filter_window_sec', 0.5)
+        # Build list of times to keep
+        final_times = []
+        final_strengths = []
+        final_amplitudes = []
+        final_geomeans = []
+        final_sustains = []
+        final_onset_data = []  # Track spectral data through decay filter
+        
+        # Track all decay analysis for debug output
+        decay_analysis_data = []
+        
+        # Track active decay zones (onset_time -> decay pattern)
+        active_decays = {}
+        
+        for i in range(len(filtered_times)):
+            current_time = filtered_times[i]
+            current_sample = int(current_time * sr)
             
-            # Build list of times to keep
-            final_times = []
-            final_strengths = []
-            final_amplitudes = []
-            final_geomeans = []
-            final_sustains = []
-            final_onset_data = []  # Track spectral data through decay filter
+            # Check if this onset falls within any active decay zone
+            is_retrigger = False
+            prev_hit_time = None
+            prev_decay_rate = None
+            prev_is_decaying = None
+            time_since_prev = None
             
-            # Track all decay analysis for debug output
-            decay_analysis_data = []
-            
-            # Track active decay zones (onset_time -> decay pattern)
-            active_decays = {}
-            
-            for i in range(len(filtered_times)):
-                current_time = filtered_times[i]
-                current_sample = int(current_time * sr)
+            for prev_time, decay_info in active_decays.items():
+                time_diff = current_time - prev_time
                 
-                # Check if this onset falls within any active decay zone
-                is_retrigger = False
-                prev_hit_time = None
-                prev_decay_rate = None
-                prev_is_decaying = None
-                time_since_prev = None
+                # If within decay window
+                if 0 < time_diff < decay_filter_window_sec:
+                    # Check if we're in a decaying region
+                    if decay_info['is_decaying']:
+                        is_retrigger = True
+                        prev_hit_time = prev_time
+                        prev_decay_rate = decay_info['decay_rate']
+                        prev_is_decaying = decay_info['is_decaying']
+                        time_since_prev = time_diff
+                        break
+            
+            # Store analysis data
+            analysis_entry = {
+                'time': current_time,
+                'is_retrigger': is_retrigger,
+                'prev_hit_time': prev_hit_time,
+                'time_since_prev': time_since_prev,
+                'prev_decay_rate': prev_decay_rate,
+                'prev_is_decaying': prev_is_decaying,
+                'geomean': filtered_geomeans[i],
+                'sustain_ms': filtered_sustains[i] if i < len(filtered_sustains) else None
+            }
+            
+            if not is_retrigger:
+                # This is a legitimate hit - keep it
+                final_times.append(filtered_times[i])
+                final_strengths.append(filtered_strengths[i])
+                final_amplitudes.append(filtered_amplitudes[i])
+                final_geomeans.append(filtered_geomeans[i])
+                if i < len(filtered_sustains):
+                    final_sustains.append(filtered_sustains[i])
+                if i < len(filtered_onset_data):
+                    final_onset_data.append(filtered_onset_data[i])
                 
-                for prev_time, decay_info in active_decays.items():
-                    time_diff = current_time - prev_time
-                    
-                    # If within decay window
-                    if 0 < time_diff < decay_filter_window_sec:
-                        # Check if we're in a decaying region
-                        if decay_info['is_decaying']:
-                            is_retrigger = True
-                            prev_hit_time = prev_time
-                            prev_decay_rate = decay_info['decay_rate']
-                            prev_is_decaying = decay_info['is_decaying']
-                            time_since_prev = time_diff
-                            break
+                # Analyze decay pattern starting from this onset
+                decay_pattern = analyze_cymbal_decay_pattern(
+                    audio, current_sample, sr, 
+                    window_sec=decay_filter_window_sec,
+                    num_windows=8
+                )
                 
-                # Store analysis data
-                analysis_entry = {
-                    'time': current_time,
-                    'is_retrigger': is_retrigger,
-                    'prev_hit_time': prev_hit_time,
-                    'time_since_prev': time_since_prev,
-                    'prev_decay_rate': prev_decay_rate,
-                    'prev_is_decaying': prev_is_decaying,
-                    'geomean': filtered_geomeans[i],
-                    'sustain_ms': filtered_sustains[i] if i < len(filtered_sustains) else None
+                # Store decay pattern info in analysis entry
+                analysis_entry['own_decay_rate'] = decay_pattern['decay_rate']
+                analysis_entry['own_is_decaying'] = decay_pattern['is_decaying']
+                
+                # Store for checking subsequent onsets
+                active_decays[current_time] = decay_pattern
+                
+                # Clean up old decays outside the window
+                active_decays = {
+                    t: info for t, info in active_decays.items()
+                    if current_time - t < decay_filter_window_sec
                 }
-                
-                if not is_retrigger:
-                    # This is a legitimate hit - keep it
-                    final_times.append(filtered_times[i])
-                    final_strengths.append(filtered_strengths[i])
-                    final_amplitudes.append(filtered_amplitudes[i])
-                    final_geomeans.append(filtered_geomeans[i])
-                    if i < len(filtered_sustains):
-                        final_sustains.append(filtered_sustains[i])
-                    if i < len(filtered_onset_data):
-                        final_onset_data.append(filtered_onset_data[i])
-                    
-                    # Analyze decay pattern starting from this onset
-                    decay_pattern = analyze_cymbal_decay_pattern(
-                        audio, current_sample, sr, 
-                        window_sec=decay_filter_window_sec,
-                        num_windows=8
-                    )
-                    
-                    # Store decay pattern info in analysis entry
-                    analysis_entry['own_decay_rate'] = decay_pattern['decay_rate']
-                    analysis_entry['own_is_decaying'] = decay_pattern['is_decaying']
-                    
-                    # Store for checking subsequent onsets
-                    active_decays[current_time] = decay_pattern
-                    
-                    # Clean up old decays outside the window
-                    active_decays = {
-                        t: info for t, info in active_decays.items()
-                        if current_time - t < decay_filter_window_sec
-                    }
-                
-                decay_analysis_data.append(analysis_entry)
             
-            # Update filtered arrays
-            filtered_times = final_times
-            filtered_strengths = final_strengths
-            filtered_amplitudes = final_amplitudes
-            filtered_geomeans = final_geomeans
-            filtered_sustains = final_sustains
-            filtered_onset_data = final_onset_data
-            
-            # Update status in all_onset_data for retriggered events
-            final_times_set = set(final_times)
-            for onset_data in all_onset_data:
-                if onset_data['status'] == 'KEPT' and onset_data['time'] not in final_times_set:
-                    onset_data['status'] = 'FILTERED'  # Filtered by decay pass
-    
-    # THIRD PASS: Statistical outlier detection (kick only, if enabled)
-    # This catches snare bleed that passes geomean threshold but has abnormal Primary/Secondary ratio
-    
-    if stem_type == 'kick' and not learning_mode:
-        stem_config = config.get('kick', {})
-        enable_statistical = stem_config.get('enable_statistical_filter', False)
+            decay_analysis_data.append(analysis_entry)
         
-        if enable_statistical and len(all_onset_data) > 0:
+        # Update filtered arrays
+        filtered_times = final_times
+        filtered_strengths = final_strengths
+        filtered_amplitudes = final_amplitudes
+        filtered_geomeans = final_geomeans
+        filtered_sustains = final_sustains
+        filtered_onset_data = final_onset_data
+        
+        # Update status in all_onset_data for retriggered events
+        final_times_set = set(final_times)
+        for onset_data in all_onset_data:
+            if onset_data['status'] == 'KEPT' and onset_data['time'] not in final_times_set:
+                onset_data['status'] = 'FILTERED'  # Filtered by decay pass
+    
+    # THIRD PASS: Statistical outlier detection (if enabled for this stem)
+    # This catches bleed that passes geomean threshold but has abnormal band ratio
+    
+    enable_statistical = stem_config_section.get('enable_statistical_filter', False)
+    if enable_statistical and not learning_mode:
+        if len(all_onset_data) > 0:
             # Calculate statistical parameters from ALL detected onsets (including rejected ones)
             # This gives us the population statistics to compare against
             statistical_params = calculate_statistical_params(all_onset_data)
             
             # Get thresholds from config
-            badness_threshold = stem_config.get('statistical_badness_threshold', 0.6)
-            ratio_weight = stem_config.get('statistical_ratio_weight', 0.7)
-            total_weight = stem_config.get('statistical_total_weight', 0.3)
+            badness_threshold = stem_config_section.get('statistical_badness_threshold', 0.6)
+            ratio_weight = stem_config_section.get('statistical_ratio_weight', 0.7)
+            total_weight = stem_config_section.get('statistical_total_weight', 0.3)
             
             # Calculate badness scores for ALL onsets (for debug output)
             for onset_data in all_onset_data:
@@ -1834,9 +1860,9 @@ def filter_onsets_by_spectral(
             spectral_config['statistical_enabled'] = True
             spectral_config['badness_threshold'] = badness_threshold
     
-    # Prepare decay analysis data for return (only for cymbals with decay filter enabled)
+    # Prepare decay analysis data for return (present when decay filter ran)
     decay_analysis = None
-    if stem_type == 'cymbals' and 'decay_analysis_data' in locals():
+    if 'decay_analysis_data' in locals():
         decay_analysis = {
             'data': decay_analysis_data,
             'window_sec': decay_filter_window_sec
@@ -1986,7 +2012,9 @@ def predict_classification(
     geomean_threshold: float,
     sustain_ms: Optional[float] = None,
     sustain_threshold: Optional[float] = None,
-    stem_type: str = 'snare'
+    filter_mode: str = 'geomean_only',
+    # Deprecated: use filter_mode instead
+    stem_type: Optional[str] = None
 ) -> str:
     """
     Predict classification (KEPT/REMOVED) based on thresholds.
@@ -1998,18 +2026,23 @@ def predict_classification(
         geomean_threshold: Threshold for geomean
         sustain_ms: Sustain duration in milliseconds (optional)
         sustain_threshold: Threshold for sustain (optional)
-        stem_type: Type of stem (affects logic for cymbals)
+        filter_mode: 'require_both' | 'geomean_only'
+        stem_type: Deprecated — infers filter_mode if provided
     
     Returns:
         'KEPT' or 'REMOVED'
     """
-    # For cymbals, require both geomean AND sustain if both thresholds provided
-    if stem_type == 'cymbals' and sustain_threshold is not None and sustain_ms is not None:
+    # Backward compatibility
+    if stem_type is not None and filter_mode == 'geomean_only':
+        if stem_type == 'cymbals':
+            filter_mode = 'require_both'
+    
+    # require_both: require geomean AND sustain if both thresholds provided
+    if filter_mode == 'require_both' and sustain_threshold is not None and sustain_ms is not None:
         geomean_ok = geomean > geomean_threshold
         sustain_ok = sustain_ms > sustain_threshold
         return 'KEPT' if (geomean_ok and sustain_ok) else 'REMOVED'
     else:
-        # For other stems, just check geomean
         return 'KEPT' if geomean > geomean_threshold else 'REMOVED'
 
 
@@ -2017,7 +2050,9 @@ def analyze_threshold_performance(
     analysis_data: List[Dict],
     geomean_threshold: float,
     sustain_threshold: Optional[float] = None,
-    stem_type: str = 'snare'
+    filter_mode: str = 'geomean_only',
+    # Deprecated: use filter_mode instead
+    stem_type: Optional[str] = None
 ) -> Dict:
     """
     Analyze threshold performance on a dataset.
@@ -2028,7 +2063,8 @@ def analyze_threshold_performance(
         analysis_data: List of dicts with 'is_kept', 'geomean', 'sustain_ms' (optional)
         geomean_threshold: Threshold to test
         sustain_threshold: Sustain threshold (optional)
-        stem_type: Type of stem
+        filter_mode: 'require_both' | 'geomean_only'
+        stem_type: Deprecated — infers filter_mode if provided
     
     Returns:
         Dict with:
@@ -2049,7 +2085,8 @@ def analyze_threshold_performance(
             geomean_threshold,
             data.get('sustain_ms'),
             sustain_threshold,
-            stem_type
+            filter_mode=filter_mode,
+            stem_type=stem_type
         )
         
         user_actions.append(user_action)

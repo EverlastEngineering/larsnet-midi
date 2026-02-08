@@ -471,7 +471,8 @@ def _create_midi_events(
     drum_mapping: DrumMapping,
     config: Dict,
     sustain_durations: Optional[List[float]] = None,
-    spectral_data: Optional[List[Dict]] = None
+    spectral_data: Optional[List[Dict]] = None,
+    use_sustain_duration: bool = False
 ) -> List[Dict]:
     """
     Create MIDI events from onset data.
@@ -493,6 +494,7 @@ def _create_midi_events(
         config: Configuration dictionary
         sustain_durations: Optional list of sustain durations in milliseconds (for cymbals and hihat foot-close events)
         spectral_data: Optional list of spectral analysis dicts (Detection Output Contract)
+        use_sustain_duration: If True, use sustain_durations for note duration instead of time-to-next-hit
     
     Returns:
         List of MIDI event dictionaries with optional spectral fields
@@ -545,13 +547,13 @@ def _create_midi_events(
         else:
             midi_note = note
         
-        # Duration: use sustain duration for cymbals, otherwise time until next hit
-        if stem_type == 'cymbals' and sustain_durations is not None and i < len(sustain_durations):
+        # Duration: use sustain duration when configured, otherwise time until next hit
+        if use_sustain_duration and sustain_durations is not None and i < len(sustain_durations):
             # Use actual sustain duration from envelope analysis (in milliseconds)
             duration = sustain_durations[i] / 1000.0  # Convert ms to seconds
-            # Apply a more generous max for cymbals
-            cymbal_max = config.get(stem_type, {}).get('max_note_duration', 2.0)
-            duration = min(duration, cymbal_max)
+            # Apply stem-specific max duration
+            stem_max = config.get(stem_type, {}).get('max_note_duration', 2.0)
+            duration = min(duration, stem_max)
         elif i < len(onset_times) - 1:
             # Standard duration: until next hit
             duration = onset_times[i + 1] - time
@@ -772,11 +774,7 @@ def process_stem_to_midi(
     if learning_mode:
         print(f"    Learning mode: Ultra-sensitive detection (threshold={onset_params['threshold']})")
     else:
-        stem_config = config.get(stem_type, {})
-        if (stem_config.get('onset_threshold') is not None or 
-            stem_config.get('onset_delta') is not None or 
-            stem_config.get('onset_wait') is not None):
-            print(f"    {stem_type.capitalize()}-specific onset detection: threshold={onset_params['threshold']}, delta={onset_params['delta']}, wait={onset_params['wait']} (~{onset_params['wait']*11:.0f}ms min spacing)")
+        print(f"    Onset detection: threshold={onset_params['threshold']}, delta={onset_params['delta']}, wait={onset_params['wait']} (~{onset_params['wait']*11:.0f}ms min spacing)")
 
     print(f"    Found {len(onset_times)} hits (before filtering) -> MIDI note {getattr(drum_mapping, stem_type)}")
     
@@ -805,11 +803,13 @@ def process_stem_to_midi(
     
     # Initialize variables that may be used later (in case filtering is disabled)
     stem_geomeans = None
-    hihat_sustain_durations = None
-    hihat_spectral_data = None
-    cymbal_sustain_durations = None
+    sustain_durations = None
+    spectral_data = None
+    spectral_config = None
+    all_onset_data = []
+    filtered_onset_data = []
 
-    if stem_type in ['snare', 'kick', 'toms', 'hihat', 'cymbals'] and len(onset_times) > 0 and enable_spectral_filter:
+    if len(onset_times) > 0 and enable_spectral_filter:
         # Use functional core helper for filtering
         filter_result = filter_onsets_by_spectral(
             onset_times,
@@ -828,11 +828,10 @@ def process_stem_to_midi(
         onset_strengths = filter_result['filtered_strengths']
         peak_amplitudes = filter_result['filtered_amplitudes']
         stem_geomeans = filter_result['filtered_geomeans']
-        hihat_sustain_durations = filter_result['filtered_sustains'] if stem_type == 'hihat' else None
-        hihat_spectral_data = filter_result['filtered_spectral'] if stem_type == 'hihat' else None
-        cymbal_sustain_durations = filter_result['filtered_sustains'] if stem_type == 'cymbals' else None
-        all_onset_data = filter_result['all_onset_data']
         spectral_config = filter_result['spectral_config']
+        sustain_durations = filter_result['filtered_sustains'] if spectral_config.get('has_sustain_analysis') else None
+        spectral_data = filter_result['filtered_spectral'] if spectral_config.get('has_spectral_data') else None
+        all_onset_data = filter_result['all_onset_data']
         filtered_onset_data = filter_result.get('filtered_onset_data', [])
 
         # Show ALL onset data and spectral chart if debug flags are enabled
@@ -892,7 +891,7 @@ def process_stem_to_midi(
                     sustain_ms=data.get('sustain_ms'),
                     geomean_threshold=geomean_threshold,
                     min_sustain_ms=spectral_config.get('min_sustain_ms') if spectral_config else None,
-                    stem_type=stem_type
+                    filter_mode=spectral_config.get('filter_mode', 'geomean_only') if spectral_config else 'geomean_only'
                 )
                 status = 'KEPT' if is_real_hit else 'REJECTED'
                 
@@ -1002,26 +1001,22 @@ def process_stem_to_midi(
         open_sustain_threshold = hihat_config.get('open_sustain_ms', 150)
         hihat_states = detect_hihat_state(
             audio_mono, sr, onset_times,
-            sustain_durations=hihat_sustain_durations,
+            sustain_durations=sustain_durations,
             open_sustain_threshold_ms=open_sustain_threshold,
-            spectral_data=hihat_spectral_data,
+            spectral_data=spectral_data,
             config=config
         )
     else:
         hihat_states = ['closed'] * len(onset_times)
     
     # Step 7: Calculate normalized values for velocity
-    if stem_type in ['snare', 'kick', 'toms'] and stem_geomeans is not None and len(stem_geomeans) > 0:
-        # For spectrally-filtered stems, use geometric mean
+    # velocity_source capability flag determines which feature drives MIDI velocity
+    velocity_source = spectral_config.get('velocity_source', 'peak_amplitude') if spectral_config else 'peak_amplitude'
+    if velocity_source == 'geomean' and stem_geomeans is not None and len(stem_geomeans) > 0:
         normalized_values = normalize_values(stem_geomeans)
-    elif stem_type == 'hihat' and len(onset_strengths) > 0:
-        # For hihat, use onset strength (from detection) not peak amplitude
-        # peak_amplitude is measured 10ms after detection time, which can be:
-        # - Too early for loud hits (still in attack → reads as quiet)
-        # - Too late for quiet hits (past peak → reads as loud)
+    elif velocity_source == 'onset_strength' and len(onset_strengths) > 0:
         normalized_values = normalize_values(onset_strengths)
     elif len(peak_amplitudes) > 0:
-        # For other stems, use peak amplitude
         normalized_values = normalize_values(peak_amplitudes)
     else:
         normalized_values = np.array([])
@@ -1037,7 +1032,7 @@ def process_stem_to_midi(
         cymbal_classifications = _detect_cymbal_pitches(
             audio_mono, sr, onset_times, config,
             pan_positions=pan_positions,
-            spectral_data=filtered_onset_data if 'filtered_onset_data' in locals() else None
+            spectral_data=filtered_onset_data or None
         )
     
     # Step 8c: Detect and classify snare pitches (if applicable)
@@ -1046,14 +1041,7 @@ def process_stem_to_midi(
         snare_classifications = _detect_snare_pitches(audio_mono, sr, onset_times, config)
     
     # Step 9: Create MIDI events
-    # Pass sustain durations for cymbals (note duration) and hihats (foot-close timing)
-    if stem_type == 'cymbals':
-        sustain_durations_param = cymbal_sustain_durations
-    elif stem_type == 'hihat':
-        sustain_durations_param = hihat_sustain_durations
-    else:
-        sustain_durations_param = None
-    
+    # sustain_durations is already set from filter_result when has_sustain_analysis is True
     events = _create_midi_events(
         onset_times,
         normalized_values,
@@ -1067,8 +1055,9 @@ def process_stem_to_midi(
         snare_classifications,
         drum_mapping,
         config,
-        sustain_durations=sustain_durations_param,
-        spectral_data=filtered_onset_data
+        sustain_durations=sustain_durations,
+        spectral_data=filtered_onset_data,
+        use_sustain_duration=spectral_config.get('use_sustain_duration', False) if spectral_config else False
     )
     
     print(f"    Created {len(events)} MIDI events from {len(onset_times)} onsets")
@@ -1076,6 +1065,6 @@ def process_stem_to_midi(
     # Return dict with events and analysis data for sidecar v2
     return {
         'events': events,
-        'all_onset_data': all_onset_data if 'all_onset_data' in locals() else [],
-        'spectral_config': spectral_config if 'spectral_config' in locals() else None
+        'all_onset_data': all_onset_data,
+        'spectral_config': spectral_config
     }

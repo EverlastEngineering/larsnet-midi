@@ -223,10 +223,10 @@ def learn_threshold_from_midi(
             
             # Use functional core helpers for accuracy analysis
             current_performance = analyze_threshold_performance(
-                all_analysis, current_geomean_threshold, current_sustain_threshold, stem_type
+                all_analysis, current_geomean_threshold, current_sustain_threshold, stem_type=stem_type
             )
             suggest_performance = analyze_threshold_performance(
-                all_analysis, suggested_threshold, suggested_sustain_threshold, stem_type
+                all_analysis, suggested_threshold, suggested_sustain_threshold, stem_type=stem_type
             )
             
             # Display detailed table

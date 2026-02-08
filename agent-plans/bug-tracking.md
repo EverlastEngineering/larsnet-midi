@@ -11,6 +11,29 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 
 ## Open Bugs (Not Yet in GitHub)
 
+### 5 code default mismatches with midiconfig.yaml values
+- **Status**: Open
+- **Priority**: Medium
+- **Description**: Five settings have YAML values that differ from the code's `.get()` fallback default. The YAML value wins at runtime, but if a key is ever missing from a user's config, they get unexpected behavior.
+- **Details**:
+  1. `reverb_continuation_attack_threshold`: YAML=0.4, code default=0.2
+  2. `kick.statistical_badness_threshold`: YAML=0.3, code default=0.6
+  3. `hihat.detect_open`: YAML=true, code default=False
+  4. `hihat.open_sustain_ms`: YAML=100, code default=150
+  5. `snare.enable_pitch_detection`: YAML=false, code default=True
+- **Expected Behavior**: Code fallback defaults match the documented YAML values
+- **Actual Behavior**: Code fallbacks differ, creating silent behavioral drift
+- **Suggested Fix**: Align all code `.get()` fallbacks to match YAML values. See [midi-yaml-settings-suggestions.md](../docs/midi-yaml-settings-suggestions.md).
+
+### 11 dead config keys in midiconfig.yaml
+- **Status**: Open
+- **Priority**: Low
+- **Description**: Eleven settings in midiconfig.yaml are never read by the processing pipeline. They add confusion and maintenance burden.
+- **Details**: `onset_merge_window_ms` (5 stems), `hihat.enable_amplitude_refinement`, `hihat.decay_threshold`, `threshold_optimization.initial_threshold_step`, `threshold_optimization.convergence_patience`, `clustering.features`, plus 4 `learning_mode.*` settings.
+- **Expected Behavior**: All config keys should be consumed by code
+- **Actual Behavior**: These keys are silently ignored
+- **Suggested Fix**: Remove dead keys. See [deprecations.md](../docs/deprecations.md) for full list.
+
 ### Missing MIDI note mappings in config for multi-type classification
 - **Status**: Open
 - **Priority**: High

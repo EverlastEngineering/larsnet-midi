@@ -773,7 +773,8 @@ class TestFootCloseEvents:
             snare_classifications=None,
             drum_mapping=drum_mapping,
             config=config,
-            sustain_durations=sustain_durations
+            sustain_durations=sustain_durations,
+            use_sustain_duration=True  # Cymbals use sustain-based duration
         )
         
         # Should have only 1 cymbal note, no foot-close
