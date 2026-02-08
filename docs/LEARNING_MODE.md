@@ -299,8 +299,10 @@ If you process multiple songs with different drum sounds:
 The geometric mean is calculated as:
 
 ```
-GeoMean = √(Primary_Energy × Secondary_Energy)
+GeoMean = √(Band1_Energy × Band2_Energy)
 ```
+
+Where band names are domain-specific per stem (e.g., Body × Wire for snare, Body × Sizzle for hi-hat). Kick uses a 3-way geometric mean: `∛(Fundamental × Body × Attack)`.
 
 Why this works:
 - If either energy is 0, GeoMean = 0 (instant rejection)

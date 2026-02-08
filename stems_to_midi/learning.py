@@ -5,7 +5,7 @@ Handles threshold learning from user-edited MIDI files.
 
 Detection Output Contract (Consumer):
     This module CONSUMES SpectralOnsetData from analysis_core.py.
-    Uses: primary_energy, secondary_energy, tertiary_energy, strength, amplitude
+    Uses: domain-specific band energies (body_energy, wire_energy, etc.), strength, amplitude
     Contract defined in midi_types.py - see SpectralOnsetData TypedDict.
 """
 
@@ -23,7 +23,8 @@ from .analysis_core import (
     calculate_peak_amplitude,
     analyze_onset_spectral,
     calculate_threshold_from_distributions,
-    analyze_threshold_performance
+    analyze_threshold_performance,
+    get_spectral_config_for_stem
 )
 
 # Import MIDI reading
@@ -110,11 +111,10 @@ def learn_threshold_from_midi(
             # Segment too short or invalid stem type, skip
             continue
         
-        # Extract results from analysis
+        # Extract results from analysis (domain-specific band names)
         onset_sample = analysis['onset_sample']
-        primary_energy = analysis['primary_energy']
-        secondary_energy = analysis['secondary_energy']
-        tertiary_energy = analysis.get('tertiary_energy')  # Only for kick
+        geomean_bands = analysis.get('geomean_bands', [])
+        band_energies = {band: analysis.get(f'{band}_energy', 0.0) for band in geomean_bands}
         total_energy = analysis['total_energy']
         geomean = analysis['geomean']
         sustain_duration = analysis['sustain_ms'] or 0.0
@@ -135,16 +135,15 @@ def learn_threshold_from_midi(
             'time': orig_time,
             'strength': onset_strength,
             'amplitude': peak_amplitude,
-            'primary_energy': primary_energy,
-            'secondary_energy': secondary_energy,
             'total_energy': total_energy,
             'geomean': geomean,
+            'geomean_bands': geomean_bands,
             'is_kept': is_kept
         }
         
-        # Add tertiary energy if present (kick attack range)
-        if tertiary_energy is not None:
-            analysis_data['tertiary_energy'] = tertiary_energy
+        # Add domain-specific band energies
+        for band_name, energy in band_energies.items():
+            analysis_data[f'{band_name}_energy'] = energy
         
         # Add sustain duration for cymbals
         if stem_type == 'cymbals':
@@ -186,28 +185,41 @@ def learn_threshold_from_midi(
             current_geomean_threshold = config.get(stem_type, {}).get('geomean_threshold', 0)
             current_sustain_threshold = config.get(stem_type, {}).get('min_sustain_ms', 0) if stem_type == 'cymbals' else None
             
-            # Comprehensive header with all variables
+            # Build header dynamically from spectral config
+            try:
+                spectral_cfg = get_spectral_config_for_stem(stem_type, config)
+                learn_bands = spectral_cfg['geomean_bands']
+                learn_labels = spectral_cfg['energy_labels']
+                freq_ranges = spectral_cfg.get('freq_ranges', {})
+            except ValueError:
+                learn_bands = []
+                learn_labels = {}
+                freq_ranges = {}
+            
+            band_headers = ' '.join(f'{learn_labels.get(b, b.title()):>8s}' for b in learn_bands)
+            header = f"      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {band_headers} {'Total':>8s} {'GeoMean':>8s}"
             if stem_type == 'cymbals':
-                print(f"      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {'BodyE':>8s} {'BrillE':>8s} {'Total':>8s} {'GeoMean':>8s} {'Sustain':>8s} {'User':>8s} {'Current':>8s} {'Suggest':>8s} {'Result':>10s}")
-                print(f"      {'(s)':>8s} {'':>6s} {'':>6s} {'(1-4k)':>8s} {'(4-10k)':>8s} {'':>8s} {'':>8s} {'(ms)':>8s} {'Action':>8s} {'Config':>8s} {'Learn':>8s} {'':>10s}")
-            elif stem_type == 'snare':
-                print(f"      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {'BodyE':>8s} {'WireE':>8s} {'Total':>8s} {'GeoMean':>8s} {'User':>8s} {'Current':>8s} {'Suggest':>8s} {'Result':>10s}")
-                print(f"      {'(s)':>8s} {'':>6s} {'':>6s} {'(150-400)':>8s} {'(2-8k)':>8s} {'':>8s} {'':>8s} {'Action':>8s} {'Config':>8s} {'Learn':>8s} {'':>10s}")
-            elif stem_type == 'kick':
-                # Check if we have tertiary energy data (attack range)
-                has_tertiary = any('tertiary_energy' in d for d in all_analysis)
-                if has_tertiary:
-                    print(f"      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {'FundE':>8s} {'BodyE':>8s} {'AttackE':>8s} {'Total':>8s} {'GeoMean':>8s} {'User':>8s} {'Current':>8s} {'Suggest':>8s} {'Result':>10s}")
-                    print(f"      {'(s)':>8s} {'':>6s} {'':>6s} {'(40-80)':>8s} {'(80-150)':>8s} {'(2-6k)':>8s} {'':>8s} {'':>8s} {'Action':>8s} {'Config':>8s} {'Learn':>8s} {'':>10s}")
+                header += f" {'Sustain':>8s}"
+            header += f" {'User':>8s} {'Current':>8s} {'Suggest':>8s} {'Result':>10s}"
+            print(header)
+            
+            # Frequency range sub-header
+            band_freq_strs = []
+            for b in learn_bands:
+                fr = freq_ranges.get(b)
+                if fr:
+                    lo, hi = fr
+                    lo_s = f"{lo/1000:.0f}k" if lo >= 1000 else f"{lo:.0f}"
+                    hi_s = f"{hi/1000:.0f}k" if hi >= 1000 else f"{hi:.0f}"
+                    band_freq_strs.append(f"{'(' + lo_s + '-' + hi_s + ')':>8s}")
                 else:
-                    print(f"      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {'FundE':>8s} {'BodyE':>8s} {'Total':>8s} {'GeoMean':>8s} {'User':>8s} {'Current':>8s} {'Suggest':>8s} {'Result':>10s}")
-                    print(f"      {'(s)':>8s} {'':>6s} {'':>6s} {'(40-80)':>8s} {'(80-150)':>8s} {'':>8s} {'':>8s} {'Action':>8s} {'Config':>8s} {'Learn':>8s} {'':>10s}")
-            elif stem_type == 'toms':
-                print(f"      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {'FundE':>8s} {'BodyE':>8s} {'Total':>8s} {'GeoMean':>8s} {'User':>8s} {'Current':>8s} {'Suggest':>8s} {'Result':>10s}")
-                print(f"      {'(s)':>8s} {'':>6s} {'':>6s} {'(60-150)':>8s} {'(150-400)':>8s} {'':>8s} {'':>8s} {'Action':>8s} {'Config':>8s} {'Learn':>8s} {'':>10s}")
-            elif stem_type == 'hihat':
-                print(f"      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {'BodyE':>8s} {'SizzleE':>8s} {'Total':>8s} {'GeoMean':>8s} {'User':>8s} {'Current':>8s} {'Suggest':>8s} {'Result':>10s}")
-                print(f"      {'(s)':>8s} {'':>6s} {'':>6s} {'(500-2k)':>8s} {'(6-12k)':>8s} {'':>8s} {'':>8s} {'Action':>8s} {'Config':>8s} {'Learn':>8s} {'':>10s}")
+                    band_freq_strs.append(f"{'':>8s}")
+            freq_sub = ' '.join(band_freq_strs)
+            sub_header = f"      {'(s)':>8s} {'':>6s} {'':>6s} {freq_sub} {'':>8s} {'':>8s}"
+            if stem_type == 'cymbals':
+                sub_header += f" {'(ms)':>8s}"
+            sub_header += f" {'Action':>8s} {'Config':>8s} {'Learn':>8s} {'':>10s}"
+            print(sub_header)
             
             # Use functional core helpers for accuracy analysis
             current_performance = analyze_threshold_performance(
@@ -236,17 +248,15 @@ def learn_threshold_from_midi(
                 else:
                     result = '✗ Both Bad'
                 
-                # Print with all variables
+                # Print with domain-specific band energies
+                data_bands = data.get('geomean_bands', learn_bands)
+                band_vals = ' '.join(f"{data.get(f'{b}_energy', 0.0):8.1f}" for b in data_bands)
+                row = f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {band_vals} "
+                row += f"{data['total_energy']:8.1f} {data['geomean']:8.1f}"
                 if stem_type == 'cymbals':
-                    print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
-                          f"{data['total_energy']:8.1f} {data['geomean']:8.1f} {data.get('sustain_ms', 0):8.1f} {user_action:>8s} {current_would_be:>8s} {suggest_would_be:>8s} {result:>10s}")
-                elif stem_type == 'kick' and 'tertiary_energy' in data:
-                    # Kick with 3 frequency ranges
-                    print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} {data['tertiary_energy']:8.1f} "
-                          f"{data['total_energy']:8.1f} {data['geomean']:8.1f} {user_action:>8s} {current_would_be:>8s} {suggest_would_be:>8s} {result:>10s}")
-                else:
-                    print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
-                          f"{data['total_energy']:8.1f} {data['geomean']:8.1f} {user_action:>8s} {current_would_be:>8s} {suggest_would_be:>8s} {result:>10s}")
+                    row += f" {data.get('sustain_ms', 0):8.1f}"
+                row += f" {user_action:>8s} {current_would_be:>8s} {suggest_would_be:>8s} {result:>10s}"
+                print(row)
             
             # Display accuracy results
             current_acc = current_performance['accuracy']

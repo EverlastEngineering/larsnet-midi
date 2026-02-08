@@ -328,10 +328,10 @@ class TestHiHatStateDetection:
         onset_times = np.array([0.5, 1.0, 1.5, 2.0])
         sustain_durations = [80.0, 180.0, 50.0, 120.0]  # ms
         spectral_data = [
-            {'primary_energy': 100, 'secondary_energy': 200},   # Closed: GeoMean=141 < 262
-            {'primary_energy': 400, 'secondary_energy': 200},   # Open: GeoMean=283 > 262, Sustain=180 > 100
-            {'primary_energy': 180, 'secondary_energy': 200},   # Closed: GeoMean=190 < 262
-            {'primary_energy': 300, 'secondary_energy': 250}    # Open: GeoMean=274 > 262, Sustain=120 > 100
+            {'body_energy': 100, 'sizzle_energy': 200},   # Closed: GeoMean=141 < 262
+            {'body_energy': 400, 'sizzle_energy': 200},   # Open: GeoMean=283 > 262, Sustain=180 > 100
+            {'body_energy': 180, 'sizzle_energy': 200},   # Closed: GeoMean=190 < 262
+            {'body_energy': 300, 'sizzle_energy': 250}    # Open: GeoMean=274 > 262, Sustain=120 > 100
         ]
         
         # Dummy audio (not used when sustain_durations provided)
@@ -364,8 +364,8 @@ class TestHiHatStateDetection:
         onset_times = np.array([0.5, 1.0])
         sustain_durations = [30.0, 50.0]  # Short sustain
         spectral_data = [
-            {'primary_energy': 50, 'secondary_energy': 100},   # GeoMean=71 < 262 → closed
-            {'primary_energy': 100, 'secondary_energy': 150}   # GeoMean=122 < 262 → closed
+            {'body_energy': 50, 'sizzle_energy': 100},   # GeoMean=71 < 262 → closed
+            {'body_energy': 100, 'sizzle_energy': 150}   # GeoMean=122 < 262 → closed
         ]
         
         audio = np.zeros(44100 * 2)

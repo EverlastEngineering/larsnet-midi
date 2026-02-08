@@ -37,41 +37,48 @@ class SpectralOnsetData(TypedDict):
         time: Onset time in seconds
         strength: Normalized onset strength (0-1)
         amplitude: Peak amplitude at onset
-        primary_energy: Energy in primary band (stem-specific meaning)
-        secondary_energy: Energy in secondary band (stem-specific meaning)
         status: 'KEPT' | 'LEARNING' | 'FILTERED'
+        geomean_bands: Ordered list of band names for this stem type
+    
+    Dynamic Band Energy Fields:
+        Each stem type has domain-specific frequency band energies keyed
+        as '{band}_energy'. The geomean_bands list declares which bands
+        are present. Consumers iterate geomean_bands to discover keys.
+        
+        Snare:   body_energy (200-800Hz), wire_energy (4-8kHz)
+        Kick:    fundamental_energy (30-80Hz), body_energy (100-300Hz), attack_energy (2-5kHz)
+        HiHat:   body_energy (500-4kHz), sizzle_energy (8-16kHz)
+        Cymbals: body_energy (500-4kHz), brilliance_energy (8-16kHz)
+        Toms:    fundamental_energy (80-300Hz), body_energy (2-6kHz)
     
     Optional Fields (stem-specific):
-        tertiary_energy: Third energy band (kick only: mid frequencies)
-        body_wire_geomean: Geometric mean of body/wire for snare
+        geomean: Geometric mean of band energies (used for filtering)
         total_energy: Sum of all energy bands
         ratio: Energy ratio between bands
         sustain_ms: Sustain duration for cymbals/hihat
-        
-    Stem-Specific Energy Band Meanings:
-        Snare:  primary=Body(200-800Hz), secondary=Wire(4-8kHz)
-        Kick:   primary=Sub(30-80Hz), secondary=Click(2-5kHz), tertiary=Mid(100-300Hz)
-        HiHat:  primary=Body(500-4kHz), secondary=Sizzle(8-16kHz)
-        Cymbals: primary=Body(500-4kHz), secondary=Shimmer(8-16kHz)
-        Toms:   primary=Body(80-300Hz), secondary=Attack(2-6kHz)
     """
     # Required fields
     time: float
     strength: float
     amplitude: float
-    primary_energy: float
-    secondary_energy: float
     status: str
+    geomean_bands: NotRequired[List[str]]
     
-    # Optional fields (use NotRequired for type safety)
-    tertiary_energy: NotRequired[float]
-    body_wire_geomean: NotRequired[float]
+    # Domain-specific band energies (dynamic per stem, not exhaustively typed)
+    # Consumers use geomean_bands to discover which {band}_energy keys exist
+    body_energy: NotRequired[float]
+    wire_energy: NotRequired[float]
+    fundamental_energy: NotRequired[float]
+    attack_energy: NotRequired[float]
+    sizzle_energy: NotRequired[float]
+    brilliance_energy: NotRequired[float]
+    
+    # Computed / optional fields
+    geomean: NotRequired[float]
     total_energy: NotRequired[float]
     ratio: NotRequired[float]
     sustain_ms: NotRequired[float]
     low_energy: NotRequired[float]
-    energy_label_1: NotRequired[str]
-    energy_label_2: NotRequired[str]
 
 
 class StereoOnsetData(TypedDict):
@@ -127,11 +134,13 @@ class OnsetFeatures(TypedDict):
         spectral_flatness: Measure of noise-likeness (0=tonal, 1=noisy)
         pitch: Detected fundamental frequency in Hz (None if not detected)
         timing_delta: Time since previous onset in seconds (None for first onset)
-        primary_energy: Energy in primary frequency band (body range)
-        secondary_energy: Energy in secondary frequency band (brilliance range)
-        geomean: Geometric mean of primary and secondary energies
-        total_energy: Sum of primary and secondary energies
+        geomean_bands: Ordered list of band names (e.g., ['body', 'wire'])
+        geomean: Geometric mean of band energies
+        total_energy: Sum of all band energies
         sustain_ms: Duration of onset in milliseconds (None if not calculated)
+        
+    Dynamic band energy fields (keyed as '{band}_energy') are also present;
+    iterate geomean_bands to discover which ones exist.
     """
     time: float
     pan_confidence: float
@@ -140,16 +149,23 @@ class OnsetFeatures(TypedDict):
     spectral_flatness: float
     pitch: Optional[float]
     timing_delta: Optional[float]
-    primary_energy: float
-    secondary_energy: float
+    geomean_bands: NotRequired[List[str]]
+    body_energy: NotRequired[float]
+    wire_energy: NotRequired[float]
+    fundamental_energy: NotRequired[float]
+    attack_energy: NotRequired[float]
+    sizzle_energy: NotRequired[float]
+    brilliance_energy: NotRequired[float]
     geomean: float
     total_energy: float
     sustain_ms: Optional[float]
 
 
 # Contract field names for validation
-SPECTRAL_REQUIRED_FIELDS = {'time', 'strength', 'amplitude', 'primary_energy', 'secondary_energy', 'status'}
-SPECTRAL_OPTIONAL_FIELDS = {'tertiary_energy', 'body_wire_geomean', 'total_energy', 'ratio', 'sustain_ms', 'low_energy', 'energy_label_1', 'energy_label_2'}
+# Band energy fields are dynamic per stem — use geomean_bands to discover them
+SPECTRAL_REQUIRED_FIELDS = {'time', 'strength', 'amplitude', 'status'}
+SPECTRAL_BAND_ENERGY_FIELDS = {'body_energy', 'wire_energy', 'fundamental_energy', 'attack_energy', 'sizzle_energy', 'brilliance_energy'}
+SPECTRAL_OPTIONAL_FIELDS = {'geomean_bands', 'geomean', 'total_energy', 'ratio', 'sustain_ms', 'low_energy'} | SPECTRAL_BAND_ENERGY_FIELDS
 
 
 @dataclass(frozen=True)

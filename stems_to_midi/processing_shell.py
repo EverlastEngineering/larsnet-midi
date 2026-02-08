@@ -580,14 +580,16 @@ def _create_midi_events(
             # Common fields
             event['onset_strength'] = onset_info.get('strength')
             event['peak_amplitude'] = onset_info.get('amplitude')
-            event['geomean'] = onset_info.get('body_wire_geomean')
+            event['geomean'] = onset_info.get('geomean')
             event['total_energy'] = onset_info.get('total_energy')
             event['status'] = onset_info.get('status')
-            # Stem-specific energy bands (use generic names from contract)
-            event['primary_energy'] = onset_info.get('primary_energy')
-            event['secondary_energy'] = onset_info.get('secondary_energy')
-            if 'tertiary_energy' in onset_info:
-                event['tertiary_energy'] = onset_info.get('tertiary_energy')
+            # Domain-specific energy bands (body_energy, wire_energy, etc.)
+            geomean_bands = onset_info.get('geomean_bands', [])
+            event['geomean_bands'] = geomean_bands
+            for band_name in geomean_bands:
+                energy_key = f'{band_name}_energy'
+                if energy_key in onset_info:
+                    event[energy_key] = onset_info[energy_key]
             if 'sustain_ms' in onset_info:
                 event['sustain_ms'] = onset_info.get('sustain_ms')
         
@@ -836,7 +838,8 @@ def process_stem_to_midi(
         # Show ALL onset data and spectral chart if debug flags are enabled
         if show_all_onsets or show_spectral_data:
             geomean_threshold = spectral_config['geomean_threshold'] if spectral_config else None
-            energy_labels = spectral_config['energy_labels'] if spectral_config else {'primary': 'Primary', 'secondary': 'Secondary'}
+            energy_labels = spectral_config['energy_labels'] if spectral_config else {}
+            geomean_bands = spectral_config['geomean_bands'] if spectral_config else []
             stem_config = config.get(stem_type, {})
 
             print("\n      ALL DETECTED ONSETS - SPECTRAL ANALYSIS:")
@@ -845,52 +848,57 @@ def process_stem_to_midi(
             else:
                 print("      No threshold filtering (showing all detections)")
 
-            # Configure labels based on stem type
-            if stem_type == 'snare':
-                print("      Str=Onset Strength, Amp=Peak Amplitude, Primary=Body Energy (150-400Hz), Secondary=Wire Energy (2-8kHz)")
-            elif stem_type == 'kick':
-                print("      Str=Onset Strength, Amp=Peak Amplitude, Primary=Fundamental Energy (40-80Hz), Secondary=Body Energy (80-150Hz)")
-            elif stem_type == 'toms':
-                print("      Str=Onset Strength, Amp=Peak Amplitude, Primary=Fundamental Energy (60-150Hz), Secondary=Body Energy (150-400Hz)")
-            elif stem_type == 'hihat':
-                print("      Str=Onset Strength, Amp=Peak Amplitude, Primary=Body Energy (500-2kHz), Secondary=Sizzle Energy (6-12kHz), SustainMs=Sustain Duration")
-                min_sustain_ms = stem_config.get('min_sustain_ms', 25)
-                print(f"      Minimum sustain duration: {min_sustain_ms}ms (filters out handclap bleed)")
+            # Build legend from spectral config (domain-specific band names + freq ranges)
+            freq_ranges = spectral_config.get('freq_ranges', {}) if spectral_config else {}
+            legend_parts = ["Str=Onset Strength", "Amp=Peak Amplitude"]
+            for band_name in geomean_bands:
+                label = energy_labels.get(band_name, band_name.title())
+                freq_range = freq_ranges.get(band_name)
+                if freq_range:
+                    lo, hi = freq_range
+                    lo_str = f"{lo/1000:.0f}k" if lo >= 1000 else f"{lo:.0f}"
+                    hi_str = f"{hi/1000:.0f}k" if hi >= 1000 else f"{hi:.0f}"
+                    legend_parts.append(f"{label}={label} Energy ({lo_str}-{hi_str}Hz)")
+                else:
+                    legend_parts.append(f"{label}={label} Energy")
+            if stem_type in ['hihat', 'cymbals']:
+                legend_parts.append("SustainMs=Sustain Duration")
+            print(f"      {', '.join(legend_parts)}")
+            if stem_type == 'hihat':
+                min_sustain_ms_display = stem_config.get('min_sustain_ms', 25)
+                print(f"      Minimum sustain duration: {min_sustain_ms_display}ms (filters out handclap bleed)")
                 open_sustain_ms = stem_config.get('open_sustain_ms', 150)
                 print(f"      Open/Closed threshold: {open_sustain_ms}ms (>={open_sustain_ms}ms = open hihat)")
             elif stem_type == 'cymbals':
-                print("      Str=Onset Strength, Amp=Peak Amplitude, Primary=Body/Wash Energy (1-4kHz), Secondary=Brilliance/Attack Energy (4-10kHz), SustainMs=Sustain Duration")
-                min_sustain_ms = stem_config.get('min_sustain_ms', 50)
-                print(f"      Minimum sustain duration: {min_sustain_ms}ms")
+                min_sustain_ms_display = stem_config.get('min_sustain_ms', 50)
+                print(f"      Minimum sustain duration: {min_sustain_ms_display}ms")
 
-            energy_label_1 = energy_labels['primary']
-            energy_label_2 = energy_labels['secondary']
-            energy_label_3 = energy_labels.get('tertiary')  # Only for kick
+            # Build band labels for column headers from geomean_bands
+            band_labels = [energy_labels.get(b, b.title()) for b in geomean_bands]
             
-            # Display GeoMean formula (2-way or 3-way)
-            if energy_label_3:
-                print(f"      GeoMean=cbrt({energy_label_1}*{energy_label_2}*{energy_label_3}) - measures combined spectral energy")
+            # Display GeoMean formula
+            if len(geomean_bands) >= 3:
+                print(f"      GeoMean=cbrt({'*'.join(band_labels)}) - measures combined spectral energy")
             else:
-                print(f"      GeoMean=sqrt({energy_label_1}*{energy_label_2}) - measures combined spectral energy")
+                print(f"      GeoMean=sqrt({'*'.join(band_labels)}) - measures combined spectral energy")
 
             # Check if statistical filtering is enabled for kicks
             show_badness = stem_type == 'kick' and spectral_config.get('statistical_enabled', False)
             
-            # Header row - different formats for different stem types
-            if stem_type in ['cymbals', 'hihat']:
-                print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'SustainMs':>10s} {'Status':>10s}")
-            elif stem_type == 'kick' and energy_label_3:
-                # Kick with 3 frequency ranges
-                if show_badness:
-                    print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {energy_label_3:>8s} {'Total':>8s} {'GeoMean':>8s} {'Badness':>8s} {'Status':>10s}")
-                else:
-                    print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {energy_label_3:>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
-            else:
-                print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
+            # Build header row dynamically from band names
+            has_sustain = stem_type in ['cymbals', 'hihat']
+            band_headers = ' '.join(f'{lbl:>8s}' for lbl in band_labels)
+            header = f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {band_headers} {'Total':>8s} {'GeoMean':>8s}"
+            if has_sustain:
+                header += f" {'SustainMs':>10s}"
+            if show_badness:
+                header += f" {'Badness':>8s}"
+            header += f" {'Status':>10s}"
+            print(header)
 
             for idx, data in enumerate(all_onset_data):
                 is_real_hit = should_keep_onset(
-                    geomean=data['body_wire_geomean'],
+                    geomean=data['geomean'],
                     sustain_ms=data.get('sustain_ms'),
                     geomean_threshold=geomean_threshold,
                     min_sustain_ms=spectral_config.get('min_sustain_ms') if spectral_config else None,
@@ -898,29 +906,22 @@ def process_stem_to_midi(
                 )
                 status = 'KEPT' if is_real_hit else 'REJECTED'
                 
-                # Format output based on stem type
-                if stem_type in ['cymbals', 'hihat']:
-                    sustain_str = f"{data.get('sustain_ms', 0):10.1f}"
-                    print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
-                          f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {sustain_str} {status:>10s}")
-                elif stem_type == 'kick' and 'tertiary_energy' in data:
-                    # Kick with 3 frequency ranges
-                    if show_badness and 'badness_score' in data:
-                        badness_str = f"{data['badness_score']:8.3f}"
-                        print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} {data['tertiary_energy']:8.1f} "
-                              f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {badness_str} {status:>10s}")
-                    else:
-                        print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} {data['tertiary_energy']:8.1f} "
-                              f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")
-                else:
-                    print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
-                          f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")
+                # Build row dynamically from band energies
+                band_values = ' '.join(f"{data.get(f'{b}_energy', 0.0):8.1f}" for b in geomean_bands)
+                row = f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {band_values} "
+                row += f"{data['total_energy']:8.1f} {data['geomean']:8.1f}"
+                if has_sustain:
+                    row += f" {data.get('sustain_ms', 0):10.1f}"
+                if show_badness and 'badness_score' in data:
+                    row += f" {data['badness_score']:8.3f}"
+                row += f" {status:>10s}"
+                print(row)
 
             # Show summary statistics
             print("\n      FILTERING SUMMARY:")
             if geomean_threshold is not None:
-                kept_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] > geomean_threshold]
-                rejected_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] <= geomean_threshold]
+                kept_geomeans = [d['geomean'] for d in all_onset_data if d['geomean'] > geomean_threshold]
+                rejected_geomeans = [d['geomean'] for d in all_onset_data if d['geomean'] <= geomean_threshold]
                 print(f"        Pass 1 - GeoMean threshold: {geomean_threshold} (adjustable in midiconfig.yaml)")
                 print(f"        Total onsets detected: {len(all_onset_data)}")
                 print(f"        Pass 1 Kept (GeoMean > {geomean_threshold}): {len(kept_geomeans)}")
@@ -937,7 +938,7 @@ def process_stem_to_midi(
                     
                     print("\n        Pass 2 - Statistical Outlier Detection:")
                     print(f"        Badness threshold: {badness_threshold} (adjustable in midiconfig.yaml)")
-                    print(f"        Median Primary/Secondary ratio: {stats_params['median_ratio']:.3f}")
+                    print(f"        Median band ratio: {stats_params['median_ratio']:.3f}")
                     print(f"        Median Total energy: {stats_params['median_total']:.1f}")
                     
                     # Count pass 2 results
@@ -954,7 +955,7 @@ def process_stem_to_midi(
             else:
                 print("        No threshold filtering enabled")
                 print(f"        Total onsets detected: {len(all_onset_data)} (all kept)")
-                all_geomeans = [d['body_wire_geomean'] for d in all_onset_data]
+                all_geomeans = [d['geomean'] for d in all_onset_data]
                 if all_geomeans:
                     print(f"        GeoMean range: {min(all_geomeans):.1f} - {max(all_geomeans):.1f}")
 

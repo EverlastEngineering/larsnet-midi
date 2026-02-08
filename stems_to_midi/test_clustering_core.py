@@ -39,8 +39,8 @@ class TestFeaturesToArray:
                 'spectral_flatness': 0.3,
                 'pitch': 440.0,
                 'timing_delta': 0.5,
-                'primary_energy': 100.0,
-                'secondary_energy': 50.0,
+                'body_energy': 100.0,
+                'brilliance_energy': 50.0,
                 'geomean': 70.7,
                 'total_energy': 150.0,
                 'sustain_ms': 200.0
@@ -53,8 +53,8 @@ class TestFeaturesToArray:
                 'spectral_flatness': 0.4,
                 'pitch': 880.0,
                 'timing_delta': 0.5,
-                'primary_energy': 120.0,
-                'secondary_energy': 60.0,
+                'body_energy': 120.0,
+                'brilliance_energy': 60.0,
                 'geomean': 84.9,
                 'total_energy': 180.0,
                 'sustain_ms': 250.0
@@ -63,7 +63,7 @@ class TestFeaturesToArray:
         
         array = features_to_array(features)
         
-        assert array.shape == (2, 11)  # 2 onsets, 11 features (excluding time)
+        assert array.shape == (2, 15)  # 2 onsets, 15 features (excluding time)
         assert array[0, 0] == -0.8  # pan_confidence
         assert array[1, 1] == 3000.0  # spectral_centroid
     

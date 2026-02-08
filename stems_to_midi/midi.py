@@ -190,6 +190,11 @@ def save_analysis_sidecar(
             logic['geomean_threshold'] = _round_value(spectral_config.get('geomean_threshold'), 2)
             logic['min_sustain_ms'] = _round_value(spectral_config.get('min_sustain_ms'), 2)
             
+            # Record frequency band metadata so sidecar is self-documenting
+            geomean_bands = spectral_config.get('geomean_bands', [])
+            if geomean_bands:
+                logic['freq_bands'] = geomean_bands
+            
             # Cymbal-specific logic
             if stem_type == 'cymbals':
                 logic['decay_filter_enabled'] = spectral_config.get('decay_filter_enabled', True)
@@ -224,8 +229,9 @@ def save_analysis_sidecar(
                 }
                 
                 # Add spectral features with rounding
-                for field in ['strength', 'amplitude', 'primary_energy', 'secondary_energy',
-                             'tertiary_energy', 'geomean', 'total_energy', 'sustain_ms']:
+                # Band energy fields are dynamic per stem (e.g., body_energy, wire_energy)
+                band_fields = [f'{b}_energy' for b in onset_data.get('geomean_bands', [])]
+                for field in ['strength', 'amplitude'] + band_fields + ['geomean', 'total_energy', 'sustain_ms']:
                     value = onset_data.get(field)
                     if value is not None:
                         event[field] = _round_value(value, 2)
@@ -261,8 +267,9 @@ def save_analysis_sidecar(
                 }
                 
                 # Add spectral fields if present
-                for field in ['onset_strength', 'peak_amplitude', 'primary_energy',
-                             'secondary_energy', 'tertiary_energy', 'geomean',
+                # Band energy fields are dynamic per stem (e.g., body_energy, wire_energy)
+                band_fields = [f'{b}_energy' for b in midi_event.get('geomean_bands', [])]
+                for field in ['onset_strength', 'peak_amplitude'] + band_fields + ['geomean',
                              'total_energy', 'sustain_ms']:
                     value = midi_event.get(field)
                     if value is not None:

@@ -719,6 +719,9 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
     """
     Get spectral configuration for a specific stem type.
     
+    Uses domain-specific frequency band names so that downstream data
+    (onset_data dicts, analysis.json) is self-documenting.
+    
     Pure function - extracts config without side effects.
     
     Args:
@@ -727,10 +730,12 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
     
     Returns:
         Dict with:
-        - freq_ranges: Dict of frequency ranges
-        - energy_labels: Dict mapping range names to display labels
+        - freq_ranges: Dict of frequency ranges keyed by domain-specific names
+        - energy_labels: Dict mapping band names to display labels
+        - geomean_bands: Ordered list of band names used for geomean calculation
         - geomean_threshold: Threshold for filtering (or None)
         - min_sustain_ms: Minimum sustain duration (or None)
+        - min_strength_threshold: Minimum onset strength (or None)
     """
     stem_config = config.get(stem_type, {})
     
@@ -738,13 +743,14 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
         return {
             'freq_ranges': {
                 'low': (stem_config['low_freq_min'], stem_config['low_freq_max']),
-                'primary': (stem_config['body_freq_min'], stem_config['body_freq_max']),
-                'secondary': (stem_config['wire_freq_min'], stem_config['wire_freq_max'])
+                'body': (stem_config['body_freq_min'], stem_config['body_freq_max']),
+                'wire': (stem_config['wire_freq_min'], stem_config['wire_freq_max'])
             },
             'energy_labels': {
-                'primary': 'Primary',
-                'secondary': 'Secondary'
+                'body': 'Body',
+                'wire': 'Wire'
             },
+            'geomean_bands': ['body', 'wire'],
             'geomean_threshold': stem_config.get('geomean_threshold'),
             'min_sustain_ms': None,
             'min_strength_threshold': stem_config.get('min_strength_threshold')
@@ -753,15 +759,16 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
     elif stem_type == 'kick':
         return {
             'freq_ranges': {
-                'primary': (stem_config['fundamental_freq_min'], stem_config['fundamental_freq_max']),
-                'secondary': (stem_config['body_freq_min'], stem_config['body_freq_max']),
-                'tertiary': (stem_config['attack_freq_min'], stem_config['attack_freq_max'])
+                'fundamental': (stem_config['fundamental_freq_min'], stem_config['fundamental_freq_max']),
+                'body': (stem_config['body_freq_min'], stem_config['body_freq_max']),
+                'attack': (stem_config['attack_freq_min'], stem_config['attack_freq_max'])
             },
             'energy_labels': {
-                'primary': 'Primary',
-                'secondary': 'Secondary',
-                'tertiary': 'Tertiary'
+                'fundamental': 'Fundamental',
+                'body': 'Body',
+                'attack': 'Attack'
             },
+            'geomean_bands': ['fundamental', 'body', 'attack'],
             'geomean_threshold': stem_config.get('geomean_threshold'),
             'min_sustain_ms': None,
             'min_strength_threshold': stem_config.get('min_strength_threshold')
@@ -770,13 +777,14 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
     elif stem_type == 'toms':
         return {
             'freq_ranges': {
-                'primary': (stem_config['fundamental_freq_min'], stem_config['fundamental_freq_max']),
-                'secondary': (stem_config['body_freq_min'], stem_config['body_freq_max'])
+                'fundamental': (stem_config['fundamental_freq_min'], stem_config['fundamental_freq_max']),
+                'body': (stem_config['body_freq_min'], stem_config['body_freq_max'])
             },
             'energy_labels': {
-                'primary': 'Primary',
-                'secondary': 'Secondary'
+                'fundamental': 'Fundamental',
+                'body': 'Body'
             },
+            'geomean_bands': ['fundamental', 'body'],
             'geomean_threshold': stem_config.get('geomean_threshold'),
             'min_sustain_ms': None,
             'min_strength_threshold': stem_config.get('min_strength_threshold')
@@ -785,13 +793,14 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
     elif stem_type == 'hihat':
         return {
             'freq_ranges': {
-                'primary': (stem_config['body_freq_min'], stem_config['body_freq_max']),
-                'secondary': (stem_config['sizzle_freq_min'], stem_config['sizzle_freq_max'])
+                'body': (stem_config['body_freq_min'], stem_config['body_freq_max']),
+                'sizzle': (stem_config['sizzle_freq_min'], stem_config['sizzle_freq_max'])
             },
             'energy_labels': {
-                'primary': 'Primary',
-                'secondary': 'Secondary'
+                'body': 'Body',
+                'sizzle': 'Sizzle'
             },
+            'geomean_bands': ['body', 'sizzle'],
             'geomean_threshold': stem_config.get('geomean_threshold'),
             'min_sustain_ms': stem_config.get('min_sustain_ms', 25),
             'min_strength_threshold': stem_config.get('min_strength_threshold')
@@ -800,13 +809,14 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
     elif stem_type == 'cymbals':
         return {
             'freq_ranges': {
-                'primary': (stem_config.get('body_freq_min', 1000), stem_config.get('body_freq_max', 4000)),
-                'secondary': (stem_config.get('brilliance_freq_min', 4000), stem_config.get('brilliance_freq_max', 10000))
+                'body': (stem_config.get('body_freq_min', 1000), stem_config.get('body_freq_max', 4000)),
+                'brilliance': (stem_config.get('brilliance_freq_min', 4000), stem_config.get('brilliance_freq_max', 10000))
             },
             'energy_labels': {
-                'primary': 'Primary',
-                'secondary': 'Secondary'
+                'body': 'Body',
+                'brilliance': 'Brilliance'
             },
+            'geomean_bands': ['body', 'brilliance'],
             'geomean_threshold': stem_config.get('geomean_threshold'),
             'min_sustain_ms': stem_config.get('min_sustain_ms', 150),
             'min_strength_threshold': stem_config.get('min_strength_threshold')
@@ -843,17 +853,19 @@ def calculate_statistical_params(onset_data_list: List[Dict]) -> Dict[str, float
     Analyze full dataset of onsets to compute normalization parameters.
     
     Used for statistical outlier detection to identify snare bleed in kicks
-    by comparing Primary/Secondary ratio and total energy against dataset medians.
+    by comparing the first two geomean band energies' ratio and total energy
+    against dataset medians.
     
     Pure function - no side effects.
     
     Args:
-        onset_data_list: List of onset data dicts with 'primary_energy', 
-                         'secondary_energy', 'total_energy' keys
+        onset_data_list: List of onset data dicts with domain-specific energy keys
+                         (e.g. 'fundamental_energy', 'body_energy') and 'total_energy'.
+                         Each dict must have 'geomean_bands' listing band names.
     
     Returns:
         Dict with median and spread values:
-        - median_ratio: Median Primary/Secondary ratio across all events
+        - median_ratio: Median band1/band2 ratio across all events
         - median_total: Median total energy across all events
         - ratio_spread: Standard deviation of ratios
         - total_spread: Standard deviation of total energies
@@ -866,13 +878,22 @@ def calculate_statistical_params(onset_data_list: List[Dict]) -> Dict[str, float
             'total_spread': 1.0
         }
     
-    # Extract fundamental and body energies
-    primary_energies = np.array([d['primary_energy'] for d in onset_data_list])
-    secondary_energies = np.array([d['secondary_energy'] for d in onset_data_list])
+    # Extract first two geomean band energies using domain-specific names
+    bands = onset_data_list[0].get('geomean_bands', [])
+    if len(bands) >= 2:
+        band1_key = f'{bands[0]}_energy'
+        band2_key = f'{bands[1]}_energy'
+    else:
+        # Fallback: shouldn't happen with proper data
+        band1_key = 'fundamental_energy'
+        band2_key = 'body_energy'
+    
+    band1_energies = np.array([d.get(band1_key, 0.0) for d in onset_data_list])
+    band2_energies = np.array([d.get(band2_key, 0.0) for d in onset_data_list])
     total_energies = np.array([d['total_energy'] for d in onset_data_list])
     
-    # Calculate Primary/Secondary ratios (with safety for division by zero)
-    ratios = primary_energies / np.maximum(secondary_energies, 1e-9)
+    # Calculate band1/band2 ratios (with safety for division by zero)
+    ratios = band1_energies / np.maximum(band2_energies, 1e-9)
     
     params = {
         'median_ratio': float(np.median(ratios)),
@@ -905,7 +926,7 @@ def calculate_badness_score(
     Pure function - no side effects.
     
     Args:
-        onset_data: Dict with 'primary_energy', 'secondary_energy', 'total_energy'
+        onset_data: Dict with domain-specific energy keys and 'geomean_bands'
         statistical_params: Dict from calculate_statistical_params()
         ratio_weight: Weight for ratio deviation (0-1)
         total_weight: Weight for total energy deviation (0-1)
@@ -915,8 +936,15 @@ def calculate_badness_score(
         - 0.0 = perfectly typical kick
         - 1.0 = maximum deviation (likely artifact/bleed)
     """
-    # Calculate this onset's ratio
-    ratio = onset_data['primary_energy'] / max(onset_data['secondary_energy'], 1e-9)
+    # Calculate this onset's ratio using first two geomean bands
+    bands = onset_data.get('geomean_bands', [])
+    if len(bands) >= 2:
+        band1 = onset_data.get(f'{bands[0]}_energy', 0.0)
+        band2 = onset_data.get(f'{bands[1]}_energy', 0.0)
+    else:
+        band1 = 0.0
+        band2 = 0.0
+    ratio = band1 / max(band2, 1e-9)
     total = onset_data['total_energy']
     
     # Calculate normalized deviations
@@ -1327,11 +1355,12 @@ def mark_reverb_continuations(
     Mark reverb continuation events in onset data.
     
     Reverb continuations are artifacts where peak-hold detection splits
-    a single decay envelope into multiple events. Characteristics:
+    a single reverb/echo envelope into multiple events. Characteristics:
     - Next event starts exactly when previous ends (within time_margin_ms)
     - Amplitude continuity: start matches previous end (within amplitude_margin)
-    - Amplitude decreases (decay pattern)
-    - Low attack sharpness (< 0.2): reverb tails have smooth envelopes, not sharp attacks
+    - Low attack sharpness (< threshold): reverb/echo have smooth envelopes, not sharp attacks
+    
+    Note: Amplitude can increase or decrease with complex reverb (reflections building up).
     
     These events are marked as 'REVERB_CONTINUATION' status to preserve
     data while allowing MIDI export to filter them.
@@ -1381,24 +1410,21 @@ def mark_reverb_continuations(
         # Check continuation conditions
         is_adjacent = abs(gap) <= time_margin_sec
         
-        # Amplitude continuity
+        # Amplitude continuity - envelope connects smoothly
         prev_end_amp = prev['amplitude_at_end']
         curr_start_amp = curr['amplitude_at_start']
         amp_diff = abs(curr_start_amp - prev_end_amp)
         is_amplitude_continuous = amp_diff <= amplitude_margin
         
-        # Amplitude decay (use peak amplitude instead of velocity)
-        is_decaying = curr['amplitude'] < prev['amplitude']
-        
         # Attack sharpness check - real hits have sharp attacks (>= threshold)
-        # Reverb tails have smooth envelopes (< threshold)
+        # Reverb/echo tails have smooth envelopes (< threshold)
+        # Note: Complex reverb can have increasing amplitude (reflections building up)
         curr_attack_sharpness = curr.get('attack_sharpness')
         is_smooth_envelope = (curr_attack_sharpness is not None and 
                              curr_attack_sharpness < attack_sharpness_threshold)
         
         # Mark as reverb continuation if all conditions met
-        # Skip if attack is sharp (indicates real transient, not reverb tail)
-        if is_adjacent and is_amplitude_continuous and is_decaying and is_smooth_envelope:
+        if is_adjacent and is_amplitude_continuous and is_smooth_envelope:
             curr['status'] = 'REVERB_CONTINUATION'
     
     return onset_data_list
@@ -1468,6 +1494,7 @@ def filter_onsets_by_spectral(
     geomean_threshold = spectral_config['geomean_threshold']
     min_sustain_ms = spectral_config['min_sustain_ms']
     energy_labels = spectral_config['energy_labels']
+    geomean_bands = spectral_config['geomean_bands']
     
     # Storage for filtered results
     filtered_times = []
@@ -1493,15 +1520,15 @@ def filter_onsets_by_spectral(
             # Segment too short, skip
             continue
         
-        # Extract results from analysis
-        primary_energy = analysis['primary_energy']
-        secondary_energy = analysis['secondary_energy']
-        tertiary_energy = analysis.get('tertiary_energy')  # Only for kick
+        # Extract results from analysis (domain-specific band names)
         low_energy = analysis['low_energy']
         total_energy = analysis['total_energy']
-        body_wire_geomean = analysis['geomean']
+        geomean = analysis['geomean']
         sustain_duration = analysis['sustain_ms']
         spectral_ratio = analysis['spectral_ratio']
+        
+        # Extract band energies using geomean_bands order
+        band_energies = {band: analysis.get(f'{band}_energy', 0.0) for band in geomean_bands}
         
         # Phase 2: Calculate extended metadata (if duration available)
         amplitude_at_start = None
@@ -1539,7 +1566,7 @@ def filter_onsets_by_spectral(
         
         # Determine if this onset should be kept
         is_real_hit = should_keep_onset(
-            geomean=body_wire_geomean,
+            geomean=geomean,
             sustain_ms=sustain_duration,
             geomean_threshold=geomean_threshold,
             min_sustain_ms=min_sustain_ms,
@@ -1549,26 +1576,23 @@ def filter_onsets_by_spectral(
         )
         
         # Store all data for this onset (for debug output AND sidecar v2)
-        # Include status field for sidecar v2 format
+        # Uses domain-specific band names (body_energy, wire_energy, etc.)
         onset_data = {
             'time': onset_time,
             'strength': strength,
             'amplitude': peak_amplitude,
             'low_energy': low_energy,
-            'primary_energy': primary_energy,
-            'secondary_energy': secondary_energy,
             'ratio': spectral_ratio,
             'total_energy': total_energy,
-            'body_wire_geomean': body_wire_geomean,
-            'energy_label_1': energy_labels['primary'],
-            'energy_label_2': energy_labels['secondary'],
+            'geomean': geomean,
+            'geomean_bands': geomean_bands,
             'status': 'KEPT' if (learning_mode or is_real_hit) else 'FILTERED'
         }
         
-        # Add tertiary energy if present (kick attack range)
-        if tertiary_energy is not None:
-            onset_data['tertiary_energy'] = tertiary_energy
-            onset_data['energy_label_3'] = energy_labels.get('tertiary', 'Tertiary')
+        # Add domain-specific band energies and labels
+        for band_name in geomean_bands:
+            onset_data[f'{band_name}_energy'] = band_energies[band_name]
+            onset_data[f'{band_name}_label'] = energy_labels.get(band_name, band_name.title())
         
         if sustain_duration is not None:
             onset_data['sustain_ms'] = sustain_duration
@@ -1602,14 +1626,15 @@ def filter_onsets_by_spectral(
             filtered_times.append(onset_time)
             filtered_strengths.append(strength)
             filtered_amplitudes.append(peak_amplitude)
-            filtered_geomeans.append(body_wire_geomean)
+            filtered_geomeans.append(geomean)
             # Store sustain duration and spectral data for hihat/cymbal classification
             if stem_type in ['hihat', 'cymbals'] and sustain_duration is not None:
                 filtered_sustains.append(sustain_duration)
                 if stem_type == 'hihat':
+                    # Hihat open/closed detection uses body and sizzle energies
                     filtered_spectral.append({
-                        'primary_energy': primary_energy,
-                        'secondary_energy': secondary_energy
+                        'body_energy': band_energies.get('body', 0.0),
+                        'sizzle_energy': band_energies.get('sizzle', 0.0)
                     })
             # Store full spectral data for this KEPT onset (Detection Output Contract)
             filtered_onset_data.append(onset_data.copy())
@@ -2168,15 +2193,22 @@ def analyze_onset_spectral(
         {
             'onset_sample': int,
             'segment': np.ndarray,
-            'primary_energy': float,
-            'secondary_energy': float,
-            'low_energy': float (if available),
+            '<band>_energy': float,  # Domain-specific: body_energy, wire_energy, etc.
+            'low_energy': float,
             'total_energy': float,
             'geomean': float,
+            'geomean_bands': list[str],  # Band names used for geomean
             'sustain_ms': float (if calculated),
-            'spectral_ratio': float (if low_energy available),
+            'spectral_ratio': float,
             'duration_sec': float (if duration provided)
         }
+        
+        Band energy keys are domain-specific per stem type:
+            snare: body_energy, wire_energy
+            kick: fundamental_energy, body_energy, attack_energy
+            toms: fundamental_energy, body_energy
+            hihat: body_energy, sizzle_energy
+            cymbals: body_energy, brilliance_energy
     """
     # Convert time to sample
     onset_sample = time_to_sample(onset_time, sr)
@@ -2196,21 +2228,22 @@ def analyze_onset_spectral(
     except ValueError:
         return None
     
-    # Calculate spectral energies
+    # Calculate spectral energies (keys are domain-specific: body, wire, fundamental, etc.)
     energies = calculate_spectral_energies(segment, sr, spectral_config['freq_ranges'])
-    primary_energy = energies.get('primary', 0.0)
-    secondary_energy = energies.get('secondary', 0.0)
-    tertiary_energy = energies.get('tertiary', None)  # Only for kick (attack range)
+    
+    # Extract geomean band energies in order
+    geomean_bands = spectral_config['geomean_bands']
+    band_energies = [energies.get(band, 0.0) for band in geomean_bands]
     low_energy = energies.get('low', 0.0)
     
-    # Calculate geomean (2-way for most drums, 3-way for kick with attack)
-    geomean = calculate_geomean(primary_energy, secondary_energy, tertiary_energy)
-    
-    # Calculate total energy (include tertiary if present)
-    if tertiary_energy is not None:
-        total_energy = primary_energy + secondary_energy + tertiary_energy
+    # Calculate geomean (2-way or 3-way depending on stem)
+    if len(band_energies) >= 3:
+        geomean = calculate_geomean(band_energies[0], band_energies[1], band_energies[2])
     else:
-        total_energy = primary_energy + secondary_energy
+        geomean = calculate_geomean(band_energies[0], band_energies[1])
+    
+    # Calculate total energy across geomean bands
+    total_energy = sum(band_energies)
     
     # Calculate spectral ratio if low energy available
     spectral_ratio = (total_energy / low_energy) if low_energy > 0 else 100.0
@@ -2234,21 +2267,21 @@ def analyze_onset_spectral(
             smooth_kernel=smooth_kernel
         )
     
+    # Build result with domain-specific energy keys
     result = {
         'onset_sample': onset_sample,
         'segment': segment,
-        'primary_energy': primary_energy,
-        'secondary_energy': secondary_energy,
         'low_energy': low_energy,
         'total_energy': total_energy,
         'geomean': geomean,
+        'geomean_bands': geomean_bands,
         'sustain_ms': sustain_ms,
         'spectral_ratio': spectral_ratio
     }
     
-    # Add tertiary energy if present (kick attack range)
-    if tertiary_energy is not None:
-        result['tertiary_energy'] = tertiary_energy
+    # Add each band energy with its domain-specific name
+    for band_name in geomean_bands:
+        result[f'{band_name}_energy'] = energies.get(band_name, 0.0)
     
     # Add duration if provided (for Phase 2 metadata enrichment)
     if duration is not None:
@@ -2318,8 +2351,8 @@ def classify_cymbal_by_pan(
             # Chinese cymbals often have different spectral characteristics
             # (more trashy, less harmonic content)
             # This is placeholder logic - would need training data to refine
-            brilliance = spectral_features.get('secondary_energy', 0)
-            body = spectral_features.get('primary_energy', 0)
+            brilliance = spectral_features.get('brilliance_energy', 0)
+            body = spectral_features.get('body_energy', 0)
             
             if brilliance > 0 and body > 0:
                 ratio = brilliance / body
@@ -2356,8 +2389,8 @@ def extract_onset_features(
     min_pitch_hz: float = 60.0,
     max_pitch_hz: float = 1000.0,
     # Spectral band configuration for geomean calculation
-    primary_freq_range: tuple = (1000, 4000),  # Body range for cymbals
-    secondary_freq_range: tuple = (4000, 10000),  # Brilliance range for cymbals
+    body_freq_range: tuple = (1000, 4000),  # Body range for cymbals
+    brilliance_freq_range: tuple = (4000, 10000),  # Brilliance range for cymbals
     calculate_sustain: bool = True,
     sustain_window_ms: float = 200.0,
 ) -> List['OnsetFeatures']:  # Forward reference for type hint
@@ -2378,8 +2411,8 @@ def extract_onset_features(
         pitch_method: Pitch detection method ('yin' or 'pyin')
         min_pitch_hz: Minimum pitch for detection
         max_pitch_hz: Maximum pitch for detection
-        primary_freq_range: Frequency range for primary energy (Hz tuple)
-        secondary_freq_range: Frequency range for secondary energy (Hz tuple)
+        body_freq_range: Frequency range for body energy band (Hz tuple)
+        brilliance_freq_range: Frequency range for brilliance energy band (Hz tuple)
         calculate_sustain: Whether to calculate sustain duration
         sustain_window_ms: Window size for sustain analysis (milliseconds)
     
@@ -2427,8 +2460,8 @@ def extract_onset_features(
                 spectral_flatness=0.0,
                 pitch=None,
                 timing_delta=None if i == 0 else onset_time - onset_times[i-1],
-                primary_energy=0.0,
-                secondary_energy=0.0,
+                body_energy=0.0,
+                brilliance_energy=0.0,
                 geomean=0.0,
                 total_energy=0.0,
                 sustain_ms=None
@@ -2465,19 +2498,19 @@ def extract_onset_features(
         if len(window) > 0:
             # Calculate energy in specific frequency bands
             freq_ranges = {
-                'primary': primary_freq_range,
-                'secondary': secondary_freq_range
+                'body': body_freq_range,
+                'brilliance': brilliance_freq_range
             }
             energies = calculate_spectral_energies(window, sr, freq_ranges)
-            primary_energy = energies.get('primary', 0.0)
-            secondary_energy = energies.get('secondary', 0.0)
+            body_energy = energies.get('body', 0.0)
+            brilliance_energy = energies.get('brilliance', 0.0)
             
             # Calculate geomean and total energy
-            geomean = calculate_geomean(primary_energy, secondary_energy)
-            total_energy = primary_energy + secondary_energy
+            geomean = calculate_geomean(body_energy, brilliance_energy)
+            total_energy = body_energy + brilliance_energy
         else:
-            primary_energy = 0.0
-            secondary_energy = 0.0
+            body_energy = 0.0
+            brilliance_energy = 0.0
             geomean = 0.0
             total_energy = 0.0
         
@@ -2541,8 +2574,8 @@ def extract_onset_features(
             spectral_flatness=spectral_flatness,
             pitch=pitch_hz,
             timing_delta=timing_delta,
-            primary_energy=primary_energy,
-            secondary_energy=secondary_energy,
+            body_energy=body_energy,
+            brilliance_energy=brilliance_energy,
             geomean=geomean,
             total_energy=total_energy,
             sustain_ms=sustain_ms
