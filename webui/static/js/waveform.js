@@ -253,15 +253,21 @@ function drawWaveform() {
     if (tMax <= tMin) return;
 
     const timeToX = t => PADDING.left + ((t - tMin) / (tMax - tMin)) * plotW;
-    const maxAmplitude = computeMaxAmplitude(configuredEvents, sensitiveEvents, envelope);
-    const valToY = v => PADDING.top + plotH - (v / (maxAmplitude || 1)) * plotH;
+
+    // Envelope gets its own Y-scale so it fills the canvas like a DAW waveform
+    const envelopeMax = computeEnvelopeMax(envelope);
+    const envToY = v => PADDING.top + plotH - (v / (envelopeMax || 1)) * plotH;
+
+    // Geomean values live on a separate scale (for threshold line)
+    const geomeanMax = computeMaxGeomean(configuredEvents, sensitiveEvents);
+    const geomeanToY = v => PADDING.top + plotH - (v / (geomeanMax * 1.2 || 1)) * plotH;
 
     // Layer 1: Time axis
     drawTimeAxis(ctx, W, H, PADDING, plotW, plotH, tMin, tMax, timeToX);
 
     // Layer 2: Envelope (if available)
     if (envelope && envelope.times) {
-        drawEnvelope(ctx, envelope, timeToX, valToY, PADDING, plotH, maxAmplitude);
+        drawEnvelope(ctx, envelope, timeToX, envToY, PADDING, plotH, envelopeMax);
     }
 
     // Layer 3: Geomean threshold line
@@ -269,8 +275,8 @@ function drawWaveform() {
     const logic = stemData.logic || {};
     const tuningGeomean = waveformTuningActive && tuningSliderValues?.[waveformActiveStem]?.geomean_threshold;
     const thresholdVal = tuningGeomean != null ? tuningGeomean : logic.geomean_threshold;
-    if (thresholdVal != null && maxAmplitude > 0) {
-        drawThresholdLine(ctx, thresholdVal, valToY, PADDING, plotW);
+    if (thresholdVal != null && geomeanMax > 0) {
+        drawThresholdLine(ctx, thresholdVal, geomeanToY, PADDING, plotW);
     }
 
     // Layer 3.5: Sensitive events (background, if toggled on — but not in tuning mode)
@@ -333,25 +339,32 @@ function computeTimeRange(events, sensitiveEvents, envelope) {
     return { tMin: tMin - span * 0.02, tMax: tMax + span * 0.02 };
 }
 
-function computeMaxAmplitude(events, sensitiveEvents, envelope) {
+/**
+ * Compute envelope-only max for the waveform Y-axis.
+ * Envelope values (RMS/peak-hold) live on a completely different scale
+ * from event geomean/strength values, so they must be scaled independently.
+ */
+function computeEnvelopeMax(envelope) {
     let maxVal = 0;
-
-    // From events: use strength or amplitude
-    for (const e of events) {
-        if (e.strength != null) maxVal = Math.max(maxVal, e.strength);
-        if (e.amplitude != null) maxVal = Math.max(maxVal, e.amplitude);
-    }
-    for (const e of sensitiveEvents) {
-        if (e.strength != null) maxVal = Math.max(maxVal, e.strength);
-        if (e.amplitude != null) maxVal = Math.max(maxVal, e.amplitude);
-    }
-
-    // From envelope
     if (envelope) {
         if (envelope.left) for (const v of envelope.left) maxVal = Math.max(maxVal, v);
         if (envelope.right) for (const v of envelope.right) maxVal = Math.max(maxVal, v);
     }
+    return maxVal;
+}
 
+/**
+ * Compute max geomean value from events, used to position the threshold line.
+ * Only relevant when drawing the geomean threshold reference.
+ */
+function computeMaxGeomean(events, sensitiveEvents) {
+    let maxVal = 0;
+    for (const e of events) {
+        if (e.geomean != null) maxVal = Math.max(maxVal, e.geomean);
+    }
+    for (const e of sensitiveEvents) {
+        if (e.geomean != null) maxVal = Math.max(maxVal, e.geomean);
+    }
     return maxVal;
 }
 
@@ -406,55 +419,106 @@ function formatTime(seconds) {
     return m > 0 ? `${m}:${String(s).padStart(2, '0')}` : `${s}s`;
 }
 
-function drawEnvelope(ctx, envelope, timeToX, valToY, PAD, plotH, maxAmp) {
+/**
+ * Draw energy envelope as a mirrored DAW-style waveform.
+ * Left channel extends upward from center, right channel extends downward.
+ * If only one channel exists, it mirrors symmetrically.
+ */
+function drawEnvelope(ctx, envelope, timeToX, envToY, PAD, plotH, maxAmp) {
     if (!envelope.times || envelope.times.length === 0) return;
+    if (maxAmp <= 0) return;
 
     const times = envelope.times;
-    const baseY = PAD.top + plotH;
+    const centerY = PAD.top + plotH / 2;
+    const halfH = plotH / 2;
 
-    // Draw left channel
-    drawEnvelopeChannel(ctx, times, envelope.left, timeToX, valToY, baseY,
-        WAVEFORM_COLORS.envelopeLeft, WAVEFORM_COLORS.envelopeFillLeft);
+    // Downsample for performance: at most 2 points per pixel
+    const plotW = timeToX(times[times.length - 1]) - timeToX(times[0]);
+    const step = Math.max(1, Math.floor(times.length / (plotW * 2)));
 
-    // Draw right channel (mirrored or overlaid)
-    drawEnvelopeChannel(ctx, times, envelope.right, timeToX, valToY, baseY,
-        WAVEFORM_COLORS.envelopeRight, WAVEFORM_COLORS.envelopeFillRight);
+    const hasLeft = envelope.left && envelope.left.length > 0;
+    const hasRight = envelope.right && envelope.right.length > 0;
+
+    // Draw left channel (upward from center)
+    if (hasLeft) {
+        drawEnvelopeHalf(ctx, times, envelope.left, timeToX, centerY, -halfH, maxAmp, step,
+            WAVEFORM_COLORS.envelopeLeft, WAVEFORM_COLORS.envelopeFillLeft);
+    }
+
+    // Draw right channel (downward from center, mirrored)
+    if (hasRight) {
+        drawEnvelopeHalf(ctx, times, envelope.right, timeToX, centerY, halfH, maxAmp, step,
+            WAVEFORM_COLORS.envelopeRight, WAVEFORM_COLORS.envelopeFillRight);
+    }
+
+    // If only one channel, mirror it
+    if (hasLeft && !hasRight) {
+        drawEnvelopeHalf(ctx, times, envelope.left, timeToX, centerY, halfH, maxAmp, step,
+            WAVEFORM_COLORS.envelopeRight, WAVEFORM_COLORS.envelopeFillRight);
+    }
+
+    // Center line (subtle)
+    ctx.strokeStyle = 'rgba(107, 114, 128, 0.3)';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(PAD.left, centerY);
+    ctx.lineTo(PAD.left + plotW, centerY);
+    ctx.stroke();
 }
 
-function drawEnvelopeChannel(ctx, times, values, timeToX, valToY, baseY, strokeColor, fillColor) {
+/**
+ * Draw one half of the mirrored waveform.
+ * @param {number} direction - negative = upward, positive = downward
+ */
+function drawEnvelopeHalf(ctx, times, values, timeToX, centerY, direction, maxAmp, step, strokeColor, fillColor) {
     if (!values || values.length === 0) return;
 
-    // Filled area
+    const sign = direction < 0 ? -1 : 1;
+    const halfH = Math.abs(direction);
+    const normalize = v => (v / maxAmp) * halfH;
+
+    // Filled area from center
     ctx.beginPath();
-    ctx.moveTo(timeToX(times[0]), baseY);
-    for (let i = 0; i < times.length; i++) {
-        ctx.lineTo(timeToX(times[i]), valToY(values[i]));
+    ctx.moveTo(timeToX(times[0]), centerY);
+    for (let i = 0; i < times.length; i += step) {
+        // For downsampled ranges, use max value in window for peak-preserving display
+        let maxV = values[i];
+        for (let j = 1; j < step && i + j < times.length; j++) {
+            maxV = Math.max(maxV, values[i + j]);
+        }
+        ctx.lineTo(timeToX(times[i]), centerY + sign * normalize(maxV));
     }
-    ctx.lineTo(timeToX(times[times.length - 1]), baseY);
+    // Ensure we include the last point
+    const lastI = times.length - 1;
+    ctx.lineTo(timeToX(times[lastI]), centerY + sign * normalize(values[lastI]));
+    ctx.lineTo(timeToX(times[lastI]), centerY);
     ctx.closePath();
     ctx.fillStyle = fillColor;
     ctx.fill();
 
-    // Stroke line
+    // Stroke line along envelope edge
     ctx.beginPath();
-    for (let i = 0; i < times.length; i++) {
+    for (let i = 0; i < times.length; i += step) {
+        let maxV = values[i];
+        for (let j = 1; j < step && i + j < times.length; j++) {
+            maxV = Math.max(maxV, values[i + j]);
+        }
         const x = timeToX(times[i]);
-        const y = valToY(values[i]);
+        const y = centerY + sign * normalize(maxV);
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
     }
+    ctx.lineTo(timeToX(times[lastI]), centerY + sign * normalize(values[lastI]));
     ctx.strokeStyle = strokeColor;
     ctx.lineWidth = 1;
     ctx.stroke();
 }
 
-function drawThresholdLine(ctx, threshold, valToY, PAD, plotW) {
-    // The threshold is on the geomean scale, not directly on amplitude.
-    // We draw it as a reference line — position relative to amplitude range
-    // is approximate. When envelope data drives the Y axis, this is informational.
-    // For now, skip drawing if threshold would be off-scale.
-    const y = valToY(threshold);
-    if (y < PAD.top || y > PAD.top + 400) return;
+function drawThresholdLine(ctx, threshold, geomeanToY, PAD, plotW) {
+    // The threshold is on the geomean scale, positioned relative to max geomean.
+    // Skip if threshold would be off the visible plot area.
+    const y = geomeanToY(threshold);
+    if (y < PAD.top - 5 || y > PAD.top + 500) return;
 
     ctx.setLineDash([6, 4]);
     ctx.strokeStyle = WAVEFORM_COLORS.thresholdLine;

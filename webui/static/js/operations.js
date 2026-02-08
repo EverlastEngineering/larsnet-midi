@@ -176,6 +176,11 @@ function monitorJob(jobId, operationName) {
             addConsoleLog(`[${job.operation}] Completed successfully!`, 'success');
             showToast(`${capitalize(job.operation)} completed!`, 'success');
             
+            // Refresh project data so new outputs (analysis, downloads) appear
+            if (typeof currentProject !== 'undefined' && currentProject) {
+                selectProject(currentProject.number);
+            }
+            
             // Clean up
             activeStreams.delete(jobId);
         },

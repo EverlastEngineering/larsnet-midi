@@ -24,9 +24,9 @@ Add a waveform viewer component (using wavesurfer.js or HTML5 Canvas) to the Web
 
 Add client-side sliders for the key parameters (`threshold_db`, `geomean_threshold`, `reverb_continuation_attack_threshold`, `min_sustain_ms`) that re-filter the `events_sensitive` dataset in the browser (no server round-trip). Moving a slider instantly shows events appearing/disappearing on the waveform. The `events_sensitive` array has all spectral features pre-computed, so filtering is just comparisons.
 
-### 6. Velocity-1 proofing MIDI workflow
+### 6. *(Moved to separate plan)*
 
-Add a "Proofing Export" button that generates a MIDI file with configured events at normal velocity + all sensitive-only events at velocity 1. User edits in DAW (delete noise, promote good hits), re-imports. Store the proofed MIDI alongside the original analysis.json as a labeled training pair (`{stem}.proofed.mid` + `{stem}.analysis.json`). Build a simple schema for this dataset.
+Velocity-1 proofing MIDI workflow was moved to `.github/prompts/plan-velocity1-proofing.prompt.md` for independent scheduling.
 
 ## Further Considerations
 

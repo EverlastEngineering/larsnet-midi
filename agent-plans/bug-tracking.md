@@ -11,6 +11,27 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 
 ## Open Bugs (Not Yet in GitHub)
 
+### Detection Analysis section not visible after MIDI job completes
+- **Status**: Open
+- **Priority**: Medium
+- **Description**: After running the MIDI conversion step, the Detection Analysis section does not appear. User must click to another project and come back for it to show.
+- **Expected Behavior**: Detection Analysis section appears immediately when the MIDI job completes (since analysis data is now available).
+- **Actual Behavior**: Section stays hidden until the project is re-selected.
+
+### Energy envelope renders as flat line at bottom of canvas
+- **Status**: Open
+- **Priority**: High
+- **Description**: The L/R energy envelopes should render as a traditional DAW-style waveform but appear as barely-visible purple at the floor of the graph. Onset markers are visible and color-coded, but the waveform shape is missing or too small to see.
+- **Expected Behavior**: Energy envelope fills the canvas vertically like a standard audio waveform display.
+- **Actual Behavior**: A thin sliver of purple is visible at the very bottom of the canvas.
+
+### No zoom/pan on waveform canvas
+- **Status**: Open
+- **Priority**: High
+- **Description**: Dense stems (e.g., hi-hat, cymbals) have too many events packed together to see anything useful. No way to zoom in horizontally or pan across the waveform.
+- **Expected Behavior**: User can zoom in to see detail on dense passages and pan to navigate.
+- **Actual Behavior**: Entire track is rendered at full width with no zoom capability.
+
 ### 5 code default mismatches with midiconfig.yaml values
 - **Status**: Open
 - **Priority**: Medium
