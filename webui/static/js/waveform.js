@@ -52,6 +52,8 @@ let waveformCanvas = null;         // Canvas element
 let waveformCtx = null;            // Canvas 2D context
 let waveformHoverEvent = null;     // Event under mouse cursor
 let waveformShowSensitive = false; // Toggle for sensitive events layer
+let waveformTuningEvents = null;   // Filtered events from threshold tuning (or null)
+let waveformTuningActive = false;  // Whether tuning mode is visually active
 
 // ─── Public API ──────────────────────────────────────────────────────────
 
@@ -69,6 +71,8 @@ async function initWaveformViewer(project) {
     waveformEnvelopeCache = {};
     waveformActiveStem = null;
     waveformHoverEvent = null;
+    waveformTuningEvents = null;
+    waveformTuningActive = false;
 
     // Check if project has analysis data
     if (!project.has_analysis) {
@@ -114,6 +118,24 @@ async function initWaveformViewer(project) {
         };
     }
 
+    // Show/hide Tune button based on whether any stem has sensitive events
+    const tuneBtn = document.getElementById('tuning-toggle-btn');
+    if (tuneBtn) {
+        const hasAnySensitive = availableStems.some(s => {
+            const sd = waveformAnalysisData.stems[s];
+            return sd.events_sensitive && sd.events_sensitive.length > 0;
+        });
+        tuneBtn.classList.toggle('hidden', !hasAnySensitive);
+    }
+
+    // Close tuning panel when loading a new project
+    const tuningPanel = document.getElementById('tuning-panel');
+    if (tuningPanel && !tuningPanel.classList.contains('hidden')) {
+        tuningPanelOpen = false;
+        tuningPanel.classList.add('hidden');
+        if (tuneBtn) tuneBtn.classList.remove('tuning-btn-active');
+    }
+
     // Select first available stem in kit order
     const firstStem = STEM_ORDER.find(s => availableStems.includes(s)) || availableStems[0];
     if (firstStem) {
@@ -129,6 +151,8 @@ async function selectStem(stemType) {
 
     waveformActiveStem = stemType;
     waveformHoverEvent = null;
+    waveformTuningEvents = null;
+    waveformTuningActive = false;
 
     // Update tab UI
     document.querySelectorAll('.waveform-stem-tab').forEach(tab => {
@@ -157,6 +181,11 @@ async function selectStem(stemType) {
     }
 
     drawWaveform();
+
+    // Notify threshold tuning module (if panel is open, rebuild sliders)
+    if (typeof onTuningStemChanged === 'function') {
+        onTuningStemChanged(stemType);
+    }
 }
 
 // ─── Tab Rendering ───────────────────────────────────────────────────────
@@ -210,16 +239,21 @@ function drawWaveform() {
 
     // Get data
     const stemData = waveformAnalysisData.stems[waveformActiveStem];
-    const events = getEventsForStem(stemData);
+    const configuredEvents = getEventsForStem(stemData);
     const sensitiveEvents = getSensitiveEventsForStem(stemData);
     const envelope = waveformEnvelopeCache[waveformActiveStem];
 
+    // In tuning mode, use tuning-filtered events as the primary layer
+    const displayEvents = (waveformTuningActive && waveformTuningEvents)
+        ? waveformTuningEvents
+        : configuredEvents;
+
     // Compute time range from events (and envelope if available)
-    const { tMin, tMax } = computeTimeRange(events, sensitiveEvents, envelope);
+    const { tMin, tMax } = computeTimeRange(configuredEvents, sensitiveEvents, envelope);
     if (tMax <= tMin) return;
 
     const timeToX = t => PADDING.left + ((t - tMin) / (tMax - tMin)) * plotW;
-    const maxAmplitude = computeMaxAmplitude(events, sensitiveEvents, envelope);
+    const maxAmplitude = computeMaxAmplitude(configuredEvents, sensitiveEvents, envelope);
     const valToY = v => PADDING.top + plotH - (v / (maxAmplitude || 1)) * plotH;
 
     // Layer 1: Time axis
@@ -231,22 +265,33 @@ function drawWaveform() {
     }
 
     // Layer 3: Geomean threshold line
+    // In tuning mode, show the slider value; otherwise show configured value
     const logic = stemData.logic || {};
-    if (logic.geomean_threshold != null && maxAmplitude > 0) {
-        drawThresholdLine(ctx, logic.geomean_threshold, valToY, PADDING, plotW);
+    const tuningGeomean = waveformTuningActive && tuningSliderValues?.[waveformActiveStem]?.geomean_threshold;
+    const thresholdVal = tuningGeomean != null ? tuningGeomean : logic.geomean_threshold;
+    if (thresholdVal != null && maxAmplitude > 0) {
+        drawThresholdLine(ctx, thresholdVal, valToY, PADDING, plotW);
     }
 
-    // Layer 3.5: Sensitive events (background, if toggled on)
-    if (waveformShowSensitive && sensitiveEvents.length > 0) {
+    // Layer 3.5: Sensitive events (background, if toggled on — but not in tuning mode)
+    if (!waveformTuningActive && waveformShowSensitive && sensitiveEvents.length > 0) {
         drawOnsetMarkers(ctx, sensitiveEvents, timeToX, PADDING, plotH, true);
     }
 
-    // Layer 4: Configured onset markers
-    drawOnsetMarkers(ctx, events, timeToX, PADDING, plotH, false);
+    // Layer 4: Primary onset markers (configured or tuning-filtered)
+    drawOnsetMarkers(ctx, displayEvents, timeToX, PADDING, plotH, false);
 
     // Layer 5: Hover tooltip
     if (waveformHoverEvent) {
         drawTooltip(ctx, waveformHoverEvent, W, H);
+    }
+
+    // Tuning mode indicator
+    if (waveformTuningActive) {
+        ctx.fillStyle = 'rgba(59, 130, 246, 0.8)';
+        ctx.font = 'bold 9px system-ui, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('● TUNING', PADDING.left + 4, PADDING.top + 12);
     }
 
     // Legend
@@ -472,7 +517,10 @@ function getMarkerColor(status) {
 }
 
 function drawLegend(ctx, W, H, stemData) {
-    const events = getEventsForStem(stemData);
+    // In tuning mode, use tuning events for the legend counts
+    const events = (waveformTuningActive && waveformTuningEvents)
+        ? waveformTuningEvents
+        : getEventsForStem(stemData);
     const keptCount = events.filter(e => e.status === 'KEPT').length;
     const filteredCount = events.filter(e => e.status === 'FILTERED').length;
     const reverbCount = events.filter(e => e.status === 'REVERB_CONTINUATION').length;
@@ -482,7 +530,7 @@ function drawLegend(ctx, W, H, stemData) {
     if (keptCount > 0) items.push({ color: WAVEFORM_COLORS.markerKept, label: `Kept (${keptCount})` });
     if (filteredCount > 0) items.push({ color: WAVEFORM_COLORS.markerFiltered, label: `Filtered (${filteredCount})` });
     if (reverbCount > 0) items.push({ color: WAVEFORM_COLORS.markerReverbCont, label: `Reverb cont. (${reverbCount})` });
-    if (waveformShowSensitive && sensitiveCount > 0) {
+    if (!waveformTuningActive && waveformShowSensitive && sensitiveCount > 0) {
         items.push({ color: '#9ca3af', label: `Sensitive (${sensitiveCount})` });
     }
 
@@ -579,13 +627,17 @@ function onCanvasMouseMove(e) {
     const plotW = W - PADDING.left - PADDING.right;
 
     const stemData = waveformAnalysisData.stems[waveformActiveStem];
-    const events = getEventsForStem(stemData);
-    const allEvents = waveformShowSensitive
-        ? events.concat(getSensitiveEventsForStem(stemData))
-        : events;
+    const configuredEvents = getEventsForStem(stemData);
+    // In tuning mode, hover over tuning events; otherwise use configured + optional sensitive
+    const displayEvents = (waveformTuningActive && waveformTuningEvents)
+        ? waveformTuningEvents
+        : configuredEvents;
+    const allEvents = (!waveformTuningActive && waveformShowSensitive)
+        ? displayEvents.concat(getSensitiveEventsForStem(stemData))
+        : displayEvents;
 
     const { tMin, tMax } = computeTimeRange(
-        events,
+        configuredEvents,
         getSensitiveEventsForStem(stemData),
         waveformEnvelopeCache[waveformActiveStem]
     );
