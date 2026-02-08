@@ -620,6 +620,93 @@ def _create_midi_events(
     return events
 
 
+def _run_sensitive_detection(
+    audio: np.ndarray,
+    audio_mono: np.ndarray,
+    sr: int,
+    is_stereo: bool,
+    hop_length: int,
+    stem_type: str,
+    config: Dict,
+) -> list:
+    """
+    Run energy detection at maximum sensitivity to capture all possible events.
+
+    Uses threshold_db=1.0 and min_absolute_energy=0.0001 to detect even the
+    quietest transients. Then runs spectral analysis (with learning_mode=True)
+    so every onset has pre-computed spectral features. The WebUI can re-filter
+    client-side without a server round-trip.
+
+    Args:
+        audio: Original audio (stereo or mono)
+        audio_mono: Mono-mixed audio for spectral analysis
+        sr: Sample rate
+        is_stereo: Whether audio is stereo
+        hop_length: Hop length for energy calculation
+        stem_type: Stem type for spectral config
+        config: Full config dict
+
+    Returns:
+        List of onset dicts with spectral features (all marked KEPT via learning_mode).
+        Empty list if no onsets detected or detection not applicable.
+    """
+    from .analysis_core import calculate_event_durations
+
+    # Sensitive detection parameters — capture everything above noise floor
+    SENSITIVE_THRESHOLD_DB = 1.0
+    SENSITIVE_MIN_ABSOLUTE_ENERGY = 0.0001
+
+    # Reuse per-stem params that aren't sensitivity-related
+    stem_cfg = config.get(stem_type, {})
+    min_peak_spacing_ms = stem_cfg.get('min_peak_spacing_ms', 100.0)
+    merge_window_ms = stem_cfg.get('merge_window_ms', 150.0)
+    energy_method = stem_cfg.get('energy_method', 'rms')
+    peak_hold_ms = stem_cfg.get('peak_hold_ms', 3.0)
+
+    sensitive_times, sensitive_strengths, _ = detect_onsets_energy_based(
+        audio if is_stereo else audio_mono,
+        sr,
+        threshold_db=SENSITIVE_THRESHOLD_DB,
+        min_peak_spacing_ms=min_peak_spacing_ms,
+        min_absolute_energy=SENSITIVE_MIN_ABSOLUTE_ENERGY,
+        merge_window_ms=merge_window_ms,
+        hop_length=hop_length,
+        method=energy_method,
+        peak_hold_ms=peak_hold_ms,
+    )
+
+    if len(sensitive_times) == 0:
+        return []
+
+    print(f"    Sensitive detection: {len(sensitive_times)} candidate onsets")
+
+    # Compute peak amplitudes for spectral analysis
+    sensitive_amplitudes = np.array([
+        calculate_peak_amplitude(audio_mono, int(t * sr), sr, window_ms=10.0)
+        for t in sensitive_times
+    ])
+
+    # Compute durations for Phase 2 metadata
+    sensitive_durations = calculate_event_durations(sensitive_times, audio_mono, sr)
+
+    # Run spectral analysis with learning_mode=True (keeps all, computes features)
+    filter_result = filter_onsets_by_spectral(
+        sensitive_times,
+        sensitive_strengths,
+        sensitive_amplitudes,
+        audio_mono,
+        sr,
+        stem_type,
+        config,
+        learning_mode=True,
+        durations=sensitive_durations,
+    )
+
+    sensitive_onset_data = filter_result.get('all_onset_data', [])
+    print(f"    Sensitive detection: {len(sensitive_onset_data)} onsets with spectral features")
+    return sensitive_onset_data
+
+
 def process_stem_to_midi(
     audio_path: Union[str, Path],
     stem_type: str,
@@ -663,7 +750,7 @@ def process_stem_to_midi(
     # Step 1: Load and validate audio
     audio, sr = _load_and_validate_audio(audio_path, config, stem_type, max_duration)
     if audio is None:
-        return {'events': [], 'all_onset_data': [], 'spectral_config': None, 'envelope_data': None}
+        return {'events': [], 'all_onset_data': [], 'sensitive_onset_data': [], 'spectral_config': None, 'envelope_data': None}
     
     # Envelope data for waveform visualization (populated by energy-based detection)
     envelope_data = None
@@ -792,7 +879,7 @@ def process_stem_to_midi(
     print(f"    Found {len(onset_times)} hits (before filtering) -> MIDI note {getattr(drum_mapping, stem_type)}")
     
     if len(onset_times) == 0:
-        return {'events': [], 'all_onset_data': [], 'spectral_config': None, 'envelope_data': envelope_data}
+        return {'events': [], 'all_onset_data': [], 'sensitive_onset_data': [], 'spectral_config': None, 'envelope_data': envelope_data}
     
     # Step 3: Calculate event durations (NEW)
     from .analysis_core import calculate_event_durations
@@ -1003,7 +1090,7 @@ def process_stem_to_midi(
             print(f"        Pass 2 Rejected (retriggering): {rejected_count}")
     
     if len(onset_times) == 0:
-        return {'events': [], 'all_onset_data': all_onset_data, 'spectral_config': spectral_config}
+        return {'events': [], 'all_onset_data': all_onset_data, 'sensitive_onset_data': [], 'spectral_config': spectral_config, 'envelope_data': envelope_data}
     
     # Step 5: Get MIDI note number
     note = getattr(drum_mapping, stem_type)
@@ -1075,10 +1162,24 @@ def process_stem_to_midi(
     
     print(f"    Created {len(events)} MIDI events from {len(onset_times)} onsets")
     
-    # Return dict with events and analysis data for sidecar v2
+    # Step 10: Run sensitive detection for interactive tuning (energy-based only)
+    sensitive_onset_data = []
+    if not use_librosa:
+        sensitive_onset_data = _run_sensitive_detection(
+            audio=audio,
+            audio_mono=audio_mono,
+            sr=sr,
+            is_stereo=is_stereo,
+            hop_length=onset_params['hop_length'],
+            stem_type=stem_type,
+            config=config,
+        )
+    
+    # Return dict with events and analysis data
     return {
         'events': events,
         'all_onset_data': all_onset_data,
+        'sensitive_onset_data': sensitive_onset_data,
         'spectral_config': spectral_config,
         'envelope_data': envelope_data
     }

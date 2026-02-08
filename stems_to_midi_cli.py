@@ -266,9 +266,10 @@ def _process_stems_to_midi(
             
             if result and result.get('events'):
                 events_by_stem[stem_type] = result['events']
-                # Store analysis data for sidecar v2
+                # Store analysis data for sidecar v3 (configured + sensitive)
                 analysis_by_stem[stem_type] = {
                     'all_onset_data': result.get('all_onset_data', []),
+                    'sensitive_onset_data': result.get('sensitive_onset_data', []),
                     'spectral_config': result.get('spectral_config')
                 }
                 # Store envelope data for waveform visualization
@@ -297,7 +298,7 @@ def _process_stems_to_midi(
                 config=config
             )
             
-            # Save analysis sidecar with spectral data (Detection Output Contract v2)
+            # Save analysis sidecar with spectral data (Detection Output Contract v3)
             save_analysis_sidecar(
                 events_by_stem, midi_path, tempo=tempo,
                 analysis_by_stem=analysis_by_stem if analysis_by_stem else None
