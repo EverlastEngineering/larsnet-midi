@@ -346,12 +346,12 @@ def get_project_envelope(project_number, stem_type):
 
         data = np.load(npz_files[0], allow_pickle=False)
 
-        # Downsample if needed (target ~2000 points for efficient Canvas rendering)
+        # Downsample if needed (target ~8000 points for high-res Canvas rendering)
         times = data['times'].astype(float)
         left = data['left'].astype(float)
         right = data['right'].astype(float)
 
-        max_points = 2000
+        max_points = 8000
         if len(times) > max_points:
             step = len(times) / max_points
             indices = np.arange(0, len(times), step).astype(int)[:max_points]
@@ -714,3 +714,64 @@ def delete_audio_file(project_number, filename):
             'error': 'Failed to delete alternate audio',
             'message': str(e)
         }), 500
+
+
+# ─── Event Overrides ─────────────────────────────────────────────────────
+
+@projects_bp.route('/projects/<int:project_number>/event-overrides', methods=['GET'])
+def get_event_overrides(project_number):
+    """
+    GET /api/projects/:project_number/event-overrides
+
+    Retrieve manual event overrides for a project.
+
+    Returns:
+        200: { overrides: { stemType: { "time_str": "KEPT"|"FILTERED", ... }, ... } }
+        404: Project not found
+    """
+    project = get_project_by_number(project_number)
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+
+    overrides_path = Path(project['path']) / 'midi' / 'event_overrides.json'
+    if overrides_path.exists():
+        try:
+            overrides = json.loads(overrides_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            overrides = {}
+    else:
+        overrides = {}
+
+    return jsonify({'overrides': overrides}), 200
+
+
+@projects_bp.route('/projects/<int:project_number>/event-overrides', methods=['PUT'])
+def save_event_overrides(project_number):
+    """
+    PUT /api/projects/:project_number/event-overrides
+
+    Save manual event overrides for a project.
+
+    Body: { overrides: { stemType: { "time_str": "KEPT"|"FILTERED", ... }, ... } }
+
+    Returns:
+        200: { saved: true }
+        404: Project not found
+    """
+    project = get_project_by_number(project_number)
+    if not project:
+        return jsonify({'error': 'Project not found'}), 404
+
+    data = request.get_json()
+    if not data or 'overrides' not in data:
+        return jsonify({'error': 'Missing overrides in request body'}), 400
+
+    midi_dir = Path(project['path']) / 'midi'
+    midi_dir.mkdir(parents=True, exist_ok=True)
+    overrides_path = midi_dir / 'event_overrides.json'
+
+    try:
+        overrides_path.write_text(json.dumps(data['overrides'], indent=2))
+        return jsonify({'saved': True}), 200
+    except OSError as e:
+        return jsonify({'error': 'Failed to save overrides', 'message': str(e)}), 500

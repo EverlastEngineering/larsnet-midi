@@ -4,6 +4,10 @@ When you complete a task, simply say "Done!" - do not provide summaries, explana
 Do not make summary documents after completing tasks.
 Before taking action that the user might want to pause, just stop and ask to continue. Any blank response there would be taken as permission to proceed.
 
+## Feature & Bug Tracking
+
+Track features and bugs in `agent-plans/feature-tracking.md` (and bugs in `agent-plans/bug-tracking.md`). When the user reports a bug or requests a feature, add it to the appropriate tracking file before starting work. Update status as items are completed.
+
 ## Architecture Documentation Maintenance
 
 When making significant changes to the codebase structure, update the relevant ARCH_*.md files in `docs/`:

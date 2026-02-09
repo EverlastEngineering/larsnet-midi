@@ -80,6 +80,45 @@ let waveformMouseX = null;   // CSS-pixel X relative to canvas parent
 let waveformCanvas = null;
 let waveformCtx = null;
 
+// Audio playback state (Web Audio API)
+let audioCtx = null;
+let audioBufferCache = {};   // stemType -> AudioBuffer
+let audioSource = null;      // currently playing AudioBufferSourceNode
+let audioIsPlaying = false;
+let audioPlaybackTime = null; // time (in song seconds) where playback started
+
+// Event override state: { stemType: { "1.2345": "KEPT"|"FILTERED", ... } }
+let eventOverrides = {};
+let eventOverridesDirty = false;
+let eventOverridesSaveTimer = null;
+
+// ─── Loading Indicator ───────────────────────────────────────────────────
+
+function showWaveformLoading(text = 'Loading…', pct = 0) {
+    const overlay = document.getElementById('waveform-loading-overlay');
+    const bar = document.getElementById('waveform-loading-bar');
+    const label = document.getElementById('waveform-loading-text');
+    if (!overlay) return;
+    overlay.classList.remove('hidden');
+    overlay.style.display = 'flex';
+    if (bar) bar.style.width = Math.round(pct) + '%';
+    if (label) label.textContent = text;
+}
+
+function updateWaveformLoading(text, pct) {
+    const bar = document.getElementById('waveform-loading-bar');
+    const label = document.getElementById('waveform-loading-text');
+    if (bar) bar.style.width = Math.round(pct) + '%';
+    if (label) label.textContent = text;
+}
+
+function hideWaveformLoading() {
+    const overlay = document.getElementById('waveform-loading-overlay');
+    if (!overlay) return;
+    overlay.classList.add('hidden');
+    overlay.style.display = 'none';
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────
 
 async function initWaveformViewer(project) {
@@ -95,6 +134,10 @@ async function initWaveformViewer(project) {
     waveformTuningActive = false;
     waveformZoom = 1;
     waveformPanOffset = 0;
+    stopAudioPlayback();
+    audioBufferCache = {};
+    eventOverrides = {};
+    eventOverridesDirty = false;
 
     if (!project.has_analysis) {
         section.classList.add('hidden');
@@ -102,20 +145,27 @@ async function initWaveformViewer(project) {
     }
 
     section.classList.remove('hidden');
+    showWaveformLoading('Loading analysis data…', 10);
 
     try {
         waveformAnalysisData = await api.getProjectAnalysis(project.number);
     } catch (err) {
         console.error('Failed to load analysis data:', err);
+        hideWaveformLoading();
         section.classList.add('hidden');
         return;
     }
 
     if (!waveformAnalysisData || !waveformAnalysisData.stems) {
+        hideWaveformLoading();
         section.classList.add('hidden');
         return;
     }
 
+    updateWaveformLoading('Loading overrides…', 40);
+    await loadEventOverrides();
+
+    updateWaveformLoading('Preparing stems…', 50);
     const availableStems = Object.keys(waveformAnalysisData.stems);
     renderStemTabs(availableStems);
 
@@ -192,15 +242,21 @@ async function selectStem(stemType) {
 
     // Load envelope data
     if (!waveformEnvelopeCache[stemType]) {
+        showWaveformLoading('Loading waveform for ' + stemType + '…', 30);
         try {
             const envelope = await api.getProjectEnvelope(currentProject.number, stemType);
             waveformEnvelopeCache[stemType] = envelope;
+            updateWaveformLoading('Rendering…', 90);
         } catch {
             waveformEnvelopeCache[stemType] = null;
         }
     }
 
+    hideWaveformLoading();
     drawWaveform();
+
+    // Pre-fetch audio buffer in background for click-to-play
+    ensureAudioBuffer(stemType);
 
     if (typeof onTuningStemChanged === 'function') {
         onTuningStemChanged(stemType);
@@ -436,7 +492,17 @@ function drawEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer
             : getMarkerColor(event.status);
 
         // Bar height from velocity (0-127)
-        const velocity = event.velocity != null ? event.velocity : 64;
+        // When velocity is missing (sensitive/tuning events), estimate from strength
+        // using the same formula as Python's estimate_velocity(strength, min_vel=40, max_vel=127)
+        let velocity;
+        if (event.velocity != null) {
+            velocity = event.velocity;
+        } else if (event.strength != null) {
+            velocity = Math.round(40 + event.strength * (127 - 40));
+            velocity = Math.max(1, Math.min(127, velocity));
+        } else {
+            velocity = 64;
+        }
         const barH = Math.max(2, (velocity / 127) * plotH);
         const barTop = PAD.top + plotH - barH;
 
@@ -449,6 +515,20 @@ function drawEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer
             ctx.lineWidth = 0.5;
             ctx.globalAlpha = 0.5;
             ctx.strokeRect(x - barWidth / 2, barTop, barWidth, barH);
+
+            // Override indicator: small white diamond at top of bar
+            if (event._overridden) {
+                ctx.globalAlpha = 1.0;
+                ctx.fillStyle = '#ffffff';
+                const dSize = 3;
+                ctx.beginPath();
+                ctx.moveTo(x, barTop - dSize);
+                ctx.lineTo(x + dSize, barTop);
+                ctx.lineTo(x, barTop + dSize);
+                ctx.lineTo(x - dSize, barTop);
+                ctx.closePath();
+                ctx.fill();
+            }
         }
 
         ctx.globalAlpha = 1.0;
@@ -928,36 +1008,270 @@ function onCanvasWheel(e) {
 }
 
 function onCanvasDragStart(e) {
-    if (waveformZoom <= 1) return;
-    waveformIsDragging = true;
-    waveformDragStartX = e.clientX - e.target.parentElement.getBoundingClientRect().left;
-    waveformDragStartPan = waveformPanOffset;
+    const canvasRect = e.target.parentElement.getBoundingClientRect();
+    const mouseX = e.clientX - canvasRect.left;
 
-    const onMove = (me) => {
-        const canvasRect = e.target.parentElement.getBoundingClientRect();
-        const mouseX = me.clientX - canvasRect.left;
-        const plotW = canvasRect.width - EVT_PAD.left - EVT_PAD.right;
-        const dx = (mouseX - waveformDragStartX) / plotW;
-        waveformPanOffset = waveformDragStartPan - dx;
-        clampPan();
-        waveformMouseX = me.clientX - canvasRect.left;
-        drawWaveform();
-    };
+    // When zoomed in: drag to pan
+    if (waveformZoom > 1) {
+        waveformIsDragging = true;
+        waveformDragStartX = mouseX;
+        waveformDragStartPan = waveformPanOffset;
+
+        const onMove = (me) => {
+            const rect = e.target.parentElement.getBoundingClientRect();
+            const mx = me.clientX - rect.left;
+            const plotW = rect.width - EVT_PAD.left - EVT_PAD.right;
+            const dx = (mx - waveformDragStartX) / plotW;
+            waveformPanOffset = waveformDragStartPan - dx;
+            clampPan();
+            waveformMouseX = me.clientX - rect.left;
+            drawWaveform();
+        };
+
+        const onUp = () => {
+            waveformIsDragging = false;
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            const cursorStyle = waveformZoom > 1 ? 'grab' : 'crosshair';
+            if (envelopeCanvas) envelopeCanvas.style.cursor = cursorStyle;
+            if (eventsCanvas) eventsCanvas.style.cursor = cursorStyle;
+        };
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+
+        if (envelopeCanvas) envelopeCanvas.style.cursor = 'grabbing';
+        if (eventsCanvas) eventsCanvas.style.cursor = 'grabbing';
+        return;
+    }
+
+    // When not zoomed: check for event click (toggle) or audio playback
+    if (!waveformActiveStem) return;
+
+    // On events canvas: check if clicking on an event bar to toggle override
+    const isEventsPanel = e.target === eventsCanvas;
+    if (isEventsPanel) {
+        const hitEvent = hitTestEvent(mouseX);
+        if (hitEvent) {
+            toggleEventOverride(waveformActiveStem, hitEvent);
+            return;
+        }
+    }
+
+    // Click-and-hold on empty area: play audio from cursor position
+    const clickTime = canvasXToTime(mouseX);
+    if (clickTime == null || clickTime < 0) return;
+
+    ensureAudioBuffer(waveformActiveStem).then(buffer => {
+        if (!buffer) return;
+        startAudioPlayback(waveformActiveStem, clickTime);
+    });
 
     const onUp = () => {
-        waveformIsDragging = false;
-        document.removeEventListener('mousemove', onMove);
+        stopAudioPlayback();
         document.removeEventListener('mouseup', onUp);
-        const cursorStyle = waveformZoom > 1 ? 'grab' : 'crosshair';
-        if (envelopeCanvas) envelopeCanvas.style.cursor = cursorStyle;
-        if (eventsCanvas) eventsCanvas.style.cursor = cursorStyle;
     };
-
-    document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
+}
 
-    if (envelopeCanvas) envelopeCanvas.style.cursor = 'grabbing';
-    if (eventsCanvas) eventsCanvas.style.cursor = 'grabbing';
+// ─── Audio Playback (Click-and-Hold) ─────────────────────────────────────
+
+/**
+ * Fetch and decode stem audio into an AudioBuffer (cached per stem).
+ */
+async function ensureAudioBuffer(stemType) {
+    if (audioBufferCache[stemType]) return audioBufferCache[stemType];
+    if (!currentProject || !currentProject.files) return null;
+
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    // Find the stem filename from project files (e.g. "SongName.kick.wav")
+    const stemFiles = currentProject.files.stems || [];
+    const stemFile = stemFiles.find(f => f.includes(`.${stemType}.`));
+    if (!stemFile) return null;
+
+    const url = `/api/projects/${currentProject.number}/download/stems/${stemFile}`;
+    try {
+        const response = await fetch(url);
+        if (!response.ok) return null;
+        const arrayBuf = await response.arrayBuffer();
+        const audioBuf = await audioCtx.decodeAudioData(arrayBuf);
+        audioBufferCache[stemType] = audioBuf;
+        return audioBuf;
+    } catch (err) {
+        console.warn('Audio buffer load failed for', stemType, err);
+        return null;
+    }
+}
+
+/**
+ * Start audio playback from a given time (in seconds within the song).
+ */
+function startAudioPlayback(stemType, startTime) {
+    stopAudioPlayback();
+
+    const buffer = audioBufferCache[stemType];
+    if (!buffer || !audioCtx) return;
+
+    // Resume context if suspended (autoplay policy)
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+
+    audioSource = audioCtx.createBufferSource();
+    audioSource.buffer = buffer;
+    audioSource.connect(audioCtx.destination);
+
+    const offset = Math.max(0, Math.min(startTime, buffer.duration - 0.01));
+    audioSource.start(0, offset);
+    audioIsPlaying = true;
+    audioPlaybackTime = startTime;
+}
+
+function stopAudioPlayback() {
+    if (audioSource) {
+        try { audioSource.stop(); } catch { /* already stopped */ }
+        audioSource.disconnect();
+        audioSource = null;
+    }
+    audioIsPlaying = false;
+    audioPlaybackTime = null;
+}
+
+/**
+ * Convert a canvas mouse X position to a song time (seconds).
+ */
+function canvasXToTime(mouseX) {
+    if (!waveformActiveStem || !waveformAnalysisData) return null;
+
+    const stemData = waveformAnalysisData.stems[waveformActiveStem];
+    const configuredEvents = getEventsForStem(stemData);
+    const sensitiveEvents = getSensitiveEventsForStem(stemData);
+    const envelope = waveformEnvelopeCache[waveformActiveStem];
+
+    const { tMin: tMinFull, tMax: tMaxFull } = computeTimeRange(configuredEvents, sensitiveEvents, envelope);
+    const { tMin, tMax } = computeVisibleRange(tMinFull, tMaxFull);
+
+    const PAD = EVT_PAD;
+    const plotW = (eventsCanvas ? eventsCanvas.parentElement.getBoundingClientRect().width : 800) - PAD.left - PAD.right;
+    return tMin + ((mouseX - PAD.left) / plotW) * (tMax - tMin);
+}
+
+// ─── Event Overrides (Click-to-Toggle) ───────────────────────────────────
+
+/**
+ * Load event overrides from server for the current project.
+ */
+async function loadEventOverrides() {
+    if (!currentProject) return;
+    try {
+        const data = await api.getEventOverrides(currentProject.number);
+        eventOverrides = data.overrides || {};
+    } catch {
+        eventOverrides = {};
+    }
+    applyOverridesToEvents();
+}
+
+/**
+ * Apply stored overrides to in-memory event data.
+ * Overrides are keyed by stem type and event time (4-decimal string).
+ */
+function applyOverridesToEvents() {
+    if (!waveformAnalysisData || !waveformAnalysisData.stems) return;
+
+    for (const [stemType, stemData] of Object.entries(waveformAnalysisData.stems)) {
+        const stemOverrides = eventOverrides[stemType];
+        if (!stemOverrides) continue;
+
+        const allEvents = [
+            ...(stemData.events_configured || []),
+            ...(stemData.events_sensitive || []),
+        ];
+        for (const event of allEvents) {
+            if (event.time == null) continue;
+            const key = event.time.toFixed(4);
+            if (stemOverrides[key]) {
+                event.status = stemOverrides[key];
+                event._overridden = true;
+            }
+        }
+    }
+}
+
+/**
+ * Toggle an event's kept/filtered status and schedule a save.
+ */
+function toggleEventOverride(stemType, event) {
+    if (!event || event.time == null) return;
+
+    const key = event.time.toFixed(4);
+    if (!eventOverrides[stemType]) eventOverrides[stemType] = {};
+
+    // Toggle status
+    const newStatus = event.status === 'KEPT' ? 'FILTERED' : 'KEPT';
+    event.status = newStatus;
+    event._overridden = true;
+    eventOverrides[stemType][key] = newStatus;
+
+    // Debounced save (500ms after last toggle)
+    eventOverridesDirty = true;
+    clearTimeout(eventOverridesSaveTimer);
+    eventOverridesSaveTimer = setTimeout(saveEventOverrides, 500);
+
+    drawWaveform();
+}
+
+/**
+ * Persist overrides to server.
+ */
+async function saveEventOverrides() {
+    if (!currentProject || !eventOverridesDirty) return;
+    try {
+        await api.saveEventOverrides(currentProject.number, eventOverrides);
+        eventOverridesDirty = false;
+    } catch (err) {
+        console.warn('Failed to save event overrides:', err);
+    }
+}
+
+/**
+ * Hit-test: find the event nearest to a canvas click, within a small radius.
+ */
+function hitTestEvent(mouseX) {
+    if (!waveformActiveStem || !waveformAnalysisData) return null;
+
+    const stemData = waveformAnalysisData.stems[waveformActiveStem];
+    const configuredEvents = getEventsForStem(stemData);
+    const sensitiveEvents = getSensitiveEventsForStem(stemData);
+    const envelope = waveformEnvelopeCache[waveformActiveStem];
+
+    const { tMin: tMinFull, tMax: tMaxFull } = computeTimeRange(configuredEvents, sensitiveEvents, envelope);
+    const { tMin, tMax } = computeVisibleRange(tMinFull, tMaxFull);
+
+    const PAD = EVT_PAD;
+    const rect = eventsCanvas ? eventsCanvas.parentElement.getBoundingClientRect() : null;
+    if (!rect) return null;
+    const plotW = rect.width - PAD.left - PAD.right;
+    const xToTime = x => tMin + ((x - PAD.left) / plotW) * (tMax - tMin);
+    const mouseTime = xToTime(mouseX);
+    const hitRadius = (tMax - tMin) / plotW * 6; // ~6px hit radius
+
+    const displayEvents = (waveformTuningActive && waveformTuningEvents)
+        ? waveformTuningEvents
+        : configuredEvents;
+
+    let closest = null;
+    let closestDist = Infinity;
+    for (const evt of displayEvents) {
+        if (evt.time == null) continue;
+        const dist = Math.abs(evt.time - mouseTime);
+        if (dist < hitRadius && dist < closestDist) {
+            closestDist = dist;
+            closest = evt;
+        }
+    }
+    return closest;
 }
 
 // ─── Resize Handler ──────────────────────────────────────────────────────

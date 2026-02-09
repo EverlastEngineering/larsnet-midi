@@ -652,9 +652,10 @@ def _run_sensitive_detection(
     """
     from .analysis_core import calculate_event_durations
 
-    # Sensitive detection parameters — capture everything above noise floor
-    SENSITIVE_THRESHOLD_DB = 1.0
-    SENSITIVE_MIN_ABSOLUTE_ENERGY = 0.0001
+    # Sensitive detection parameters — capture candidates above noise floor
+    # 10x above the lowest settings to avoid picking up pure noise
+    SENSITIVE_THRESHOLD_DB = 10.0
+    SENSITIVE_MIN_ABSOLUTE_ENERGY = 0.001
 
     # Reuse per-stem params that aren't sensitivity-related
     stem_cfg = config.get(stem_type, {})

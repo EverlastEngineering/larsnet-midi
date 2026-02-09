@@ -209,7 +209,7 @@ class TestEnvelopeEndpoint:
 
     @patch('webui.api.projects.get_project_by_number')
     def test_get_envelope_downsampling(self, mock_get, client, tmp_path):
-        """Downsamples large envelope arrays to ~2000 points."""
+        """Downsamples large envelope arrays to ~8000 points."""
         project_path = tmp_path / '4 - Long Song'
         midi_dir = project_path / 'midi'
         midi_dir.mkdir(parents=True)
@@ -233,7 +233,7 @@ class TestEnvelopeEndpoint:
         response = client.get('/api/projects/4/envelope/kick')
         assert response.status_code == 200
         data = json.loads(response.data)
-        assert data['sample_count'] == 2000
+        assert data['sample_count'] == 8000
 
     @patch('webui.api.projects.get_project_by_number')
     def test_get_envelope_stem_not_found(self, mock_get, client, project_with_analysis):

@@ -170,7 +170,20 @@ class LarsNetAPI {
     async getProjectEnvelope(projectNumber, stemType) {
         return await this.get(`/projects/${projectNumber}/envelope/${stemType}`);
     }
-    
+
+    async getEventOverrides(projectNumber) {
+        return await this.get(`/projects/${projectNumber}/event-overrides`);
+    }
+
+    async saveEventOverrides(projectNumber, overrides) {
+        const response = await fetch(`${API_BASE}/projects/${projectNumber}/event-overrides`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ overrides })
+        });
+        return await response.json();
+    }
+
     async deleteProject(projectNumber) {
         try {
             const response = await fetch(`${API_BASE}/projects/${projectNumber}`, {
