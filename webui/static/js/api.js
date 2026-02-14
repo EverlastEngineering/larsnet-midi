@@ -158,6 +158,10 @@ class LarsNetAPI {
     async getProjectConfig(projectNumber, configName) {
         return await this.get(`/projects/${projectNumber}/config/${configName}`);
     }
+
+    async updateConfig(projectId, configType, updates) {
+        return await this.post(`/config/${projectId}/${configType}`, { updates });
+    }
     
     async getProjectJobs(projectNumber) {
         return await this.get(`/projects/${projectNumber}/jobs`);
@@ -289,6 +293,13 @@ class LarsNetAPI {
     
     async stemsToMidi(projectNumber, options = {}) {
         return await this.post('/stems-to-midi', {
+            project_number: projectNumber,
+            ...options
+        });
+    }
+
+    async rebuildMidi(projectNumber, options = {}) {
+        return await this.post('/rebuild-midi', {
             project_number: projectNumber,
             ...options
         });

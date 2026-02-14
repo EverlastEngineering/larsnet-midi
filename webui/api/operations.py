@@ -360,6 +360,83 @@ def stems_to_midi():
         }), 500
 
 
+@operations_bp.route('/rebuild-midi', methods=['POST'])
+def rebuild_midi():
+    """
+    POST /api/rebuild-midi
+
+    Re-filter cached analysis data and rebuild MIDI without re-running
+    audio detection. Returns updated analysis data synchronously (no job queue).
+
+    Request body (JSON):
+        {
+            "project_number": 1,
+            "stem_types": ["kick", "snare"],  # optional: null = all stems
+            "honor_overrides": true             # optional: default true
+        }
+
+    Returns:
+        200: Rebuild complete with analysis data
+        400: Invalid request or missing analysis
+        404: Project not found
+        500: Internal error
+
+    Response format:
+        {
+            "success": true,
+            "stems_rebuilt": ["kick", "snare"],
+            "elapsed_ms": 42,
+            "analysis_data": { ... },
+            "events_by_stem": { ... }
+        }
+    """
+    try:
+        data = request.get_json()
+
+        if not data or 'project_number' not in data:
+            return jsonify({
+                'error': 'Invalid request',
+                'message': 'Request body must include project_number'
+            }), 400
+
+        project_number = data['project_number']
+
+        # Validate project exists
+        project = get_project_by_number(project_number, USER_FILES_DIR)
+        if project is None:
+            return jsonify({
+                'error': 'Project not found',
+                'message': f'No project with number {project_number}'
+            }), 404
+
+        # Extract optional parameters
+        stem_types = data.get('stem_types', None)
+        honor_overrides = data.get('honor_overrides', True)
+
+        # Run rebuild synchronously (sub-second, no job queue needed)
+        from stems_to_midi.rebuild_shell import rebuild_midi_for_project
+
+        result = rebuild_midi_for_project(
+            project_dir=project['path'],
+            stem_types=stem_types,
+            honor_overrides=honor_overrides,
+        )
+
+        if not result['success']:
+            status_code = 400
+            if result.get('requires_full_pipeline'):
+                status_code = 409  # Conflict — needs full pipeline
+            return jsonify(result), status_code
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to rebuild MIDI',
+            'message': str(e)
+        }), 500
+
+
 @operations_bp.route('/render-video', methods=['POST'])
 def render_video():
     """

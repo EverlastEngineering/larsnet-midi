@@ -130,6 +130,7 @@ function resetTuningSliders() {
     delete tuningSliderValues[waveformActiveStem];
     buildSlidersForStem(waveformActiveStem);
     applyTuningFilter();
+    updateTuningSaveButton();
 }
 
 // ─── Slider UI ───────────────────────────────────────────────────────────
@@ -191,6 +192,9 @@ function buildSlidersForStem(stemType) {
     container.querySelectorAll('input[type=range]').forEach(input => {
         input.addEventListener('input', onSliderInput);
     });
+
+    // Update save button visibility for this stem
+    updateTuningSaveButton();
 }
 
 /**
@@ -222,12 +226,168 @@ function onSliderInput(e) {
     const display = document.getElementById(`tuning-val-${key}`);
     if (display) display.innerHTML = `${formatSliderValue(val)}${unitLabel}`;
 
+    // Update Save button visibility
+    updateTuningSaveButton();
+
     // Debounced re-filter
     if (tuningRafId) cancelAnimationFrame(tuningRafId);
     tuningRafId = requestAnimationFrame(() => {
         applyTuningFilter();
         tuningRafId = null;
     });
+}
+
+// ─── Save & Reconvert ────────────────────────────────────────────────────
+
+/**
+ * Check whether current slider values differ from the configured values.
+ * Shows/hides the Save & Reconvert button accordingly.
+ */
+function updateTuningSaveButton() {
+    const btn = document.getElementById('tuning-save-btn');
+    if (!btn || !waveformActiveStem) return;
+
+    const stemType = waveformActiveStem;
+    const stemData = waveformAnalysisData?.stems?.[stemType];
+    const logic = stemData?.logic || {};
+    const sliderConfigs = STEM_SLIDER_CONFIGS[stemType];
+    const stored = tuningSliderValues[stemType] || {};
+
+    if (!sliderConfigs) {
+        btn.classList.add('hidden');
+        return;
+    }
+
+    // Check if any value differs from the configured value
+    let hasChanges = false;
+    for (const slider of sliderConfigs) {
+        const configuredVal = logic[slider.key] != null ? logic[slider.key] : slider.fallback;
+        const currentVal = stored[slider.key];
+        if (currentVal != null && Math.abs(currentVal - configuredVal) > slider.step * 0.01) {
+            hasChanges = true;
+            break;
+        }
+    }
+
+    btn.classList.toggle('hidden', !hasChanges);
+}
+
+/**
+ * Keys that live in the global [filtering] section rather than per-stem.
+ */
+const GLOBAL_FILTERING_KEYS = new Set(['reverb_continuation_attack_threshold']);
+
+/**
+ * Build config update paths for the current stem's tuned values.
+ * Maps slider keys to their YAML paths: per-stem keys go to [stemType, key],
+ * global filtering keys go to ["filtering", key].
+ */
+function buildConfigUpdates(stemType) {
+    const sliderConfigs = STEM_SLIDER_CONFIGS[stemType];
+    const stored = tuningSliderValues[stemType] || {};
+    const stemData = waveformAnalysisData?.stems?.[stemType];
+    const logic = stemData?.logic || {};
+    const updates = [];
+
+    if (!sliderConfigs) return updates;
+
+    for (const slider of sliderConfigs) {
+        const configuredVal = logic[slider.key] != null ? logic[slider.key] : slider.fallback;
+        const currentVal = stored[slider.key];
+        if (currentVal != null && Math.abs(currentVal - configuredVal) > slider.step * 0.01) {
+            // Route to correct YAML section
+            const path = GLOBAL_FILTERING_KEYS.has(slider.key)
+                ? ['filtering', slider.key]
+                : [stemType, slider.key];
+            updates.push({ path, value: currentVal });
+        }
+    }
+
+    return updates;
+}
+
+/**
+ * Save tuned thresholds to config YAML and rebuild MIDI from cached analysis.
+ *
+ * Uses the fast rebuild endpoint (sub-second, no audio re-detection).
+ * Falls back to full pipeline if no analysis data is cached.
+ */
+async function saveTuningAndReconvert() {
+    if (!currentProject || !waveformActiveStem) return;
+
+    const btn = document.getElementById('tuning-save-btn');
+    const stemType = waveformActiveStem;
+    const updates = buildConfigUpdates(stemType);
+
+    if (updates.length === 0) {
+        showToast('No changes to save', 'info');
+        return;
+    }
+
+    // Disable button during save
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Saving…';
+    }
+
+    try {
+        // Step 1: Save config changes
+        await api.updateConfig(currentProject.number, 'midiconfig', updates);
+        showToast(`Saved ${updates.length} threshold${updates.length > 1 ? 's' : ''} for ${stemType}`, 'success');
+
+        // Step 2: Try fast rebuild from cached analysis
+        if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Rebuilding…';
+
+        try {
+            const result = await api.rebuildMidi(currentProject.number, {
+                honor_overrides: true,
+            });
+
+            if (result.success) {
+                // Update analysis data in place — no page refresh needed
+                if (result.analysis_data) {
+                    waveformAnalysisData = result.analysis_data;
+                }
+
+                const totalEvents = Object.values(result.events_by_stem || {})
+                    .reduce((sum, events) => sum + events.length, 0);
+                showToast(
+                    `Rebuilt ${totalEvents} events across ${result.stems_rebuilt.length} stems in ${result.elapsed_ms}ms`,
+                    'success'
+                );
+
+                // Re-render waveform with updated analysis data
+                const stemData = waveformAnalysisData?.stems?.[stemType];
+                if (stemData) {
+                    updateEventCounts(stemData);
+                }
+                // Reset tuning state since changes are now committed
+                waveformTuningEvents = null;
+                waveformTuningActive = false;
+                drawWaveform();
+                return;
+            }
+        } catch (rebuildErr) {
+            // If rebuild returns 409 (needs full pipeline) or fails, fall back
+            console.warn('Rebuild failed, falling back to full pipeline:', rebuildErr.message);
+        }
+
+        // Step 3: Fall back to full pipeline
+        if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Reconverting…';
+        const result = await api.stemsToMidi(currentProject.number);
+        showToast('Full MIDI reconversion started (no cached analysis)', 'info');
+        monitorJob(result.job_id, 'stems-to-midi');
+        toggleTuningPanel();
+
+    } catch (err) {
+        console.error('Save & reconvert failed:', err);
+        showToast(`Failed: ${err.message}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-save mr-1"></i>Save &amp; Reconvert';
+        }
+    }
 }
 
 // ─── Client-Side Filtering ───────────────────────────────────────────────

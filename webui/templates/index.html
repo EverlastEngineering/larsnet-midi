@@ -665,6 +665,9 @@
                                                 <button onclick="resetTuningSliders()" class="px-2 py-0.5 rounded text-xs text-gray-400 hover:text-white hover:bg-gray-700 transition-smooth" title="Reset to configured defaults">
                                                     <i class="fas fa-undo mr-1"></i>Reset
                                                 </button>
+                                                <button id="tuning-save-btn" onclick="saveTuningAndReconvert()" class="hidden px-2.5 py-0.5 rounded text-xs font-medium bg-larsnet-primary text-white hover:bg-indigo-500 transition-smooth" title="Save thresholds to config and re-run MIDI conversion">
+                                                    <i class="fas fa-save mr-1"></i>Save &amp; Reconvert
+                                                </button>
                                                 <button onclick="toggleTuningPanel()" class="px-2 py-0.5 rounded text-xs text-gray-400 hover:text-white hover:bg-gray-700 transition-smooth" title="Close tuning panel">
                                                     <i class="fas fa-times"></i>
                                                 </button>
@@ -1036,11 +1039,11 @@
     </div>
     
     <!-- JavaScript -->
-    <script src="/static/js/api.js?v=20"></script>
+    <script src="/static/js/api.js?v=22"></script>
     <script src="/static/js/settings.js?v=19"></script>
     <script src="/static/js/advanced-midi.js?v=19"></script>
-    <script src="/static/js/waveform.js?v=20"></script>
-    <script src="/static/js/threshold-tuning.js?v=20"></script>
+    <script src="/static/js/waveform.js?v=26"></script>
+    <script src="/static/js/threshold-tuning.js?v=22"></script>
     <script src="/static/js/projects.js?v=19"></script>
     <script src="/static/js/operations.js?v=19"></script>
     <script src="/static/js/app.js?v=19"></script>
