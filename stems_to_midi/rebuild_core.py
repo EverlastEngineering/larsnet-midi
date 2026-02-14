@@ -5,6 +5,14 @@ Re-filters cached detection results from analysis.json and produces
 MIDI-ready events without re-running audio detection. This enables
 sub-second parameter tuning iteration.
 
+The rebuild operates in two modes:
+- **Same thresholds**: Trust stored statuses from analysis.json exactly.
+  The full pipeline applied multi-pass filtering (geomean, decay, statistical,
+  reverb continuation) that cannot be replicated without audio.
+- **Changed thresholds**: Re-apply geomean/sustain filtering (Pass 1) to
+  events_configured. Merge sensitive events only when thresholds are lowered
+  to discover events the original pipeline would not have found.
+
 Pure functions — no I/O, no side effects.
 """
 
@@ -14,6 +22,7 @@ import numpy as np
 
 from .analysis_core import (
     get_spectral_config_for_stem,
+    mark_reverb_continuations,
     should_keep_onset,
     normalize_values,
     estimate_velocity,
@@ -22,21 +31,93 @@ from .config import DrumMapping
 
 
 # ============================================================================
+# Threshold Comparison
+# ============================================================================
+
+
+def _thresholds_changed(
+    spectral_config: Dict,
+    stored_logic: Dict,
+) -> bool:
+    """
+    Determine if current config thresholds differ from stored analysis logic.
+
+    Compares geomean_threshold and min_sustain_ms — the two parameters
+    that the user can tune via sliders.
+
+    Args:
+        spectral_config: Current config from get_spectral_config_for_stem().
+        stored_logic: The 'logic' block from analysis.json for this stem.
+
+    Returns:
+        True if any threshold has changed, False if identical.
+    """
+    current_geomean = spectral_config.get('geomean_threshold')
+    stored_geomean = stored_logic.get('geomean_threshold')
+
+    current_sustain = spectral_config.get('min_sustain_ms')
+    stored_sustain = stored_logic.get('min_sustain_ms')
+
+    if current_geomean != stored_geomean:
+        return True
+    if current_sustain != stored_sustain:
+        return True
+
+    return False
+
+
+def _thresholds_lowered(
+    spectral_config: Dict,
+    stored_logic: Dict,
+) -> bool:
+    """
+    Determine if thresholds were lowered (more permissive), requiring
+    sensitive events to fill in newly-qualifying candidates.
+
+    Args:
+        spectral_config: Current config from get_spectral_config_for_stem().
+        stored_logic: The 'logic' block from analysis.json for this stem.
+
+    Returns:
+        True if geomean threshold was lowered or sustain threshold was lowered.
+    """
+    current_geomean = spectral_config.get('geomean_threshold', 0)
+    stored_geomean = stored_logic.get('geomean_threshold', 0)
+
+    if current_geomean < stored_geomean:
+        return True
+
+    current_sustain = spectral_config.get('min_sustain_ms')
+    stored_sustain = stored_logic.get('min_sustain_ms')
+
+    # If sustain filter was added or threshold raised, that's more restrictive
+    # If sustain filter was removed or threshold lowered, that's more permissive
+    if stored_sustain is not None and current_sustain is not None:
+        if current_sustain < stored_sustain:
+            return True
+    elif stored_sustain is not None and current_sustain is None:
+        # Sustain filter removed = more permissive
+        return True
+
+    return False
+
+
+# ============================================================================
 # Event Pool Construction
 # ============================================================================
 
 
-def _merge_event_pools(
+def _merge_sensitive_events(
     configured_events: List[Dict],
     sensitive_events: List[Dict],
     merge_window_sec: float = 0.015,
 ) -> List[Dict]:
     """
-    Merge configured and sensitive event pools, deduplicating by time.
+    Add sensitive-only events to the configured pool for re-filtering.
 
-    Configured events take precedence when times overlap within the merge
-    window. Sensitive-only events fill gaps (events detected at max
-    sensitivity but not at configured settings).
+    Only called when thresholds have been lowered, to find events that
+    the original pipeline would not have detected at configured sensitivity.
+    Configured events are authoritative; sensitive events fill gaps only.
 
     Args:
         configured_events: Events from configured-sensitivity detection.
@@ -44,23 +125,14 @@ def _merge_event_pools(
         merge_window_sec: Time window for considering events as duplicates.
 
     Returns:
-        Merged event list sorted by time, each annotated with 'source'.
+        Combined event list sorted by time.
     """
-    # Index configured event times for fast lookup
     configured_times = {round(e['time'], 4) for e in configured_events}
 
-    merged = []
+    merged = list(configured_events)
 
-    # Add all configured events (they are authoritative)
-    for event in configured_events:
-        entry = dict(event)
-        entry['_source'] = 'configured'
-        merged.append(entry)
-
-    # Add sensitive events that don't overlap with configured events
     for event in sensitive_events:
         t = event['time']
-        # Check if any configured event is within merge window
         is_duplicate = any(
             abs(t - ct) < merge_window_sec for ct in configured_times
         )
@@ -69,7 +141,6 @@ def _merge_event_pools(
             entry['_source'] = 'sensitive'
             merged.append(entry)
 
-    # Sort by time
     merged.sort(key=lambda e: e['time'])
     return merged
 
@@ -113,9 +184,15 @@ def _refilter_events(
     spectral_config: Dict,
 ) -> List[Dict]:
     """
-    Re-apply filtering thresholds to events using pre-computed spectral features.
+    Re-apply Pass 1 filtering thresholds (geomean/sustain) to events.
 
-    Events with 'override' flag retain their status regardless of thresholds.
+    Only called when thresholds have changed. Events with 'override' flag
+    retain their status regardless.
+
+    Note: This only applies Pass 1. Passes 2-4 (decay, statistical, reverb
+    continuation) from the full pipeline require audio and cannot be replicated.
+    The reverb continuation filter is applied separately as a post-pass since
+    it operates on stored metadata.
 
     Args:
         events: Event dicts with pre-computed geomean, sustain_ms, strength, etc.
@@ -145,6 +222,55 @@ def _refilter_events(
         )
         event['status'] = 'KEPT' if is_kept else 'FILTERED'
 
+    return events
+
+
+def _apply_reverb_continuation_filter(
+    events: List[Dict],
+    config: Dict,
+) -> List[Dict]:
+    """
+    Apply reverb continuation detection as a post-filter pass.
+
+    Uses stored metadata (attack_sharpness, duration_sec, amplitude_at_start,
+    amplitude_at_end) to identify events that are reverb/decay artifacts
+    rather than real hits. This replicates the final pass from
+    filter_onsets_by_spectral() without requiring audio.
+
+    Args:
+        events: Event dicts with status field. Only KEPT events are evaluated.
+        config: Full config dict for reverb continuation threshold.
+
+    Returns:
+        Same event list with REVERB_CONTINUATION statuses applied.
+    """
+    # Only process events that have the required metadata
+    kept_events = [e for e in events if e.get('status') == 'KEPT']
+    if len(kept_events) < 2:
+        return events
+
+    # Check if events have the required metadata fields
+    has_metadata = all(
+        'duration_sec' in e and 'amplitude_at_start' in e
+        for e in kept_events
+    )
+    if not has_metadata:
+        return events
+
+    # mark_reverb_continuations modifies in place — operates on KEPT events
+    attack_threshold = config.get('filtering', {}).get(
+        'reverb_continuation_attack_threshold', 0.2
+    )
+    mark_reverb_continuations(
+        kept_events,
+        time_margin_ms=5.0,
+        amplitude_margin=0.001,
+        attack_sharpness_threshold=attack_threshold,
+    )
+
+    # Transfer status changes back to the main events list
+    # (mark_reverb_continuations modified the kept_events in place,
+    # and they reference the same dicts as the events list)
     return events
 
 
@@ -296,6 +422,16 @@ def rebuild_events_from_analysis(
     It replaces the full detection pipeline when only filtering thresholds
     or manual overrides have changed.
 
+    Operating modes per stem:
+    - **Same thresholds, no overrides**: Trust stored statuses from the full
+      pipeline. Events already went through multi-pass filtering (geomean,
+      decay, statistical, reverb continuation). Just reconstruct MIDI.
+    - **Same thresholds, with overrides**: Apply overrides to stored events,
+      then reconstruct MIDI.
+    - **Changed thresholds**: Re-apply Pass 1 (geomean/sustain) filtering.
+      If thresholds lowered, merge sensitive events to find new candidates.
+      Apply reverb continuation filter as post-pass.
+
     Args:
         analysis_data: Parsed analysis.json dict (v3 format).
         overrides: Per-stem manual overrides from event_overrides.json.
@@ -351,33 +487,59 @@ def rebuild_events_from_analysis(
         stem_data = updated_stems[stem_type]
         configured_events = stem_data.get('events_configured', [])
         sensitive_events = stem_data.get('events_sensitive', [])
+        stored_logic = stem_data.get('logic', {})
         stem_overrides = overrides.get(stem_type, {})
 
         # Get current spectral config for this stem (reads thresholds from config)
         spectral_config = get_spectral_config_for_stem(stem_type, config)
 
-        # Step 1: Merge event pools (configured + sensitive, deduplicated)
-        merged = _merge_event_pools(configured_events, sensitive_events)
+        # Determine rebuild strategy based on threshold changes
+        changed = _thresholds_changed(spectral_config, stored_logic)
+        lowered = changed and _thresholds_lowered(spectral_config, stored_logic)
 
-        # Step 2: Apply manual overrides
-        _apply_overrides(merged, stem_overrides)
+        if changed:
+            # Thresholds changed — need to re-filter
+            if lowered:
+                # Thresholds lowered — merge sensitive events to find new candidates
+                events = _merge_sensitive_events(
+                    configured_events, sensitive_events,
+                )
+            else:
+                # Thresholds raised — only re-filter configured events
+                events = list(configured_events)
 
-        # Step 3: Re-filter with current thresholds
-        _refilter_events(merged, spectral_config)
+            # Apply manual overrides before re-filtering
+            _apply_overrides(events, stem_overrides)
 
-        # Step 4: Extract kept events for MIDI generation
-        kept_events = [e for e in merged if e.get('status') == 'KEPT']
+            # Re-apply Pass 1 filtering with new thresholds
+            _refilter_events(events, spectral_config)
 
-        # Step 5: Generate MIDI events
+            # Apply reverb continuation filter (post-pass, uses stored metadata)
+            _apply_reverb_continuation_filter(events, config)
+        else:
+            # Thresholds unchanged — trust stored statuses from full pipeline
+            events = list(configured_events)
+
+            # Still apply manual overrides (user may have toggled individual events)
+            _apply_overrides(events, stem_overrides)
+
+        # Extract kept events for MIDI generation
+        kept_events = [e for e in events if e.get('status') == 'KEPT']
+
+        # Generate MIDI events
         midi_events = _events_to_midi(
             kept_events, stem_type, drum_mapping, config, spectral_config,
         )
         midi_events_by_stem[stem_type] = midi_events
 
-        # Step 6: Update analysis data with new statuses
-        # Split merged back into configured and sensitive for storage
-        updated_configured = [e for e in merged if e.get('_source') == 'configured']
-        updated_sensitive = [e for e in merged if e.get('_source') == 'sensitive']
+        # Update analysis data with new statuses
+        # Separate back into configured vs sensitive-sourced for storage
+        updated_configured = [
+            e for e in events if e.get('_source') != 'sensitive'
+        ]
+        updated_sensitive = [
+            e for e in events if e.get('_source') == 'sensitive'
+        ]
 
         # Clean internal fields before storage
         for event_list in [updated_configured, updated_sensitive]:
@@ -398,10 +560,32 @@ def rebuild_events_from_analysis(
                 event.pop('velocity', None)
 
         stem_data['events_configured'] = updated_configured
-        stem_data['events_sensitive'] = updated_sensitive
+        if updated_sensitive:
+            # Only update sensitive if we merged them in
+            stem_data['events_sensitive'] = sensitive_events  # Keep original
+
+        # Update stored logic to reflect current thresholds
+        if changed:
+            stem_data['logic'] = _build_logic_block(spectral_config, stored_logic)
 
     # Build updated analysis output
     updated_analysis = dict(analysis_data)
     updated_analysis['stems'] = updated_stems
 
     return updated_analysis, midi_events_by_stem
+
+
+def _build_logic_block(
+    spectral_config: Dict,
+    stored_logic: Dict,
+) -> Dict:
+    """
+    Build updated logic block reflecting current thresholds.
+
+    Preserves non-threshold fields (freq_bands, passes, decay_filter_enabled)
+    from the stored logic while updating threshold values.
+    """
+    logic = dict(stored_logic)
+    logic['geomean_threshold'] = spectral_config.get('geomean_threshold')
+    logic['min_sustain_ms'] = spectral_config.get('min_sustain_ms')
+    return logic

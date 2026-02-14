@@ -34,6 +34,7 @@ const WAVEFORM_COLORS = {
     tooltipBorder: '#4b5563',
     tooltipText: '#e5e7eb',
     crosshair: 'rgba(255, 255, 255, 0.3)',
+    playbackLine: '#22d3ee',          // cyan playback position indicator
 };
 
 const STEM_COLORS = {
@@ -86,6 +87,8 @@ let audioBufferCache = {};   // stemType -> AudioBuffer
 let audioSource = null;      // currently playing AudioBufferSourceNode
 let audioIsPlaying = false;
 let audioPlaybackTime = null; // time (in song seconds) where playback started
+let audioStartContextTime = null; // audioCtx.currentTime when playback started
+let playbackAnimFrameId = null;   // requestAnimationFrame ID for playback indicator
 
 // Event override state: { stemType: { "1.2345": "KEPT"|"FILTERED", ... } }
 let eventOverrides = {};
@@ -830,6 +833,63 @@ function drawCrosshair(ctx, canvas) {
     ctx.restore();
 }
 
+/**
+ * Draw a solid playback position indicator line on a canvas.
+ * Visually distinct from the dotted crosshair: solid, bright cyan, with glow.
+ */
+function drawPlaybackIndicator(ctx, canvas, x) {
+    const rect = canvas.parentElement.getBoundingClientRect();
+    const H = rect.height;
+
+    ctx.save();
+    // Glow effect
+    ctx.shadowColor = WAVEFORM_COLORS.playbackLine;
+    ctx.shadowBlur = 6;
+    ctx.strokeStyle = WAVEFORM_COLORS.playbackLine;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, H);
+    ctx.stroke();
+    ctx.restore();
+}
+
+/**
+ * Get the current playback song time based on AudioContext timing.
+ */
+function getCurrentPlaybackTime() {
+    if (!audioIsPlaying || audioPlaybackTime == null || audioStartContextTime == null || !audioCtx) {
+        return null;
+    }
+    const elapsed = audioCtx.currentTime - audioStartContextTime;
+    return audioPlaybackTime + elapsed;
+}
+
+/**
+ * Animation loop that redraws the playback indicator at ~60fps.
+ */
+function animatePlaybackIndicator() {
+    if (!audioIsPlaying) {
+        playbackAnimFrameId = null;
+        drawWaveform(); // Final redraw to clear the indicator
+        return;
+    }
+
+    const currentTime = getCurrentPlaybackTime();
+    if (currentTime != null) {
+        const x = timeToCanvasX(currentTime);
+        // Redraw waveform (clears old indicator) then overlay the indicator
+        drawWaveform();
+        if (x != null) {
+            drawPlaybackIndicator(envelopeCtx, envelopeCanvas, x);
+            drawPlaybackIndicator(eventsCtx, eventsCanvas, x);
+        }
+    }
+
+    playbackAnimFrameId = requestAnimationFrame(animatePlaybackIndicator);
+}
+
 // ─── Tooltip ─────────────────────────────────────────────────────────────
 
 function drawTooltip(ctx, event, W, H) {
@@ -1010,22 +1070,62 @@ function onCanvasWheel(e) {
 function onCanvasDragStart(e) {
     const canvasRect = e.target.parentElement.getBoundingClientRect();
     const mouseX = e.clientX - canvasRect.left;
+    const startX = mouseX;
+    let hasMoved = false;
 
-    // When zoomed in: drag to pan
+    // When zoomed in: distinguish between hold (audio playback) and drag (pan)
+    // Audio starts immediately on mousedown; if user drags, we stop audio and pan instead.
     if (waveformZoom > 1) {
-        waveformIsDragging = true;
+        waveformIsDragging = false;
         waveformDragStartX = mouseX;
         waveformDragStartPan = waveformPanOffset;
+        let startedAudio = false;
+
+        // Check for event bar toggle first (instant, no hold needed)
+        const isEventsPanel = e.target === eventsCanvas;
+        if (isEventsPanel && waveformActiveStem) {
+            const hitEvent = hitTestEvent(mouseX);
+            if (hitEvent) {
+                toggleEventOverride(waveformActiveStem, hitEvent);
+                return;
+            }
+        }
+
+        // Start audio playback immediately on mousedown
+        if (waveformActiveStem) {
+            const clickTime = canvasXToTime(mouseX);
+            if (clickTime != null && clickTime >= 0) {
+                ensureAudioBuffer(waveformActiveStem).then(buffer => {
+                    if (hasMoved) return; // User started dragging before buffer loaded
+                    if (!buffer) return;
+                    startAudioPlayback(waveformActiveStem, clickTime);
+                    startedAudio = true;
+                });
+            }
+        }
 
         const onMove = (me) => {
             const rect = e.target.parentElement.getBoundingClientRect();
             const mx = me.clientX - rect.left;
-            const plotW = rect.width - EVT_PAD.left - EVT_PAD.right;
-            const dx = (mx - waveformDragStartX) / plotW;
-            waveformPanOffset = waveformDragStartPan - dx;
-            clampPan();
-            waveformMouseX = me.clientX - rect.left;
-            drawWaveform();
+            
+            // If moved more than 3 pixels, switch to drag mode
+            if (Math.abs(mx - startX) > 3) {
+                if (!hasMoved) {
+                    // First time crossing threshold: stop audio if it started
+                    hasMoved = true;
+                    if (startedAudio) {
+                        stopAudioPlayback();
+                        startedAudio = false;
+                    }
+                }
+                waveformIsDragging = true;
+                const plotW = rect.width - EVT_PAD.left - EVT_PAD.right;
+                const dx = (mx - waveformDragStartX) / plotW;
+                waveformPanOffset = waveformDragStartPan - dx;
+                clampPan();
+                waveformMouseX = me.clientX - rect.left;
+                drawWaveform();
+            }
         };
 
         const onUp = () => {
@@ -1035,6 +1135,11 @@ function onCanvasDragStart(e) {
             const cursorStyle = waveformZoom > 1 ? 'grab' : 'crosshair';
             if (envelopeCanvas) envelopeCanvas.style.cursor = cursorStyle;
             if (eventsCanvas) eventsCanvas.style.cursor = cursorStyle;
+
+            // Stop audio on mouse release
+            if (startedAudio) {
+                stopAudioPlayback();
+            }
         };
 
         document.addEventListener('mousemove', onMove);
@@ -1062,8 +1167,12 @@ function onCanvasDragStart(e) {
     const clickTime = canvasXToTime(mouseX);
     if (clickTime == null || clickTime < 0) return;
 
+    console.log('Click-to-play at time:', clickTime.toFixed(2), 'seconds');
     ensureAudioBuffer(waveformActiveStem).then(buffer => {
-        if (!buffer) return;
+        if (!buffer) {
+            console.warn('No audio buffer available for playback');
+            return;
+        }
         startAudioPlayback(waveformActiveStem, clickTime);
     });
 
@@ -1080,28 +1189,64 @@ function onCanvasDragStart(e) {
  * Fetch and decode stem audio into an AudioBuffer (cached per stem).
  */
 async function ensureAudioBuffer(stemType) {
-    if (audioBufferCache[stemType]) return audioBufferCache[stemType];
-    if (!currentProject || !currentProject.files) return null;
+    if (audioBufferCache[stemType]) {
+        console.log('Using cached audio buffer for', stemType);
+        return audioBufferCache[stemType];
+    }
+    
+    if (!currentProject) {
+        console.error('No currentProject available for audio buffer');
+        return null;
+    }
+    
+    if (!currentProject.files) {
+        console.error('No files in currentProject:', currentProject);
+        return null;
+    }
 
     if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        console.log('Created audio context, state:', audioCtx.state);
     }
 
-    // Find the stem filename from project files (e.g. "SongName.kick.wav")
+    // Find the stem filename from project files (e.g. "SongName-kick.wav" or "SongName.kick.wav")
+    // Try stems folder first, then cleaned folder
     const stemFiles = currentProject.files.stems || [];
-    const stemFile = stemFiles.find(f => f.includes(`.${stemType}.`));
-    if (!stemFile) return null;
+    const cleanedFiles = currentProject.files.cleaned || [];
+    console.log('Available stem files:', stemFiles);
+    console.log('Available cleaned files:', cleanedFiles);
+    
+    // Match both dash and dot patterns: "file-kick.wav" or "file.kick.wav"
+    let stemFile = stemFiles.find(f => f.includes(`-${stemType}.`) || f.includes(`.${stemType}.`));
+    let fileType = 'stems';
+    
+    if (!stemFile) {
+        stemFile = cleanedFiles.find(f => f.includes(`-${stemType}.`) || f.includes(`.${stemType}.`));
+        fileType = 'cleaned';
+    }
+    
+    if (!stemFile) {
+        console.error('No stem file found for type:', stemType, 'in stems or cleaned folders');
+        return null;
+    }
+    console.log('Found stem file:', stemFile, 'for type:', stemType, 'in', fileType, 'folder');
 
-    const url = `/api/projects/${currentProject.number}/download/stems/${stemFile}`;
+    const url = `/api/projects/${currentProject.number}/download/${fileType}/${stemFile}`;
+    console.log('Loading audio buffer for', stemType, 'from', url);
     try {
         const response = await fetch(url);
-        if (!response.ok) return null;
+        if (!response.ok) {
+            console.warn('Audio fetch failed:', response.status, response.statusText);
+            return null;
+        }
         const arrayBuf = await response.arrayBuffer();
+        console.log('Decoding audio buffer, size:', arrayBuf.byteLength, 'bytes');
         const audioBuf = await audioCtx.decodeAudioData(arrayBuf);
         audioBufferCache[stemType] = audioBuf;
+        console.log('Audio buffer ready, duration:', audioBuf.duration.toFixed(2), 'seconds');
         return audioBuf;
     } catch (err) {
-        console.warn('Audio buffer load failed for', stemType, err);
+        console.error('Audio buffer load failed for', stemType, err);
         return null;
     }
 }
@@ -1116,16 +1261,31 @@ function startAudioPlayback(stemType, startTime) {
     if (!buffer || !audioCtx) return;
 
     // Resume context if suspended (autoplay policy)
-    if (audioCtx.state === 'suspended') audioCtx.resume();
+    if (audioCtx.state === 'suspended') {
+        console.log('Resuming suspended audio context');
+        audioCtx.resume();
+    }
 
     audioSource = audioCtx.createBufferSource();
     audioSource.buffer = buffer;
     audioSource.connect(audioCtx.destination);
+    audioSource.onended = () => {
+        // Auto-stop indicator when audio reaches end of buffer
+        audioIsPlaying = false;
+        audioPlaybackTime = null;
+        audioStartContextTime = null;
+    };
 
     const offset = Math.max(0, Math.min(startTime, buffer.duration - 0.01));
+    console.log('Starting audio playback at offset:', offset.toFixed(2), 'seconds');
     audioSource.start(0, offset);
     audioIsPlaying = true;
     audioPlaybackTime = startTime;
+    audioStartContextTime = audioCtx.currentTime;
+
+    // Start playback indicator animation
+    if (playbackAnimFrameId) cancelAnimationFrame(playbackAnimFrameId);
+    playbackAnimFrameId = requestAnimationFrame(animatePlaybackIndicator);
 }
 
 function stopAudioPlayback() {
@@ -1136,6 +1296,13 @@ function stopAudioPlayback() {
     }
     audioIsPlaying = false;
     audioPlaybackTime = null;
+    audioStartContextTime = null;
+
+    // Stop playback indicator animation
+    if (playbackAnimFrameId) {
+        cancelAnimationFrame(playbackAnimFrameId);
+        playbackAnimFrameId = null;
+    }
 }
 
 /**
@@ -1155,6 +1322,28 @@ function canvasXToTime(mouseX) {
     const PAD = EVT_PAD;
     const plotW = (eventsCanvas ? eventsCanvas.parentElement.getBoundingClientRect().width : 800) - PAD.left - PAD.right;
     return tMin + ((mouseX - PAD.left) / plotW) * (tMax - tMin);
+}
+
+/**
+ * Convert a song time (seconds) to a canvas X position (CSS pixels).
+ * Returns null if the time is outside the visible range.
+ */
+function timeToCanvasX(songTime) {
+    if (!waveformActiveStem || !waveformAnalysisData) return null;
+
+    const stemData = waveformAnalysisData.stems[waveformActiveStem];
+    const configuredEvents = getEventsForStem(stemData);
+    const sensitiveEvents = getSensitiveEventsForStem(stemData);
+    const envelope = waveformEnvelopeCache[waveformActiveStem];
+
+    const { tMin: tMinFull, tMax: tMaxFull } = computeTimeRange(configuredEvents, sensitiveEvents, envelope);
+    const { tMin, tMax } = computeVisibleRange(tMinFull, tMaxFull);
+
+    if (songTime < tMin || songTime > tMax) return null;
+
+    const PAD = EVT_PAD;
+    const plotW = (eventsCanvas ? eventsCanvas.parentElement.getBoundingClientRect().width : 800) - PAD.left - PAD.right;
+    return PAD.left + ((songTime - tMin) / (tMax - tMin)) * plotW;
 }
 
 // ─── Event Overrides (Click-to-Toggle) ───────────────────────────────────

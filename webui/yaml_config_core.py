@@ -33,6 +33,9 @@ class ValidationRule:
         Returns:
             (is_valid, error_message)
         """
+        if value is None:
+            return True, ""  # null YAML values skip numeric validation
+        
         if self.min_value is not None and value < self.min_value:
             return False, f"Value must be >= {self.min_value}"
         
@@ -101,10 +104,11 @@ class ConfigField:
         """Create validation rule based on field type and comment hints"""
         rule = ValidationRule()
         
-        # Extract range hints from comments like "(0-1)" or "Hz"
+        # Extract range hints from the first line of inline comments like "(0-1)"
         if self.comment:
-            # Look for range patterns like (0-1), (0.0-1.0), etc.
-            range_match = re.search(r'\((\d+\.?\d*)-(\d+\.?\d*)\)', self.comment)
+            # Only use first line to avoid matching documentation hints in continuation comments
+            first_line = self.comment.split('\n')[0]
+            range_match = re.search(r'\((\d+\.?\d*)-(\d+\.?\d*)\)', first_line)
             if range_match:
                 rule.min_value = float(range_match.group(1))
                 rule.max_value = float(range_match.group(2))

@@ -11,6 +11,18 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 
 ## Open Bugs (Not Yet in GitHub)
 
+### Rebuild-from-analysis produces degraded MIDI output
+- **Status**: Fixed
+- **Priority**: High
+- **Description**: Rebuild from analysis.json produces significantly worse MIDI than the full pipeline with same config. Many reverb events are unfiltered, and in some cases entire stems (kick) go missing.
+- **Steps to Reproduce**: Run full conversion, then rebuild from analysis.json without changing sliders. Compare MIDI files.
+- **Expected Behavior**: Identical MIDI output when config is unchanged
+- **Actual Behavior**: Many more events (reverb artifacts), possible missing stems
+- **Root Cause**: Two issues: (1) Unconditional merging of sensitive events regardless of whether thresholds changed, adding hundreds of extra events. (2) Missing multi-pass filters — rebuild only had Pass 1, while full pipeline has 4 passes including decay filter, statistical badness, and reverb continuation.
+- **Solution**: Three-path strategy: same thresholds trust stored statuses; raised thresholds re-filter configured events only; lowered thresholds merge sensitive events then re-filter with reverb continuation post-pass.
+- **Validation**: Project 21 real data — all 5 stems produce identical event counts when thresholds match.
+- **Fixed in Commit**: aa96887
+
 ### Detection Analysis section not visible after MIDI job completes
 - **Status**: Open
 - **Priority**: Medium

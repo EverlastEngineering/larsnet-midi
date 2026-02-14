@@ -10,10 +10,13 @@ import pytest
 from unittest.mock import patch
 
 from .rebuild_core import (
-    _merge_event_pools,
+    _merge_sensitive_events,
     _apply_overrides,
+    _apply_reverb_continuation_filter,
     _refilter_events,
     _events_to_midi,
+    _thresholds_changed,
+    _thresholds_lowered,
     rebuild_events_from_analysis,
 )
 from .config import DrumMapping
@@ -95,46 +98,96 @@ def _make_config(stem_type='kick', geomean_threshold=50.0, **overrides):
 
 
 # ============================================================================
-# _merge_event_pools tests
+# _thresholds_changed / _thresholds_lowered tests
 # ============================================================================
 
 
-class TestMergeEventPools:
+class TestThresholdsChanged:
+    def test_same_thresholds(self):
+        spectral = {'geomean_threshold': 50.0, 'min_sustain_ms': None}
+        logic = {'geomean_threshold': 50.0, 'min_sustain_ms': None}
+        assert _thresholds_changed(spectral, logic) is False
+
+    def test_geomean_changed(self):
+        spectral = {'geomean_threshold': 80.0, 'min_sustain_ms': None}
+        logic = {'geomean_threshold': 50.0, 'min_sustain_ms': None}
+        assert _thresholds_changed(spectral, logic) is True
+
+    def test_sustain_changed(self):
+        spectral = {'geomean_threshold': 50.0, 'min_sustain_ms': 200}
+        logic = {'geomean_threshold': 50.0, 'min_sustain_ms': 100}
+        assert _thresholds_changed(spectral, logic) is True
+
+    def test_empty_logic_vs_none(self):
+        """Missing logic keys treated as None."""
+        spectral = {'geomean_threshold': None, 'min_sustain_ms': None}
+        logic = {}
+        assert _thresholds_changed(spectral, logic) is False
+
+
+class TestThresholdsLowered:
+    def test_geomean_lowered(self):
+        spectral = {'geomean_threshold': 30.0, 'min_sustain_ms': None}
+        logic = {'geomean_threshold': 50.0, 'min_sustain_ms': None}
+        assert _thresholds_lowered(spectral, logic) is True
+
+    def test_geomean_raised(self):
+        spectral = {'geomean_threshold': 80.0, 'min_sustain_ms': None}
+        logic = {'geomean_threshold': 50.0, 'min_sustain_ms': None}
+        assert _thresholds_lowered(spectral, logic) is False
+
+    def test_sustain_lowered(self):
+        spectral = {'geomean_threshold': 50.0, 'min_sustain_ms': 50}
+        logic = {'geomean_threshold': 50.0, 'min_sustain_ms': 100}
+        assert _thresholds_lowered(spectral, logic) is True
+
+    def test_sustain_removed(self):
+        """Removing sustain filter = more permissive."""
+        spectral = {'geomean_threshold': 50.0, 'min_sustain_ms': None}
+        logic = {'geomean_threshold': 50.0, 'min_sustain_ms': 100}
+        assert _thresholds_lowered(spectral, logic) is True
+
+    def test_sustain_added(self):
+        """Adding sustain filter = more restrictive."""
+        spectral = {'geomean_threshold': 50.0, 'min_sustain_ms': 100}
+        logic = {'geomean_threshold': 50.0, 'min_sustain_ms': None}
+        assert _thresholds_lowered(spectral, logic) is False
+
+
+# ============================================================================
+# _merge_sensitive_events tests
+# ============================================================================
+
+
+class TestMergeSensitiveEvents:
     def test_configured_only(self):
         configured = [_make_event(1.0), _make_event(2.0)]
-        result = _merge_event_pools(configured, [])
+        result = _merge_sensitive_events(configured, [])
         assert len(result) == 2
-        assert all(e['_source'] == 'configured' for e in result)
-
-    def test_sensitive_only(self):
-        sensitive = [_make_event(1.0), _make_event(2.0)]
-        result = _merge_event_pools([], sensitive)
-        assert len(result) == 2
-        assert all(e['_source'] == 'sensitive' for e in result)
 
     def test_deduplicates_by_time(self):
         configured = [_make_event(1.0), _make_event(2.0)]
         sensitive = [_make_event(1.005), _make_event(3.0)]  # 1.005 overlaps with 1.0
-        result = _merge_event_pools(configured, sensitive, merge_window_sec=0.015)
-        assert len(result) == 3  # 1.0 (configured), 2.0 (configured), 3.0 (sensitive)
+        result = _merge_sensitive_events(configured, sensitive, merge_window_sec=0.015)
+        assert len(result) == 3  # 1.0, 2.0 (configured), 3.0 (sensitive)
         times = [e['time'] for e in result]
-        assert 1.005 not in times  # Deduplicated
+        assert 1.005 not in times
 
     def test_non_overlapping_sensitive_included(self):
         configured = [_make_event(1.0)]
         sensitive = [_make_event(5.0)]
-        result = _merge_event_pools(configured, sensitive)
+        result = _merge_sensitive_events(configured, sensitive)
         assert len(result) == 2
-        assert result[1]['_source'] == 'sensitive'
+        assert result[1].get('_source') == 'sensitive'
 
     def test_empty_both(self):
-        result = _merge_event_pools([], [])
+        result = _merge_sensitive_events([], [])
         assert result == []
 
     def test_sorted_by_time(self):
         configured = [_make_event(3.0)]
         sensitive = [_make_event(1.0), _make_event(2.0)]
-        result = _merge_event_pools(configured, sensitive)
+        result = _merge_sensitive_events(configured, sensitive)
         times = [e['time'] for e in result]
         assert times == sorted(times)
 
@@ -230,16 +283,68 @@ class TestRefilterEvents:
 
 
 # ============================================================================
+# _apply_reverb_continuation_filter tests
+# ============================================================================
+
+
+class TestApplyReverbContinuationFilter:
+    def test_marks_reverb_continuation(self):
+        """Adjacent events with smooth envelopes are marked as reverb."""
+        events = [
+            _make_event(1.0, status='KEPT', duration_sec=0.1,
+                        amplitude_at_start=0.01, amplitude_at_end=0.005,
+                        attack_sharpness=0.5, amplitude=0.3),
+            _make_event(1.1, status='KEPT', duration_sec=0.1,
+                        amplitude_at_start=0.005, amplitude_at_end=0.002,
+                        attack_sharpness=0.05, amplitude=0.1),  # Smooth envelope
+        ]
+        config = {'filtering': {'reverb_continuation_attack_threshold': 0.2}}
+        _apply_reverb_continuation_filter(events, config)
+        assert events[0]['status'] == 'KEPT'
+        assert events[1]['status'] == 'REVERB_CONTINUATION'
+
+    def test_real_hit_not_marked(self):
+        """Events with sharp attacks are not marked as reverb."""
+        events = [
+            _make_event(1.0, status='KEPT', duration_sec=0.1,
+                        amplitude_at_start=0.01, amplitude_at_end=0.005,
+                        attack_sharpness=0.5, amplitude=0.3),
+            _make_event(1.1, status='KEPT', duration_sec=0.1,
+                        amplitude_at_start=0.005, amplitude_at_end=0.002,
+                        attack_sharpness=0.8, amplitude=0.1),  # Sharp attack
+        ]
+        config = {'filtering': {'reverb_continuation_attack_threshold': 0.2}}
+        _apply_reverb_continuation_filter(events, config)
+        assert events[0]['status'] == 'KEPT'
+        assert events[1]['status'] == 'KEPT'
+
+    def test_no_metadata_skips_filter(self):
+        """Events without reverb metadata are left alone."""
+        events = [_make_event(1.0, status='KEPT'), _make_event(2.0, status='KEPT')]
+        config = {}
+        _apply_reverb_continuation_filter(events, config)
+        assert events[0]['status'] == 'KEPT'
+        assert events[1]['status'] == 'KEPT'
+
+    def test_single_event_unchanged(self):
+        """Single event cannot be a reverb continuation."""
+        events = [_make_event(1.0, status='KEPT')]
+        config = {}
+        _apply_reverb_continuation_filter(events, config)
+        assert events[0]['status'] == 'KEPT'
+
+
+# ============================================================================
 # rebuild_events_from_analysis tests
 # ============================================================================
 
 
 class TestRebuildEventsFromAnalysis:
-    def test_basic_rebuild(self):
-        """Rebuild with same thresholds produces same KEPT/FILTERED statuses."""
+    def test_basic_rebuild_same_thresholds(self):
+        """Rebuild with same thresholds trusts stored statuses exactly."""
         analysis = _make_analysis_data({
             'kick': {
-                'logic': {'geomean_threshold': 50.0},
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
                 'events_configured': [
                     _make_event(1.0, geomean=100.0, status='KEPT'),
                     _make_event(2.0, geomean=10.0, status='FILTERED'),
@@ -259,7 +364,7 @@ class TestRebuildEventsFromAnalysis:
         """Lowering threshold promotes previously-FILTERED events."""
         analysis = _make_analysis_data({
             'kick': {
-                'logic': {'geomean_threshold': 50.0},
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
                 'events_configured': [
                     _make_event(1.0, geomean=100.0, status='KEPT'),
                     _make_event(2.0, geomean=30.0, status='FILTERED'),
@@ -277,7 +382,7 @@ class TestRebuildEventsFromAnalysis:
         """Raising threshold demotes previously-KEPT events."""
         analysis = _make_analysis_data({
             'kick': {
-                'logic': {'geomean_threshold': 50.0},
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
                 'events_configured': [
                     _make_event(1.0, geomean=100.0, status='KEPT'),
                     _make_event(2.0, geomean=60.0, status='KEPT'),
@@ -295,7 +400,7 @@ class TestRebuildEventsFromAnalysis:
         """Manual override KEPT survives even when threshold would filter."""
         analysis = _make_analysis_data({
             'kick': {
-                'logic': {'geomean_threshold': 50.0},
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
                 'events_configured': [
                     _make_event(1.0, geomean=10.0, status='FILTERED'),
                 ],
@@ -313,7 +418,7 @@ class TestRebuildEventsFromAnalysis:
         """Manual override FILTERED keeps event out even when threshold would keep."""
         analysis = _make_analysis_data({
             'kick': {
-                'logic': {'geomean_threshold': 50.0},
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
                 'events_configured': [
                     _make_event(1.0, geomean=1000.0, status='KEPT'),
                 ],
@@ -327,16 +432,34 @@ class TestRebuildEventsFromAnalysis:
 
         assert len(midi_events['kick']) == 0
 
+    def test_override_with_same_thresholds(self):
+        """Overrides work even when thresholds haven't changed."""
+        analysis = _make_analysis_data({
+            'kick': {
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
+                'events_configured': [
+                    _make_event(1.0, geomean=10.0, status='FILTERED'),
+                ],
+                'events_sensitive': [],
+            }
+        })
+        overrides = {'kick': {'1.0000': 'KEPT'}}
+        config = _make_config('kick', geomean_threshold=50.0)
+
+        updated, midi_events = rebuild_events_from_analysis(analysis, overrides, config)
+
+        assert len(midi_events['kick']) == 1
+
     def test_per_stem_rebuild(self):
         """Rebuilding a single stem leaves other stems unchanged."""
         analysis = _make_analysis_data({
             'kick': {
-                'logic': {'geomean_threshold': 50.0},
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
                 'events_configured': [_make_event(1.0, geomean=100.0)],
                 'events_sensitive': [],
             },
             'snare': {
-                'logic': {'geomean_threshold': 50.0},
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
                 'events_configured': [_make_event(2.0, geomean=100.0)],
                 'events_sensitive': [],
             },
@@ -356,11 +479,11 @@ class TestRebuildEventsFromAnalysis:
         assert 'kick' in midi_events
         assert 'snare' not in midi_events  # Not rebuilt
 
-    def test_sensitive_events_promoted(self):
-        """Sensitive-only events can be promoted when thresholds lowered."""
+    def test_sensitive_events_promoted_when_lowered(self):
+        """Sensitive-only events promoted only when thresholds are lowered."""
         analysis = _make_analysis_data({
             'kick': {
-                'logic': {'geomean_threshold': 50.0},
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
                 'events_configured': [_make_event(1.0, geomean=100.0, status='KEPT')],
                 'events_sensitive': [_make_event(3.0, geomean=30.0, status='KEPT')],
             }
@@ -373,11 +496,48 @@ class TestRebuildEventsFromAnalysis:
         times = [e['time'] for e in midi_events['kick']]
         assert 3.0 in times
 
+    def test_sensitive_events_ignored_when_same_thresholds(self):
+        """Sensitive events are NOT merged when thresholds are unchanged."""
+        analysis = _make_analysis_data({
+            'kick': {
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
+                'events_configured': [_make_event(1.0, geomean=100.0, status='KEPT')],
+                'events_sensitive': [_make_event(3.0, geomean=80.0, status='KEPT')],
+            }
+        })
+        config = _make_config('kick', geomean_threshold=50.0)
+
+        updated, midi_events = rebuild_events_from_analysis(analysis, {}, config)
+
+        # Only configured KEPT event, sensitive event should NOT be included
+        assert len(midi_events['kick']) == 1
+        assert midi_events['kick'][0]['time'] == 1.0
+
+    def test_sensitive_events_ignored_when_raised(self):
+        """Sensitive events are NOT merged when thresholds are raised."""
+        analysis = _make_analysis_data({
+            'kick': {
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
+                'events_configured': [
+                    _make_event(1.0, geomean=100.0, status='KEPT'),
+                    _make_event(2.0, geomean=60.0, status='KEPT'),
+                ],
+                'events_sensitive': [_make_event(3.0, geomean=80.0, status='KEPT')],
+            }
+        })
+        config = _make_config('kick', geomean_threshold=80.0)
+
+        updated, midi_events = rebuild_events_from_analysis(analysis, {}, config)
+
+        # Only configured events re-filtered, sensitive not merged
+        assert len(midi_events['kick']) == 1
+        assert midi_events['kick'][0]['time'] == 1.0
+
     def test_updated_analysis_has_new_statuses(self):
         """Updated analysis data reflects new filter results."""
         analysis = _make_analysis_data({
             'kick': {
-                'logic': {'geomean_threshold': 50.0},
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
                 'events_configured': [
                     _make_event(1.0, geomean=100.0, status='KEPT'),
                     _make_event(2.0, geomean=60.0, status='KEPT'),
@@ -414,7 +574,7 @@ class TestRebuildEventsFromAnalysis:
     def test_missing_stem_raises(self):
         analysis = _make_analysis_data({
             'kick': {
-                'logic': {},
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
                 'events_configured': [],
                 'events_sensitive': [],
             }
@@ -430,7 +590,7 @@ class TestRebuildEventsFromAnalysis:
         """Rebuild must not mutate the input analysis_data dict."""
         analysis = _make_analysis_data({
             'kick': {
-                'logic': {'geomean_threshold': 50.0},
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
                 'events_configured': [
                     _make_event(1.0, geomean=100.0, status='KEPT'),
                     _make_event(2.0, geomean=60.0, status='KEPT'),
@@ -450,12 +610,12 @@ class TestRebuildEventsFromAnalysis:
         """Rebuild works across multiple stems simultaneously."""
         analysis = _make_analysis_data({
             'kick': {
-                'logic': {'geomean_threshold': 50.0},
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
                 'events_configured': [_make_event(1.0, geomean=100.0)],
                 'events_sensitive': [],
             },
             'snare': {
-                'logic': {'geomean_threshold': 50.0},
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
                 'events_configured': [_make_event(2.0, geomean=100.0)],
                 'events_sensitive': [],
             },
@@ -474,3 +634,42 @@ class TestRebuildEventsFromAnalysis:
         assert 'snare' in midi_events
         assert len(midi_events['kick']) == 1
         assert len(midi_events['snare']) == 1
+
+    def test_logic_block_updated_when_thresholds_change(self):
+        """Logic block in output reflects new thresholds."""
+        analysis = _make_analysis_data({
+            'kick': {
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None,
+                          'freq_bands': ['fundamental', 'body', 'attack'],
+                          'passes': ['geomean']},
+                'events_configured': [_make_event(1.0, geomean=100.0, status='KEPT')],
+                'events_sensitive': [],
+            }
+        })
+        config = _make_config('kick', geomean_threshold=80.0)
+
+        updated, _ = rebuild_events_from_analysis(analysis, {}, config)
+
+        logic = updated['stems']['kick']['logic']
+        assert logic['geomean_threshold'] == 80.0
+        # Non-threshold fields preserved
+        assert logic['freq_bands'] == ['fundamental', 'body', 'attack']
+        assert logic['passes'] == ['geomean']
+
+    def test_logic_block_unchanged_when_same_thresholds(self):
+        """Logic block not updated when thresholds haven't changed."""
+        analysis = _make_analysis_data({
+            'kick': {
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None,
+                          'statistical_enabled': False},
+                'events_configured': [_make_event(1.0, geomean=100.0, status='KEPT')],
+                'events_sensitive': [],
+            }
+        })
+        config = _make_config('kick', geomean_threshold=50.0)
+
+        updated, _ = rebuild_events_from_analysis(analysis, {}, config)
+
+        logic = updated['stems']['kick']['logic']
+        # Should keep the original logic block (including statistical_enabled)
+        assert logic.get('statistical_enabled') is False
