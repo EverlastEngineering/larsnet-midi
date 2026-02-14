@@ -13,6 +13,11 @@ The rebuild operates in two modes:
   events_configured. Merge sensitive events only when thresholds are lowered
   to discover events the original pipeline would not have found.
 
+After filtering, note classification (Pass 2) runs on the final KEPT set
+using stored spectral features (spectral_centroid_hz, sustain_ms, energy
+bands). This ensures note assignments (open/closed hihat, crash/ride/chinese,
+low/mid/high tom, snare types) reflect the actual event population.
+
 Pure functions — no I/O, no side effects.
 """
 
@@ -28,6 +33,7 @@ from .analysis_core import (
     estimate_velocity,
 )
 from .config import DrumMapping
+from .note_classification_core import classify_notes
 
 
 # ============================================================================
@@ -525,6 +531,9 @@ def rebuild_events_from_analysis(
 
         # Extract kept events for MIDI generation
         kept_events = [e for e in events if e.get('status') == 'KEPT']
+
+        # Pass 2: Classify notes on the final KEPT set using stored features
+        classify_notes(kept_events, stem_type, drum_mapping, config)
 
         # Generate MIDI events
         midi_events = _events_to_midi(

@@ -34,6 +34,7 @@ from .energy_detection_shell import detect_onsets_energy_based
 
 # Import config structures
 from .config import DrumMapping
+from .note_classification_core import classify_notes
 
 __all__ = [
     'process_stem_to_midi'
@@ -594,6 +595,8 @@ def _create_midi_events(
                     event[energy_key] = onset_info[energy_key]
             if 'sustain_ms' in onset_info:
                 event['sustain_ms'] = onset_info.get('sustain_ms')
+            if 'spectral_centroid_hz' in onset_info:
+                event['spectral_centroid_hz'] = onset_info['spectral_centroid_hz']
         
         events.append(event)
         
@@ -1093,10 +1096,12 @@ def process_stem_to_midi(
     if len(onset_times) == 0:
         return {'events': [], 'all_onset_data': all_onset_data, 'sensitive_onset_data': [], 'spectral_config': spectral_config, 'envelope_data': envelope_data}
     
-    # Step 5: Get MIDI note number
+    # Step 5: Get MIDI note number (default for stem type)
     note = getattr(drum_mapping, stem_type)
     
-    # Step 6: Classify drum types (hihat open/closed/handclap)
+    # Step 6: Classify hihat state (open/closed/handclap) from stored features
+    # Hihat uses detect_hihat_state which already works from spectral data.
+    # Foot-close events are generated during MIDI creation based on hihat_state.
     if stem_type == 'hihat' and detect_hihat_open:
         hihat_config = config.get('hihat', {})
         open_sustain_threshold = hihat_config.get('open_sustain_ms', 150)
@@ -1122,27 +1127,9 @@ def process_stem_to_midi(
     else:
         normalized_values = np.array([])
     
-    # Step 8: Detect and classify tom pitches (if applicable)
-    tom_classifications = None
-    if stem_type == 'toms':
-        tom_classifications = _detect_tom_pitches(audio_mono, sr, onset_times, config)
-    
-    # Step 8b: Detect and classify cymbal pitches (if applicable)
-    cymbal_classifications = None
-    if stem_type == 'cymbals':
-        cymbal_classifications = _detect_cymbal_pitches(
-            audio_mono, sr, onset_times, config,
-            pan_positions=pan_positions,
-            spectral_data=filtered_onset_data or None
-        )
-    
-    # Step 8c: Detect and classify snare pitches (if applicable)
-    snare_classifications = None
-    if stem_type == 'snare':
-        snare_classifications = _detect_snare_pitches(audio_mono, sr, onset_times, config)
-    
-    # Step 9: Create MIDI events
-    # sustain_durations is already set from filter_result when has_sustain_analysis is True
+    # Step 8: Create MIDI events with default notes
+    # Hihat gets correct notes from hihat_states; other stems get default note
+    # (overridden by Pass 2 classification below)
     events = _create_midi_events(
         onset_times,
         normalized_values,
@@ -1151,15 +1138,23 @@ def process_stem_to_midi(
         min_velocity,
         max_velocity,
         hihat_states,
-        tom_classifications,
-        cymbal_classifications,
-        snare_classifications,
+        None,  # tom_classifications — handled by Pass 2
+        None,  # cymbal_classifications — handled by Pass 2
+        None,  # snare_classifications — handled by Pass 2
         drum_mapping,
         config,
         sustain_durations=sustain_durations,
         spectral_data=filtered_onset_data,
         use_sustain_duration=spectral_config.get('use_sustain_duration', False) if spectral_config else False
     )
+    
+    # Step 9: Pass 2 — Classify notes from stored spectral features
+    # For toms/cymbals/snare: clusters on spectral_centroid_hz.
+    # For hihat: re-classifies from geomean + sustain (consistent with rebuild).
+    # Foot-close events (note 44) are excluded from classification.
+    foot_close_note = config.get('hihat', {}).get('midi_note_foot_close', 44)
+    real_events = [e for e in events if e.get('note') != foot_close_note]
+    classify_notes(real_events, stem_type, drum_mapping, config)
     
     print(f"    Created {len(events)} MIDI events from {len(onset_times)} onsets")
     
