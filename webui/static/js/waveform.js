@@ -45,6 +45,36 @@ const STEM_COLORS = {
     toms:    { accent: '#ef4444', label: 'Toms' },
 };
 
+/**
+ * Note-type colors for KEPT events, keyed by MIDI note number.
+ * Used to visually distinguish sub-types within each stem (e.g., open vs closed hihat).
+ * Falls back to WAVEFORM_COLORS.markerKept (green) for unlisted notes.
+ */
+const NOTE_TYPE_COLORS = {
+    // Kick
+    36: { color: '#3b82f6', label: 'Kick' },           // blue
+
+    // Snare sub-types
+    38: { color: '#8b5cf6', label: 'Snare' },           // purple
+    37: { color: '#a78bfa', label: 'Rimshot' },          // light purple
+    39: { color: '#c084fc', label: 'Clap' },             // pink-purple
+    40: { color: '#e879f9', label: 'Clap+Snare' },      // magenta
+
+    // Tom sub-types (warm spectrum: low=deep, high=bright)
+    45: { color: '#f97316', label: 'Low Tom' },          // orange
+    47: { color: '#eab308', label: 'Mid Tom' },          // yellow
+    50: { color: '#f472b6', label: 'High Tom' },         // pink
+
+    // Hi-hat sub-types
+    42: { color: '#10b981', label: 'Closed HH' },       // green (default KEPT color)
+    46: { color: '#22d3ee', label: 'Open HH' },         // cyan
+
+    // Cymbal sub-types
+    49: { color: '#f59e0b', label: 'Crash' },            // amber
+    51: { color: '#6366f1', label: 'Ride' },             // indigo
+    52: { color: '#ec4899', label: 'Chinese' },          // pink
+};
+
 const STEM_ORDER = ['kick', 'snare', 'toms', 'hihat', 'cymbals'];
 
 // Padding for each canvas panel (in CSS pixels)
@@ -492,7 +522,7 @@ function drawEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer
 
         const color = isSensitiveLayer
             ? WAVEFORM_COLORS.markerSensitive
-            : getMarkerColor(event.status);
+            : getMarkerColor(event.status, event.note);
 
         // Bar height from velocity (0-127)
         // When velocity is missing (sensitive/tuning events), estimate from strength
@@ -767,9 +797,13 @@ function drawThresholdLine(ctx, threshold, geomeanToY, PAD, plotW) {
     ctx.fillText('thr', PAD.left - 4, y + 3);
 }
 
-function getMarkerColor(status) {
+function getMarkerColor(status, noteNumber) {
     switch (status) {
-        case 'KEPT': return WAVEFORM_COLORS.markerKept;
+        case 'KEPT':
+            if (noteNumber != null && NOTE_TYPE_COLORS[noteNumber]) {
+                return NOTE_TYPE_COLORS[noteNumber].color;
+            }
+            return WAVEFORM_COLORS.markerKept;
         case 'FILTERED': return WAVEFORM_COLORS.markerFiltered;
         case 'REVERB_CONTINUATION': return WAVEFORM_COLORS.markerReverbCont;
         default: return WAVEFORM_COLORS.markerUnknown;
@@ -792,13 +826,41 @@ function updateLegendBar(stemData, displayEvents) {
     const events = (waveformTuningActive && waveformTuningEvents)
         ? waveformTuningEvents
         : getEventsForStem(stemData);
-    const keptCount = events.filter(e => e.status === 'KEPT').length;
+    const keptEvents = events.filter(e => e.status === 'KEPT');
     const filteredCount = events.filter(e => e.status === 'FILTERED').length;
     const reverbCount = events.filter(e => e.status === 'REVERB_CONTINUATION').length;
     const sensitiveCount = (stemData.events_sensitive || []).length;
 
     const items = [];
-    if (keptCount > 0) items.push({ color: WAVEFORM_COLORS.markerKept, label: `Kept (${keptCount})` });
+
+    // Group KEPT events by note type for color-coded legend
+    const noteGroups = {};
+    for (const e of keptEvents) {
+        const noteNum = e.note;
+        const info = noteNum != null ? NOTE_TYPE_COLORS[noteNum] : null;
+        const key = info ? info.label : 'Kept';
+        const color = info ? info.color : WAVEFORM_COLORS.markerKept;
+        if (!noteGroups[key]) noteGroups[key] = { color, count: 0 };
+        noteGroups[key].count++;
+    }
+
+    // If only one note type (or no note data), show simple "Kept (N)"
+    const groupKeys = Object.keys(noteGroups);
+    if (groupKeys.length <= 1) {
+        if (keptEvents.length > 0) {
+            const g = groupKeys.length === 1 ? noteGroups[groupKeys[0]] : null;
+            items.push({
+                color: g ? g.color : WAVEFORM_COLORS.markerKept,
+                label: `Kept (${keptEvents.length})`
+            });
+        }
+    } else {
+        // Multiple note types — show each with its color
+        for (const key of groupKeys) {
+            items.push({ color: noteGroups[key].color, label: `${key} (${noteGroups[key].count})` });
+        }
+    }
+
     if (filteredCount > 0) items.push({ color: WAVEFORM_COLORS.markerFiltered, label: `Filtered (${filteredCount})` });
     if (reverbCount > 0) items.push({ color: WAVEFORM_COLORS.markerReverbCont, label: `Reverb cont. (${reverbCount})` });
     if (!waveformTuningActive && waveformShowSensitive && sensitiveCount > 0) {
@@ -897,7 +959,12 @@ function drawTooltip(ctx, event, W, H) {
     lines.push(`Time: ${formatTime(event.time)}`);
     lines.push(`Status: ${event.status}`);
     if (event.velocity != null) lines.push(`Velocity: ${event.velocity}`);
-    if (event.note != null) lines.push(`Note: ${event.note}`);
+    if (event.note != null) {
+        const noteInfo = NOTE_TYPE_COLORS[event.note];
+        const noteLabel = noteInfo ? ` (${noteInfo.label})` : '';
+        lines.push(`Note: ${event.note}${noteLabel}`);
+    }
+    if (event.hihat_state != null) lines.push(`Hi-hat: ${event.hihat_state}`);
     if (event.strength != null) lines.push(`Strength: ${event.strength}`);
     if (event.geomean != null) lines.push(`Geomean: ${event.geomean}`);
     if (event.amplitude != null) lines.push(`Amplitude: ${event.amplitude}`);

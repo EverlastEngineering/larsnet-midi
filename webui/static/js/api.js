@@ -304,6 +304,14 @@ class LarsNetAPI {
             ...options
         });
     }
+
+    async reclassify(projectNumber, stemType, configOverrides = {}) {
+        return await this.post('/reclassify', {
+            project_number: projectNumber,
+            stem_type: stemType,
+            config_overrides: configOverrides
+        });
+    }
     
     async renderVideo(projectNumber, options = {}) {
         return await this.post('/render-video', {

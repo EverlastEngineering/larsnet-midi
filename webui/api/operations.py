@@ -437,6 +437,135 @@ def rebuild_midi():
         }), 500
 
 
+@operations_bp.route('/reclassify', methods=['POST'])
+def reclassify():
+    """
+    POST /api/reclassify
+
+    Re-run note classification on KEPT events with optional config overrides.
+    Lightweight preview endpoint — no MIDI rebuild, no disk write. Returns
+    updated classification fields for each event so the frontend can
+    re-render with note-type colors.
+
+    Request body (JSON):
+        {
+            "project_number": 1,
+            "stem_type": "hihat",
+            "config_overrides": {
+                "open_geomean_min": 300,
+                "open_sustain_ms": 120
+            }
+        }
+
+    Returns:
+        200: Classification results
+        400: Invalid request
+        404: Project or analysis not found
+        500: Internal error
+
+    Response format:
+        {
+            "events": [
+                {
+                    "time": 0.5,
+                    "note": 46,
+                    "hihat_state": "open",
+                    "classification": null
+                },
+                ...
+            ]
+        }
+    """
+    try:
+        data = request.get_json()
+
+        if not data or 'project_number' not in data or 'stem_type' not in data:
+            return jsonify({
+                'error': 'Invalid request',
+                'message': 'Request body must include project_number and stem_type'
+            }), 400
+
+        project_number = data['project_number']
+        stem_type = data['stem_type']
+        config_overrides = data.get('config_overrides', {})
+
+        # Validate project exists
+        project = get_project_by_number(project_number, USER_FILES_DIR)
+        if project is None:
+            return jsonify({
+                'error': 'Project not found',
+                'message': f'No project with number {project_number}'
+            }), 404
+
+        # Load analysis data
+        import json
+        import copy
+        midi_dir = project['path'] / 'midi'
+        analysis_files = list(midi_dir.glob('*.analysis.json'))
+        if not analysis_files:
+            return jsonify({
+                'error': 'No analysis data',
+                'message': 'No analysis.json found — run MIDI conversion first'
+            }), 404
+
+        with open(analysis_files[0], 'r') as f:
+            analysis_data = json.load(f)
+
+        stem_data = analysis_data.get('stems', {}).get(stem_type)
+        if not stem_data:
+            return jsonify({
+                'error': 'Stem not found',
+                'message': f'No analysis data for stem: {stem_type}'
+            }), 404
+
+        # Get KEPT events (work on copies to avoid side effects)
+        configured_events = stem_data.get('events_configured', [])
+        kept_events = [
+            copy.deepcopy(e) for e in configured_events
+            if e.get('status') == 'KEPT'
+        ]
+
+        if not kept_events:
+            return jsonify({'events': []}), 200
+
+        # Load config and merge overrides
+        from stems_to_midi.config import load_config, DrumMapping
+        from stems_to_midi.note_classification_core import classify_notes
+
+        config = load_config(project['path'] / 'midiconfig.yaml')
+        drum_mapping = DrumMapping.from_config(config)
+
+        # Apply config overrides for this stem's classification params
+        if config_overrides:
+            if stem_type not in config:
+                config[stem_type] = {}
+            for key, value in config_overrides.items():
+                config[stem_type][key] = value
+
+        # Run classification
+        classify_notes(kept_events, stem_type, drum_mapping, config)
+
+        # Return minimal payload: time + classification fields
+        result_events = []
+        for event in kept_events:
+            result_event = {'time': event.get('time')}
+            if 'note' in event:
+                result_event['note'] = event['note']
+            if 'hihat_state' in event:
+                result_event['hihat_state'] = event['hihat_state']
+            if 'classification' in event:
+                result_event['classification'] = event['classification']
+            result_events.append(result_event)
+
+        return jsonify({'events': result_events}), 200
+
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to reclassify',
+            'message': str(e)
+        }), 500
+
+
 @operations_bp.route('/render-video', methods=['POST'])
 def render_video():
     """

@@ -301,7 +301,8 @@ def _process_stems_to_midi(
             # Save analysis sidecar with spectral data (Detection Output Contract v3)
             save_analysis_sidecar(
                 events_by_stem, midi_path, tempo=tempo,
-                analysis_by_stem=analysis_by_stem if analysis_by_stem else None
+                analysis_by_stem=analysis_by_stem if analysis_by_stem else None,
+                config=config,
             )
             
             # Save energy envelope data for waveform visualization

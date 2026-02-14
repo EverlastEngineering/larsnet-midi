@@ -564,18 +564,21 @@ def rebuild_events_from_analysis(
                 event['velocity'] = kept_midi[midi_idx]['velocity']
                 midi_idx += 1
             elif event.get('status') != 'KEPT':
-                # Clear stale note/velocity from previously-KEPT events
+                # Clear stale note/velocity/classification from previously-KEPT events
                 event.pop('note', None)
                 event.pop('velocity', None)
+                event.pop('hihat_state', None)
+                event.pop('classification', None)
 
         stem_data['events_configured'] = updated_configured
         if updated_sensitive:
             # Only update sensitive if we merged them in
             stem_data['events_sensitive'] = sensitive_events  # Keep original
 
-        # Update stored logic to reflect current thresholds
-        if changed:
-            stem_data['logic'] = _build_logic_block(spectral_config, stored_logic)
+        # Update stored logic to reflect current thresholds and classification params
+        stem_data['logic'] = _build_logic_block(
+            spectral_config, stored_logic, stem_type, config,
+        )
 
     # Build updated analysis output
     updated_analysis = dict(analysis_data)
@@ -587,14 +590,25 @@ def rebuild_events_from_analysis(
 def _build_logic_block(
     spectral_config: Dict,
     stored_logic: Dict,
+    stem_type: str = '',
+    config: Optional[Dict] = None,
 ) -> Dict:
     """
     Build updated logic block reflecting current thresholds.
 
     Preserves non-threshold fields (freq_bands, passes, decay_filter_enabled)
-    from the stored logic while updating threshold values.
+    from the stored logic while updating threshold values and classification
+    thresholds (e.g., hihat open/closed boundaries).
     """
     logic = dict(stored_logic)
     logic['geomean_threshold'] = spectral_config.get('geomean_threshold')
     logic['min_sustain_ms'] = spectral_config.get('min_sustain_ms')
+
+    # Include classification thresholds so the frontend can read them
+    if config:
+        stem_config = config.get(stem_type, {})
+        if stem_type == 'hihat':
+            logic['open_geomean_min'] = stem_config.get('open_geomean_min', 262.0)
+            logic['open_sustain_ms'] = stem_config.get('open_sustain_ms', 150.0)
+
     return logic

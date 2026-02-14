@@ -634,6 +634,35 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         yaml_path=['hihat', 'use_stereo'],
     ),
     
+    SettingDefinition(
+        key='hihat_open_geomean_min',
+        type=SettingType.FLOAT,
+        default=262.0,
+        label='Open Hi-Hat GeoMean Threshold',
+        description='Minimum spectral geomean to classify a hi-hat hit as open (higher = stricter)',
+        category=SettingCategory.HIHAT,
+        ui_control=UIControl.SLIDER,
+        min_value=50.0,
+        max_value=1000.0,
+        step=10.0,
+        yaml_path=['hihat', 'open_geomean_min'],
+    ),
+    
+    SettingDefinition(
+        key='hihat_open_sustain_ms',
+        type=SettingType.FLOAT,
+        default=150.0,
+        label='Open Hi-Hat Sustain Threshold',
+        description='Minimum sustain in milliseconds to classify a hi-hat hit as open (higher = stricter)',
+        category=SettingCategory.HIHAT,
+        ui_control=UIControl.SLIDER,
+        min_value=20.0,
+        max_value=500.0,
+        step=5.0,
+        unit='ms',
+        yaml_path=['hihat', 'open_sustain_ms'],
+    ),
+    
     # Cymbals MIDI note
     SettingDefinition(
         key='cymbals_midi_note',

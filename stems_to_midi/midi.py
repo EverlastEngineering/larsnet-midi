@@ -202,7 +202,8 @@ def save_analysis_sidecar(
     events_by_stem: Dict[str, List[Dict]],
     midi_path: Union[str, Path],
     tempo: float = 120.0,
-    analysis_by_stem: Optional[Dict[str, Dict]] = None
+    analysis_by_stem: Optional[Dict[str, Dict]] = None,
+    config: Optional[Dict] = None,
 ) -> Path:
     """
     Save spectral analysis data as JSON sidecar file (v3 format).
@@ -271,6 +272,13 @@ def save_analysis_sidecar(
             if stem_type == 'kick' and logic.get('statistical_enabled'):
                 passes.append('statistical')
             logic['passes'] = passes
+
+        # Include classification thresholds for frontend slider defaults
+        if config:
+            stem_config = config.get(stem_type, {})
+            if stem_type == 'hihat':
+                logic['open_geomean_min'] = stem_config.get('open_geomean_min', 262.0)
+                logic['open_sustain_ms'] = stem_config.get('open_sustain_ms', 150.0)
 
         # Serialize configured events (KEPT + FILTERED from configured detection)
         if all_onset_data:

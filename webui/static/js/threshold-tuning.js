@@ -22,6 +22,12 @@ let tuningSliderValues = {};
 /** Animation frame ID for debounced re-filtering */
 let tuningRafId = null;
 
+/** Timeout ID for debounced reclassify API calls */
+let reclassifyTimeoutId = null;
+
+/** Whether a reclassify request is in flight */
+let reclassifyInFlight = false;
+
 // ─── Per-Stem Configuration ──────────────────────────────────────────────
 
 /**
@@ -48,7 +54,9 @@ const STEM_SLIDER_CONFIGS = {
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 200, step: 0.5, fallback: 8, unit: '' },
         { key: 'min_sustain_ms', label: 'Min Sustain', min: 0, max: 500, step: 5, fallback: 25, unit: 'ms' },
         { key: 'min_strength_threshold', label: 'Min Strength', min: 0, max: 1.0, step: 0.01, fallback: 0.02, unit: '' },
-        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' }
+        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' },
+        { key: 'open_geomean_min', label: '🔓 Open/Closed: GeoMean', min: 50, max: 1000, step: 10, fallback: 262, unit: '', classification: true },
+        { key: 'open_sustain_ms', label: '🔓 Open/Closed: Sustain', min: 20, max: 500, step: 5, fallback: 150, unit: 'ms', classification: true }
     ],
     cymbals: [
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 1000, step: 5, fallback: 100, unit: '' },
@@ -96,6 +104,9 @@ function toggleTuningPanel() {
         panel.classList.add('hidden');
         if (btn) btn.classList.remove('tuning-btn-active');
 
+        // Cancel any pending reclassify
+        if (reclassifyTimeoutId) { clearTimeout(reclassifyTimeoutId); reclassifyTimeoutId = null; }
+
         // Clear tuning overlay — revert to configured display
         waveformTuningEvents = null;
         waveformTuningActive = false;
@@ -116,6 +127,8 @@ function toggleTuningPanel() {
  */
 function onTuningStemChanged(stemType) {
     if (!tuningPanelOpen) return;
+    // Cancel any pending reclassify from the previous stem
+    if (reclassifyTimeoutId) { clearTimeout(reclassifyTimeoutId); reclassifyTimeoutId = null; }
     buildSlidersForStem(stemType);
     applyTuningFilter();
 }
@@ -125,6 +138,9 @@ function onTuningStemChanged(stemType) {
  */
 function resetTuningSliders() {
     if (!waveformActiveStem || !waveformAnalysisData) return;
+
+    // Cancel any pending reclassify
+    if (reclassifyTimeoutId) { clearTimeout(reclassifyTimeoutId); reclassifyTimeoutId = null; }
 
     // Clear stored values so buildSlidersForStem reads from logic block
     delete tuningSliderValues[waveformActiveStem];
@@ -184,7 +200,8 @@ function buildSlidersForStem(stemType) {
                        step="${slider.step}"
                        value="${currentVal}"
                        data-key="${slider.key}"
-                       data-unit="${slider.unit || ''}">
+                       data-unit="${slider.unit || ''}"
+                       data-classification="${slider.classification ? 'true' : 'false'}">
             </div>`;
     }).join('');
 
@@ -209,11 +226,14 @@ function formatSliderValue(val) {
 
 /**
  * Handle slider input events — debounced via requestAnimationFrame.
+ * Classification sliders (marked with data-classification="true") trigger
+ * a server-side reclassify call instead of local filtering.
  */
 function onSliderInput(e) {
     const key = e.target.dataset.key;
     const unit = e.target.dataset.unit || '';
     const val = parseFloat(e.target.value);
+    const isClassification = e.target.dataset.classification === 'true';
 
     // Update stored value
     if (waveformActiveStem) {
@@ -229,12 +249,91 @@ function onSliderInput(e) {
     // Update Save button visibility
     updateTuningSaveButton();
 
-    // Debounced re-filter
-    if (tuningRafId) cancelAnimationFrame(tuningRafId);
-    tuningRafId = requestAnimationFrame(() => {
-        applyTuningFilter();
-        tuningRafId = null;
-    });
+    if (isClassification) {
+        // Classification slider — only needs server reclassify, no local filtering
+        scheduleReclassify();
+    } else {
+        // Filtering slider — local filter first, then reclassify for note colors
+        if (tuningRafId) cancelAnimationFrame(tuningRafId);
+        tuningRafId = requestAnimationFrame(() => {
+            applyTuningFilter();
+            tuningRafId = null;
+            // After filtering, reclassify to update note assignments on new KEPT set
+            scheduleReclassify();
+        });
+    }
+}
+
+/**
+ * Keys that are classification parameters (sent as config_overrides to reclassify).
+ */
+const CLASSIFICATION_KEYS = new Set(['open_geomean_min', 'open_sustain_ms']);
+
+/**
+ * Schedule a debounced reclassify API call (500ms).
+ * Collects classification slider overrides and calls the server.
+ */
+function scheduleReclassify() {
+    if (reclassifyTimeoutId) clearTimeout(reclassifyTimeoutId);
+    reclassifyTimeoutId = setTimeout(() => {
+        reclassifyTimeoutId = null;
+        doReclassify();
+    }, 500);
+}
+
+/**
+ * Call the reclassify API and merge results into displayed events.
+ */
+async function doReclassify() {
+    if (!currentProject || !waveformActiveStem || !waveformAnalysisData) return;
+    if (reclassifyInFlight) return; // Skip if already in flight
+
+    const stemType = waveformActiveStem;
+    const stored = tuningSliderValues[stemType] || {};
+
+    // Build config overrides from classification slider values
+    const configOverrides = {};
+    for (const key of CLASSIFICATION_KEYS) {
+        if (stored[key] != null) {
+            configOverrides[key] = stored[key];
+        }
+    }
+
+    reclassifyInFlight = true;
+    try {
+        const result = await api.reclassify(currentProject.number, stemType, configOverrides);
+        if (!result || !result.events) return;
+
+        // Build a time-keyed lookup for fast merging
+        const classificationByTime = {};
+        for (const ev of result.events) {
+            if (ev.time != null) {
+                // Round to 4 decimals for matching (analysis.json precision)
+                const timeKey = ev.time.toFixed(4);
+                classificationByTime[timeKey] = ev;
+            }
+        }
+
+        // Merge into the displayed events (tuning or configured)
+        const displayEvents = waveformTuningEvents || getEventsForStem(waveformAnalysisData.stems[stemType]);
+        for (const event of displayEvents) {
+            if (event.status !== 'KEPT' || event.time == null) continue;
+            const timeKey = event.time.toFixed(4);
+            const cls = classificationByTime[timeKey];
+            if (cls) {
+                if (cls.note != null) event.note = cls.note;
+                if (cls.hihat_state != null) event.hihat_state = cls.hihat_state;
+                if (cls.classification != null) event.classification = cls.classification;
+            }
+        }
+
+        // Re-render with updated colors
+        drawWaveform();
+    } catch (err) {
+        console.warn('Reclassify failed:', err.message);
+    } finally {
+        reclassifyInFlight = false;
+    }
 }
 
 // ─── Save & Reconvert ────────────────────────────────────────────────────
