@@ -46,34 +46,18 @@ const STEM_COLORS = {
 };
 
 /**
- * Note-type colors for KEPT events, keyed by MIDI note number.
- * Used to visually distinguish sub-types within each stem (e.g., open vs closed hihat).
- * Falls back to WAVEFORM_COLORS.markerKept (green) for unlisted notes.
+ * Classification colors for event types, indexed by classification (0-3).
+ * Standard across all stems for visual consistency.
+ *   0 = green, 1 = purple, 2 = cyan, 3 = yellow
+ * Red (#ef4444) = disabled/filtered (tuning only)
+ * Orange (#f59e0b) = reverb continuation (tuning only)
  */
-const NOTE_TYPE_COLORS = {
-    // Kick
-    36: { color: '#3b82f6', label: 'Kick' },           // blue
-
-    // Snare sub-types
-    38: { color: '#8b5cf6', label: 'Snare' },           // purple
-    37: { color: '#a78bfa', label: 'Rimshot' },          // light purple
-    39: { color: '#c084fc', label: 'Clap' },             // pink-purple
-    40: { color: '#e879f9', label: 'Clap+Snare' },      // magenta
-
-    // Tom sub-types (warm spectrum: low=deep, high=bright)
-    45: { color: '#f97316', label: 'Low Tom' },          // orange
-    47: { color: '#eab308', label: 'Mid Tom' },          // yellow
-    50: { color: '#f472b6', label: 'High Tom' },         // pink
-
-    // Hi-hat sub-types
-    42: { color: '#10b981', label: 'Closed HH' },       // green (default KEPT color)
-    46: { color: '#22d3ee', label: 'Open HH' },         // cyan
-
-    // Cymbal sub-types
-    49: { color: '#f59e0b', label: 'Crash' },            // amber
-    51: { color: '#6366f1', label: 'Ride' },             // indigo
-    52: { color: '#ec4899', label: 'Chinese' },          // pink
-};
+const CLASSIFICATION_COLORS = [
+    '#10b981',   // 0 — green  (primary / default)
+    '#a855f7',   // 1 — purple
+    '#22d3ee',   // 2 — cyan
+    '#eab308',   // 3 — yellow
+];
 
 const STEM_ORDER = ['kick', 'snare', 'toms', 'hihat', 'cymbals'];
 
@@ -476,13 +460,17 @@ function drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, tMin,
     // Velocity scale labels on left axis
     drawVelocityAxis(ctx, PAD, plotW, plotH);
 
-    // Sensitive events (background layer)
-    if (!waveformTuningActive && waveformShowSensitive && sensitiveEvents.length > 0) {
+    // Sensitive events (background layer, tuning mode only)
+    if (waveformTuningActive && waveformShowSensitive && sensitiveEvents.length > 0) {
         drawEventBars(ctx, sensitiveEvents, timeToX, PAD, plotW, plotH, true);
     }
 
-    // Primary events as amplitude bars
-    drawEventBars(ctx, displayEvents, timeToX, PAD, plotW, plotH, false);
+    // When tuning is closed, only draw KEPT events (hide red/orange).
+    // When tuning is open, draw all events (KEPT + FILTERED + REVERB_CONTINUATION).
+    const eventsToRender = waveformTuningActive
+        ? displayEvents
+        : displayEvents.filter(e => e.status === 'KEPT');
+    drawEventBars(ctx, eventsToRender, timeToX, PAD, plotW, plotH, false);
 }
 
 function drawVelocityAxis(ctx, PAD, plotW, plotH) {
@@ -522,7 +510,7 @@ function drawEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer
 
         const color = isSensitiveLayer
             ? WAVEFORM_COLORS.markerSensitive
-            : getMarkerColor(event.status, event.note);
+            : getMarkerColor(event.status, event.classification);
 
         // Bar height from velocity (0-127)
         // When velocity is missing (sensitive/tuning events), estimate from strength
@@ -797,11 +785,11 @@ function drawThresholdLine(ctx, threshold, geomeanToY, PAD, plotW) {
     ctx.fillText('thr', PAD.left - 4, y + 3);
 }
 
-function getMarkerColor(status, noteNumber) {
+function getMarkerColor(status, classification) {
     switch (status) {
         case 'KEPT':
-            if (noteNumber != null && NOTE_TYPE_COLORS[noteNumber]) {
-                return NOTE_TYPE_COLORS[noteNumber].color;
+            if (classification != null && CLASSIFICATION_COLORS[classification]) {
+                return CLASSIFICATION_COLORS[classification];
             }
             return WAVEFORM_COLORS.markerKept;
         case 'FILTERED': return WAVEFORM_COLORS.markerFiltered;
@@ -833,37 +821,38 @@ function updateLegendBar(stemData, displayEvents) {
 
     const items = [];
 
-    // Group KEPT events by note type for color-coded legend
-    const noteGroups = {};
+    // Group KEPT events by classification index for color-coded legend
+    const classGroups = {};
     for (const e of keptEvents) {
-        const noteNum = e.note;
-        const info = noteNum != null ? NOTE_TYPE_COLORS[noteNum] : null;
-        const key = info ? info.label : 'Kept';
-        const color = info ? info.color : WAVEFORM_COLORS.markerKept;
-        if (!noteGroups[key]) noteGroups[key] = { color, count: 0 };
-        noteGroups[key].count++;
+        const cls = e.classification != null ? e.classification : 0;
+        if (!classGroups[cls]) classGroups[cls] = 0;
+        classGroups[cls]++;
     }
 
-    // If only one note type (or no note data), show simple "Kept (N)"
-    const groupKeys = Object.keys(noteGroups);
-    if (groupKeys.length <= 1) {
+    const classKeys = Object.keys(classGroups).map(Number).sort();
+    if (classKeys.length <= 1) {
+        // Single classification (or no data) — show simple "Kept (N)"
         if (keptEvents.length > 0) {
-            const g = groupKeys.length === 1 ? noteGroups[groupKeys[0]] : null;
+            const cls = classKeys.length === 1 ? classKeys[0] : 0;
             items.push({
-                color: g ? g.color : WAVEFORM_COLORS.markerKept,
+                color: CLASSIFICATION_COLORS[cls] || WAVEFORM_COLORS.markerKept,
                 label: `Kept (${keptEvents.length})`
             });
         }
     } else {
-        // Multiple note types — show each with its color
-        for (const key of groupKeys) {
-            items.push({ color: noteGroups[key].color, label: `${key} (${noteGroups[key].count})` });
+        // Multiple classifications — show each with its color
+        for (const cls of classKeys) {
+            const color = CLASSIFICATION_COLORS[cls] || WAVEFORM_COLORS.markerKept;
+            items.push({ color, label: `Type ${cls + 1} (${classGroups[cls]})` });
         }
     }
 
-    if (filteredCount > 0) items.push({ color: WAVEFORM_COLORS.markerFiltered, label: `Filtered (${filteredCount})` });
-    if (reverbCount > 0) items.push({ color: WAVEFORM_COLORS.markerReverbCont, label: `Reverb cont. (${reverbCount})` });
-    if (!waveformTuningActive && waveformShowSensitive && sensitiveCount > 0) {
+    // Show filtered/reverb/sensitive counts only when tuning is active
+    if (waveformTuningActive) {
+        if (filteredCount > 0) items.push({ color: WAVEFORM_COLORS.markerFiltered, label: `Filtered (${filteredCount})` });
+        if (reverbCount > 0) items.push({ color: WAVEFORM_COLORS.markerReverbCont, label: `Reverb cont. (${reverbCount})` });
+    }
+    if (waveformTuningActive && waveformShowSensitive && sensitiveCount > 0) {
         items.push({ color: '#9ca3af', label: `Sensitive (${sensitiveCount})` });
     }
 
@@ -960,9 +949,10 @@ function drawTooltip(ctx, event, W, H) {
     lines.push(`Status: ${event.status}`);
     if (event.velocity != null) lines.push(`Velocity: ${event.velocity}`);
     if (event.note != null) {
-        const noteInfo = NOTE_TYPE_COLORS[event.note];
-        const noteLabel = noteInfo ? ` (${noteInfo.label})` : '';
-        lines.push(`Note: ${event.note}${noteLabel}`);
+        lines.push(`Note: ${event.note}`);
+    }
+    if (event.classification != null) {
+        lines.push(`Type: ${event.classification + 1}`);
     }
     if (event.hihat_state != null) lines.push(`Hi-hat: ${event.hihat_state}`);
     if (event.strength != null) lines.push(`Strength: ${event.strength}`);

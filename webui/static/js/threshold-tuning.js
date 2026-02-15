@@ -485,8 +485,7 @@ function renderClusterCards(stemType, clusterInfo) {
         const currentNote = noteOverrides[cluster.classification] != null
             ? noteOverrides[cluster.classification]
             : cluster.note;
-        const noteInfo = NOTE_TYPE_COLORS[currentNote];
-        const dotColor = noteInfo ? noteInfo.color : '#9ca3af';
+        const dotColor = CLASSIFICATION_COLORS[cluster.classification] || '#9ca3af';
 
         // Build feature stats display
         const feat = cluster.distinguishing_feature;
@@ -555,13 +554,8 @@ function onClusterNoteChange(e) {
     if (!clusterNoteOverrides[stemType]) clusterNoteOverrides[stemType] = {};
     clusterNoteOverrides[stemType][classification] = newNote;
 
-    // Update the dot color on the card
-    const card = e.target.closest('[data-classification]');
-    if (card) {
-        const dot = card.querySelector('.rounded-full');
-        const noteInfo = NOTE_TYPE_COLORS[newNote];
-        if (dot && noteInfo) dot.style.background = noteInfo.color;
-    }
+    // Dot color stays per-classification (not per-note)
+    // No dot update needed since classification doesn't change on note reassign
 
     // Re-map displayed events immediately (no server round-trip)
     const displayEvents = waveformTuningEvents || getEventsForStem(waveformAnalysisData?.stems?.[stemType]);
@@ -742,9 +736,15 @@ async function saveTuningAndReconvert() {
                 // Reset tuning state since changes are now committed
                 waveformTuningEvents = null;
                 waveformTuningActive = false;
+                delete tuningSliderValues[stemType];
                 delete clusterNoteOverrides[stemType];
                 delete clusterFeatureOverrides[stemType];
                 hideClusterCards();
+
+                // Rebuild sliders from fresh logic block if panel is still open
+                if (tuningPanelOpen) {
+                    buildSlidersForStem(stemType);
+                }
                 drawWaveform();
                 return;
             }

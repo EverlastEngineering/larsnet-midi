@@ -11,6 +11,43 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 
 ## Open Bugs (Not Yet in GitHub)
 
+### Classification settings don't affect MIDI file output
+- **Status**: Fixed
+- **Priority**: High
+- **Description**: Snare MIDI output has random, poorly classified notes regardless of cluster settings. Root cause: `_build_logic_block` crashes with `int(None)` when `expected_clusters` is null in YAML, causing rebuild to fail silently and fall back to full pipeline.
+- **Root Cause**: `int(stem_config.get('expected_clusters', defaults[stem_type]))` returns `int(None)` when YAML value is explicitly null.
+- **Fix**: Guard with `raw = stem_config.get('expected_clusters'); int(raw) if raw is not None else defaults[stem_type]`
+
+### UI state inconsistent after save & reconvert
+- **Status**: Fixed
+- **Priority**: High
+- **Description**: After save & reconvert, tuning panel closes and reopening shows stale state. `tuningSliderValues` retained stale values from before save.
+- **Fix**: Clear `tuningSliderValues[stemType]` on successful rebuild, rebuild sliders from fresh logic block.
+
+### Velocity bars flat in tuning mode
+- **Status**: Fixed
+- **Priority**: Medium
+- **Description**: Event bars all same height. Root cause: `int(None)` crash prevented rebuild, so events never got velocity assigned — all defaulted to 64.
+- **Fix**: Same as classification bug fix. Velocity assigned correctly once rebuild succeeds.
+
+### Events not color-coded when tuning is closed
+- **Status**: Fixed
+- **Priority**: Medium
+- **Description**: All KEPT events green when tuning closed. Root cause: (1) rebuild crash prevented `classification` field from being set, (2) color system keyed by MIDI note number instead of classification index.
+- **Fix**: Replaced `NOTE_TYPE_COLORS` (per-MIDI-note) with `CLASSIFICATION_COLORS` (per-classification-index). `getMarkerColor` now uses `event.classification`.
+
+### Note type colors too similar
+- **Status**: Fixed
+- **Priority**: Medium
+- **Description**: Per-note colors too similar within groups (e.g., various purples for snare).
+- **Fix**: Replaced with 4 high-contrast classification colors: green (#10b981), purple (#a855f7), cyan (#22d3ee), yellow (#eab308). Standard across all stems.
+
+### Red/orange events visible when tuning is closed
+- **Status**: Fixed
+- **Priority**: Medium
+- **Description**: FILTERED (red) and REVERB_CONTINUATION (orange) events visible when tuning is closed.
+- **Fix**: Filter `displayEvents` to KEPT-only when `!waveformTuningActive`. Legend also hides filtered/reverb counts when tuning is closed.
+
 ### Rebuild-from-analysis produces degraded MIDI output
 - **Status**: Fixed
 - **Priority**: High
