@@ -9,6 +9,8 @@ import numpy as np
 from .stereo_core import (
     separate_channels,
     calculate_pan_position,
+    calculate_stereo_width,
+    calculate_stereo_features,
     classify_onset_by_pan,
     detect_stereo_onsets,
     detect_dual_channel_onsets,
@@ -535,3 +537,124 @@ class TestDetectDualChannelOnsets:
         # Merged result should have fewer or equal onsets
         assert len(result_merge['onset_times']) <= len(result_no_merge['onset_times']), \
             f"Larger merge window should produce fewer onsets: {len(result_merge['onset_times'])} vs {len(result_no_merge['onset_times'])}"
+
+
+class TestCalculateStereoWidth:
+    """Tests for stereo width calculation."""
+
+    def test_mono_signal_zero_width(self):
+        """Identical L and R channels produce width ≈ 0."""
+        sr = 22050
+        samples = sr  # 1 second
+        signal = np.sin(2 * np.pi * 440 * np.arange(samples) / sr)
+        stereo = np.stack([signal, signal], axis=0)  # identical L/R
+
+        width = calculate_stereo_width(stereo, onset_sample=1000, sr=sr, window_ms=30.0)
+        assert width < 0.05, f"Expected near-zero width for mono signal, got {width}"
+
+    def test_full_side_signal_high_width(self):
+        """L and R with opposite polarity produce width ≈ 1."""
+        sr = 22050
+        samples = sr
+        signal = np.sin(2 * np.pi * 440 * np.arange(samples) / sr)
+        stereo = np.stack([signal, -signal], axis=0)  # full side: mid=0, side=2*signal
+
+        width = calculate_stereo_width(stereo, onset_sample=1000, sr=sr, window_ms=30.0)
+        assert width > 0.95, f"Expected near-1 width for full-side signal, got {width}"
+
+    def test_half_correlation_moderate_width(self):
+        """Signal on one channel only produces width ≈ 0.5 (half-correlated)."""
+        sr = 22050
+        signal = np.sin(2 * np.pi * 440 * np.arange(sr) / sr)
+        stereo = np.zeros((2, sr))
+        stereo[0, :] = signal  # left only, right silent
+        # mid = L, side = L → side/(side+mid) = 0.5
+
+        width = calculate_stereo_width(stereo, onset_sample=1000, sr=sr, window_ms=30.0)
+        assert 0.45 < width < 0.55, f"Expected ~0.5 for single-channel signal, got {width}"
+
+    def test_uncorrelated_channels_moderate_width(self):
+        """Uncorrelated L/R should produce width ≈ 0.5."""
+        sr = 22050
+        samples = sr
+        rng = np.random.RandomState(42)
+        left = rng.randn(samples)
+        right = rng.randn(samples)
+        stereo = np.stack([left, right], axis=0)
+
+        width = calculate_stereo_width(stereo, onset_sample=1000, sr=sr, window_ms=30.0)
+        assert 0.35 < width < 0.65, f"Expected ~0.5 width for uncorrelated noise, got {width}"
+
+    def test_silent_returns_zero(self):
+        """Silent audio returns 0."""
+        stereo = np.zeros((2, 22050))
+        width = calculate_stereo_width(stereo, onset_sample=500, sr=22050)
+        assert width == 0.0
+
+    def test_onset_near_end(self):
+        """Window truncated near end of audio doesn't crash."""
+        sr = 22050
+        signal = np.sin(2 * np.pi * 440 * np.arange(sr) / sr)
+        stereo = np.stack([signal, signal * 0.5], axis=0)
+
+        width = calculate_stereo_width(stereo, onset_sample=sr - 10, sr=sr, window_ms=30.0)
+        assert 0.0 <= width <= 1.0
+
+    def test_capped_at_one(self):
+        """Width never exceeds 1.0 even with extreme side energy."""
+        sr = 22050
+        samples = sr
+        # Left loud, right zero → side = left, mid = left → ratio = 1.0
+        stereo = np.zeros((2, samples))
+        stereo[0, :] = 1.0
+
+        width = calculate_stereo_width(stereo, onset_sample=1000, sr=sr)
+        assert width <= 1.0
+
+    def test_return_type(self):
+        """Returns a plain Python float."""
+        stereo = np.ones((2, 22050)) * 0.5
+        width = calculate_stereo_width(stereo, onset_sample=500, sr=22050)
+        assert isinstance(width, float)
+
+
+class TestCalculateStereoFeatures:
+    """Tests for the batch stereo features helper."""
+
+    def test_returns_both_keys(self):
+        """Each result dict contains pan_confidence and stereo_width."""
+        sr = 22050
+        signal = np.sin(2 * np.pi * 440 * np.arange(sr) / sr)
+        stereo = np.stack([signal, signal], axis=0)
+        onset_times = np.array([0.1, 0.5])
+
+        features = calculate_stereo_features(stereo, onset_times, sr)
+        assert len(features) == 2
+        for f in features:
+            assert 'pan_confidence' in f
+            assert 'stereo_width' in f
+
+    def test_mono_fallback(self):
+        """1-D mono audio returns zeros for all onsets."""
+        mono = np.zeros(22050)
+        features = calculate_stereo_features(mono, np.array([0.1, 0.5]), sr=22050)
+        assert len(features) == 2
+        for f in features:
+            assert f['pan_confidence'] == 0.0
+            assert f['stereo_width'] == 0.0
+
+    def test_panned_right_positive(self):
+        """Right-louder stereo gives positive pan_confidence."""
+        sr = 22050
+        stereo = np.zeros((2, sr))
+        stereo[0, :] = 0.1  # quiet left
+        stereo[1, :] = 0.9  # loud right
+
+        features = calculate_stereo_features(stereo, np.array([0.2]), sr)
+        assert features[0]['pan_confidence'] > 0.5
+
+    def test_empty_onset_times(self):
+        """Empty onset array returns empty list."""
+        stereo = np.ones((2, 22050))
+        features = calculate_stereo_features(stereo, np.array([]), sr=22050)
+        assert features == []

@@ -181,7 +181,8 @@ def _serialize_onset_events(
         for field in ['duration_sec', 'amplitude_at_start', 'amplitude_at_end',
                      'attack_sharpness', 'envelope_continuity', 'peak_prominence',
                      'spectral_centroid_hz', 'spectral_flux', 'pitch_hz',
-                     'gap_from_previous_sec']:
+                     'gap_from_previous_sec',
+                     'pan_confidence', 'stereo_width']:
             value = onset_data.get(field)
             if value is not None:
                 event[field] = _round_value(value, 4)

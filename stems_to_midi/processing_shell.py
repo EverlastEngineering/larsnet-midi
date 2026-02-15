@@ -31,6 +31,7 @@ from .detection_shell import (
     detect_hihat_state
 )
 from .energy_detection_shell import detect_onsets_energy_based
+from .stereo_core import calculate_stereo_features
 
 # Import config structures
 from .config import DrumMapping
@@ -707,6 +708,15 @@ def _run_sensitive_detection(
     )
 
     sensitive_onset_data = filter_result.get('all_onset_data', [])
+
+    # Attach stereo features for non-kick stems
+    if is_stereo and stem_type != 'kick' and len(sensitive_onset_data) > 0:
+        sens_times = np.array([d['time'] for d in sensitive_onset_data])
+        stereo_feats = calculate_stereo_features(audio, sens_times, sr)
+        for onset_d, sf in zip(sensitive_onset_data, stereo_feats):
+            onset_d['pan_confidence'] = sf['pan_confidence']
+            onset_d['stereo_width'] = sf['stereo_width']
+
     print(f"    Sensitive detection: {len(sensitive_onset_data)} onsets with spectral features")
     return sensitive_onset_data
 
@@ -937,6 +947,22 @@ def process_stem_to_midi(
         spectral_data = filter_result['filtered_spectral'] if spectral_config.get('has_spectral_data') else None
         all_onset_data = filter_result['all_onset_data']
         filtered_onset_data = filter_result.get('filtered_onset_data', [])
+
+        # Attach stereo features (pan_confidence, stereo_width) for non-kick stems
+        if is_stereo and stem_type != 'kick' and len(all_onset_data) > 0:
+            all_times = np.array([d['time'] for d in all_onset_data])
+            stereo_feats = calculate_stereo_features(stereo_audio, all_times, sr)
+            for onset_d, sf in zip(all_onset_data, stereo_feats):
+                onset_d['pan_confidence'] = sf['pan_confidence']
+                onset_d['stereo_width'] = sf['stereo_width']
+            # filtered_onset_data is a subset (copies) — patch by time lookup
+            time_to_stereo = {round(d['time'], 6): (d.get('pan_confidence', 0.0), d.get('stereo_width', 0.0))
+                              for d in all_onset_data}
+            for onset_d in filtered_onset_data:
+                key = round(onset_d['time'], 6)
+                if key in time_to_stereo:
+                    onset_d['pan_confidence'] = time_to_stereo[key][0]
+                    onset_d['stereo_width'] = time_to_stereo[key][1]
 
         # Show ALL onset data and spectral chart if debug flags are enabled
         if show_all_onsets or show_spectral_data:
