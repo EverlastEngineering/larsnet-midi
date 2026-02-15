@@ -496,6 +496,56 @@ class TestRebuildEventsFromAnalysis:
         times = [e['time'] for e in midi_events['kick']]
         assert 3.0 in times
 
+    def test_lowered_threshold_note_velocity_aligned_by_time(self):
+        """Note/velocity attached to correct configured events after merge.
+
+        Regression test: when thresholds are lowered and sensitive events are
+        merged in, MIDI events are generated for ALL kept events (configured +
+        sensitive-sourced). The note/velocity attachment to configured events
+        must use time-based matching, not index-based, to avoid misalignment.
+        """
+        # Two configured events (at t=1.0 and t=4.0) with a sensitive event
+        # at t=2.5 that only exists in the sensitive pool. When thresholds are
+        # lowered, t=2.5 becomes KEPT too. With index-based attachment, the
+        # MIDI for t=2.5 would be incorrectly attached to the t=4.0 configured
+        # event (since it's the 2nd KEPT in updated_configured but the MIDI
+        # for t=2.5 is the 2nd entry in kept_midi).
+        analysis = _make_analysis_data({
+            'kick': {
+                'logic': {'geomean_threshold': 50.0, 'min_sustain_ms': None},
+                'events_configured': [
+                    _make_event(1.0, geomean=100.0, amplitude=0.9, status='KEPT'),
+                    _make_event(4.0, geomean=80.0, amplitude=0.3, status='KEPT'),
+                ],
+                'events_sensitive': [
+                    _make_event(2.5, geomean=30.0, amplitude=0.5, status='KEPT'),
+                ],
+            }
+        })
+        config = _make_config('kick', geomean_threshold=20.0)
+
+        updated, midi_events = rebuild_events_from_analysis(analysis, {}, config)
+
+        # All three should produce MIDI events
+        assert len(midi_events['kick']) == 3
+
+        # Verify configured events have correct note/velocity by time
+        configured = updated['stems']['kick']['events_configured']
+        kept_configured = [e for e in configured if e['status'] == 'KEPT']
+        assert len(kept_configured) == 2
+
+        # Each configured KEPT event should have note/velocity from the MIDI
+        # event at the SAME time, not from a different time
+        midi_by_time = {round(e['time'], 4): e for e in midi_events['kick']}
+        for event in kept_configured:
+            t = round(event['time'], 4)
+            assert 'note' in event, f"KEPT event at t={t} missing note"
+            assert 'velocity' in event, f"KEPT event at t={t} missing velocity"
+            assert event['velocity'] == midi_by_time[t]['velocity'], (
+                f"Event at t={t}: velocity {event['velocity']} != "
+                f"MIDI velocity {midi_by_time[t]['velocity']}"
+            )
+
     def test_sensitive_events_ignored_when_same_thresholds(self):
         """Sensitive events are NOT merged when thresholds are unchanged."""
         analysis = _make_analysis_data({

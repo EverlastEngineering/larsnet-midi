@@ -555,15 +555,25 @@ def rebuild_events_from_analysis(
             for event in event_list:
                 event.pop('_source', None)
 
-        # Attach note/velocity to KEPT events in configured list
-        midi_idx = 0
+        # Attach note/velocity/classification to KEPT events via time-based matching.
+        # Index-based pairing breaks when sensitive events are merged in, because
+        # kept_midi includes entries for sensitive-sourced KEPT events that don't
+        # appear in updated_configured.
         kept_midi = [e for e in midi_events if e.get('note') != 44]  # Exclude foot-close
+        midi_by_time = {round(e['time'], 4): e for e in kept_midi}
+        # classify_notes sets classification on kept_events in-place; build lookup
+        kept_by_time = {round(e['time'], 4): e for e in kept_events}
         for event in updated_configured:
-            if event.get('status') == 'KEPT' and midi_idx < len(kept_midi):
-                event['note'] = kept_midi[midi_idx]['note']
-                event['velocity'] = kept_midi[midi_idx]['velocity']
-                midi_idx += 1
-            elif event.get('status') != 'KEPT':
+            if event.get('status') == 'KEPT':
+                t = round(event['time'], 4)
+                midi_ev = midi_by_time.get(t)
+                if midi_ev:
+                    event['note'] = midi_ev['note']
+                    event['velocity'] = midi_ev['velocity']
+                # classification/hihat_state are set in-place by classify_notes
+                # on the kept_events refs, which are the same dicts as in events/
+                # updated_configured — so they're already present.
+            else:
                 # Clear stale note/velocity/classification from previously-KEPT events
                 event.pop('note', None)
                 event.pop('velocity', None)
