@@ -45,7 +45,7 @@ const STEM_SLIDER_CONFIGS = {
     snare: [
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 500, step: 1, fallback: 40, unit: '' },
         { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' },
-        { key: 'expected_clusters', label: '🥁 Sub-Types (1=Snare only, 2–4=+Rimshot/Clap)', min: 1, max: 4, step: 1, fallback: 1, unit: '', classification: true }
+        { key: 'expected_clusters', label: '🥁 Sound Types', min: 1, max: 4, step: 1, fallback: 2, unit: '', classification: true }
     ],
     toms: [
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 500, step: 1, fallback: 80, unit: '' },
@@ -108,6 +108,9 @@ function toggleTuningPanel() {
         // Cancel any pending reclassify
         if (reclassifyTimeoutId) { clearTimeout(reclassifyTimeoutId); reclassifyTimeoutId = null; }
 
+        // Clear cluster UI
+        hideClusterCards();
+
         // Clear tuning overlay — revert to configured display
         waveformTuningEvents = null;
         waveformTuningActive = false;
@@ -130,6 +133,7 @@ function onTuningStemChanged(stemType) {
     if (!tuningPanelOpen) return;
     // Cancel any pending reclassify from the previous stem
     if (reclassifyTimeoutId) { clearTimeout(reclassifyTimeoutId); reclassifyTimeoutId = null; }
+    hideClusterCards();
     buildSlidersForStem(stemType);
     applyTuningFilter();
 }
@@ -145,6 +149,8 @@ function resetTuningSliders() {
 
     // Clear stored values so buildSlidersForStem reads from logic block
     delete tuningSliderValues[waveformActiveStem];
+    delete clusterNoteOverrides[waveformActiveStem];
+    hideClusterCards();
     buildSlidersForStem(waveformActiveStem);
     applyTuningFilter();
     updateTuningSaveButton();
@@ -271,6 +277,34 @@ function onSliderInput(e) {
 const CLASSIFICATION_KEYS = new Set(['open_geomean_min', 'open_sustain_ms', 'expected_clusters']);
 
 /**
+ * Per-stem note assignment overrides from cluster dropdowns.
+ * Format: { stemType: { classificationIndex: noteNumber } }
+ */
+let clusterNoteOverrides = {};
+
+/**
+ * Available MIDI note choices per stem for the cluster note dropdowns.
+ */
+const STEM_NOTE_CHOICES = {
+    snare: [
+        { note: 38, label: 'Snare' },
+        { note: 37, label: 'Rimshot' },
+        { note: 39, label: 'Clap' },
+        { note: 40, label: 'Clap+Snare' },
+    ],
+    toms: [
+        { note: 45, label: 'Low Tom' },
+        { note: 47, label: 'Mid Tom' },
+        { note: 50, label: 'High Tom' },
+    ],
+    cymbals: [
+        { note: 49, label: 'Crash' },
+        { note: 51, label: 'Ride' },
+        { note: 52, label: 'Chinese' },
+    ],
+};
+
+/**
  * Schedule a debounced reclassify API call (500ms).
  * Collects classification slider overrides and calls the server.
  */
@@ -284,6 +318,7 @@ function scheduleReclassify() {
 
 /**
  * Call the reclassify API and merge results into displayed events.
+ * Renders cluster info cards when the API returns cluster metadata.
  */
 async function doReclassify() {
     if (!currentProject || !waveformActiveStem || !waveformAnalysisData) return;
@@ -309,7 +344,6 @@ async function doReclassify() {
         const classificationByTime = {};
         for (const ev of result.events) {
             if (ev.time != null) {
-                // Round to 4 decimals for matching (analysis.json precision)
                 const timeKey = ev.time.toFixed(4);
                 classificationByTime[timeKey] = ev;
             }
@@ -317,15 +351,26 @@ async function doReclassify() {
 
         // Merge into the displayed events (tuning or configured)
         const displayEvents = waveformTuningEvents || getEventsForStem(waveformAnalysisData.stems[stemType]);
+        const noteOverrides = clusterNoteOverrides[stemType] || {};
+
         for (const event of displayEvents) {
             if (event.status !== 'KEPT' || event.time == null) continue;
             const timeKey = event.time.toFixed(4);
             const cls = classificationByTime[timeKey];
             if (cls) {
-                if (cls.note != null) event.note = cls.note;
                 if (cls.hihat_state != null) event.hihat_state = cls.hihat_state;
                 if (cls.classification != null) event.classification = cls.classification;
+                // Apply note: use dropdown override if set, otherwise server default
+                const overrideNote = noteOverrides[cls.classification];
+                event.note = overrideNote != null ? overrideNote : cls.note;
             }
+        }
+
+        // Render cluster info cards if available
+        if (result.cluster_info && result.cluster_info.length > 1) {
+            renderClusterCards(stemType, result.cluster_info);
+        } else {
+            hideClusterCards();
         }
 
         // Re-render with updated colors
@@ -335,6 +380,115 @@ async function doReclassify() {
     } finally {
         reclassifyInFlight = false;
     }
+}
+
+/**
+ * Render cluster info cards in the tuning panel.
+ * Each card shows: cluster description, event count, distinguishing feature stats,
+ * and a note dropdown for reassignment.
+ */
+function renderClusterCards(stemType, clusterInfo) {
+    const container = document.getElementById('tuning-clusters');
+    if (!container) return;
+
+    const noteChoices = STEM_NOTE_CHOICES[stemType] || [];
+    const noteOverrides = clusterNoteOverrides[stemType] || {};
+
+    const html = clusterInfo.map(cluster => {
+        const currentNote = noteOverrides[cluster.classification] != null
+            ? noteOverrides[cluster.classification]
+            : cluster.note;
+        const noteInfo = NOTE_TYPE_COLORS[currentNote];
+        const dotColor = noteInfo ? noteInfo.color : '#9ca3af';
+
+        // Build feature stats display
+        const feat = cluster.distinguishing_feature;
+        const featStats = cluster.features?.[feat];
+        const featLabel = cluster.distinguishing_label || feat;
+        let statsHtml = '';
+        if (featStats) {
+            statsHtml = `<span class="text-gray-500">${featLabel}: ${featStats.mean.toFixed(3)} (${featStats.min.toFixed(3)}–${featStats.max.toFixed(3)})</span>`;
+        }
+
+        // Build note dropdown options
+        const options = noteChoices.map(nc => {
+            const selected = nc.note === currentNote ? 'selected' : '';
+            return `<option value="${nc.note}" ${selected}>${nc.label}</option>`;
+        }).join('');
+
+        return `
+            <div class="flex items-center gap-2 py-1.5 px-2 rounded bg-gray-750 border border-gray-600" data-classification="${cluster.classification}">
+                <span class="w-2.5 h-2.5 rounded-full flex-shrink-0" style="background: ${dotColor}"></span>
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-1.5">
+                        <span class="text-xs text-gray-200 font-medium">${cluster.description}</span>
+                        <span class="text-xs text-gray-500">(${cluster.count})</span>
+                    </div>
+                    <div class="text-[10px] leading-tight mt-0.5">${statsHtml}</div>
+                </div>
+                <select class="cluster-note-select text-xs bg-gray-700 border border-gray-600 rounded px-1.5 py-0.5 text-gray-200 flex-shrink-0"
+                        data-classification="${cluster.classification}"
+                        data-stem="${stemType}">
+                    ${options}
+                </select>
+            </div>`;
+    }).join('');
+
+    container.innerHTML = `
+        <div class="text-[10px] text-gray-500 mb-1.5">Cluster assignments (${clusterInfo[0]?.distinguishing_label || 'feature'}-based)</div>
+        <div class="space-y-1">${html}</div>`;
+    container.classList.remove('hidden');
+
+    // Attach change listeners to dropdowns
+    container.querySelectorAll('.cluster-note-select').forEach(select => {
+        select.addEventListener('change', onClusterNoteChange);
+    });
+}
+
+/**
+ * Hide cluster cards (e.g. when switching to 1 cluster or non-clusterable stem).
+ */
+function hideClusterCards() {
+    const container = document.getElementById('tuning-clusters');
+    if (container) {
+        container.innerHTML = '';
+        container.classList.add('hidden');
+    }
+}
+
+/**
+ * Handle cluster note dropdown change — remap events client-side immediately.
+ */
+function onClusterNoteChange(e) {
+    const stemType = e.target.dataset.stem;
+    const classification = parseInt(e.target.dataset.classification, 10);
+    const newNote = parseInt(e.target.value, 10);
+
+    // Store the override
+    if (!clusterNoteOverrides[stemType]) clusterNoteOverrides[stemType] = {};
+    clusterNoteOverrides[stemType][classification] = newNote;
+
+    // Update the dot color on the card
+    const card = e.target.closest('[data-classification]');
+    if (card) {
+        const dot = card.querySelector('.rounded-full');
+        const noteInfo = NOTE_TYPE_COLORS[newNote];
+        if (dot && noteInfo) dot.style.background = noteInfo.color;
+    }
+
+    // Re-map displayed events immediately (no server round-trip)
+    const displayEvents = waveformTuningEvents || getEventsForStem(waveformAnalysisData?.stems?.[stemType]);
+    if (displayEvents) {
+        for (const event of displayEvents) {
+            if (event.status !== 'KEPT') continue;
+            if (event.classification === classification) {
+                event.note = newNote;
+            }
+        }
+        drawWaveform();
+    }
+
+    updateTuningSaveButton();
 }
 
 // ─── Save & Reconvert ────────────────────────────────────────────────────
@@ -366,6 +520,14 @@ function updateTuningSaveButton() {
         if (currentVal != null && Math.abs(currentVal - configuredVal) > slider.step * 0.01) {
             hasChanges = true;
             break;
+        }
+    }
+
+    // Check if cluster note overrides have been set
+    if (!hasChanges) {
+        const noteOverrides = clusterNoteOverrides[stemType];
+        if (noteOverrides && Object.keys(noteOverrides).length > 0) {
+            hasChanges = true;
         }
     }
 
@@ -401,6 +563,16 @@ function buildConfigUpdates(stemType) {
                 : [stemType, slider.key];
             updates.push({ path, value: currentVal });
         }
+    }
+
+    // Include cluster note overrides if any
+    const noteOverrides = clusterNoteOverrides[stemType];
+    if (noteOverrides && Object.keys(noteOverrides).length > 0) {
+        // Convert { 0: 38, 1: 39 } → config path [stemType, 'cluster_note_map']
+        updates.push({
+            path: [stemType, 'cluster_note_map'],
+            value: noteOverrides,
+        });
     }
 
     return updates;
@@ -464,6 +636,8 @@ async function saveTuningAndReconvert() {
                 // Reset tuning state since changes are now committed
                 waveformTuningEvents = null;
                 waveformTuningActive = false;
+                delete clusterNoteOverrides[stemType];
+                hideClusterCards();
                 drawWaveform();
                 return;
             }

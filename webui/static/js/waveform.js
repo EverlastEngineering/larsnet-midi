@@ -970,6 +970,8 @@ function drawTooltip(ctx, event, W, H) {
     if (event.amplitude != null) lines.push(`Amplitude: ${event.amplitude}`);
     if (event.total_energy != null) lines.push(`Total energy: ${event.total_energy}`);
     if (event.sustain_ms != null) lines.push(`Sustain: ${event.sustain_ms}ms`);
+    if (event.stereo_width != null) lines.push(`Stereo width: ${event.stereo_width.toFixed(3)}`);
+    if (event.pan_confidence != null) lines.push(`Pan: ${event.pan_confidence.toFixed(3)}`);
 
     const lineH = 16;
     const pad = 8;

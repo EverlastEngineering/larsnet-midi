@@ -14,6 +14,7 @@ from stems_to_midi.note_classification_core import (
     classify_cymbal_notes,
     classify_snare_notes,
     classify_notes,
+    analyze_clusters,
     _cluster_values,
     _extract_feature_values,
     _map_note,
@@ -128,6 +129,18 @@ class TestExtractFeatureValues:
         values, indices = _extract_feature_values(events, 'spectral_centroid_hz')
         assert values.tolist() == [300.0]
         assert indices == [1]
+
+    def test_allow_zero_false_excludes_zero(self):
+        events = [{'stereo_width': 0.0}, {'stereo_width': 0.5}]
+        values, indices = _extract_feature_values(events, 'stereo_width')
+        assert values.tolist() == [0.5]
+        assert indices == [1]
+
+    def test_allow_zero_true_includes_zero(self):
+        events = [{'stereo_width': 0.0}, {'stereo_width': 0.5}]
+        values, indices = _extract_feature_values(events, 'stereo_width', allow_zero=True)
+        assert values.tolist() == [0.0, 0.5]
+        assert indices == [0, 1]
 
 
 # ============================================================================
@@ -331,16 +344,27 @@ class TestClassifyCymbalNotes:
 
 
 class TestClassifySnareNotes:
-    """Tests for snare type classification."""
+    """Tests for snare type classification using stereo_width."""
 
-    def test_four_distinct_types(self, default_config):
-        """Four clearly different centroids with expected_clusters=4."""
+    def test_two_distinct_types_stereo_width(self, default_config):
+        """Mono snare vs wide clap using stereo_width with default clusters=2."""
+        config = {**default_config, 'snare': {'expected_clusters': 2}}
+        events = [
+            _make_event(stereo_width=0.03),  # mono snare (narrowest → 0)
+            _make_event(stereo_width=0.35),  # wide clap (widest → 1)
+        ]
+        classify_snare_notes(events, config)
+        assert events[0]['classification'] == 0
+        assert events[1]['classification'] == 1
+
+    def test_four_distinct_types_stereo_width(self, default_config):
+        """Four stereo width clusters."""
         config = {**default_config, 'snare': {'expected_clusters': 4}}
         events = [
-            _make_event(spectral_centroid_hz=300.0),   # snare (lowest)
-            _make_event(spectral_centroid_hz=800.0),   # rimshot
-            _make_event(spectral_centroid_hz=2000.0),  # clap
-            _make_event(spectral_centroid_hz=5000.0),  # clap+snare (highest)
+            _make_event(stereo_width=0.01),  # narrow
+            _make_event(stereo_width=0.10),  # slightly wider
+            _make_event(stereo_width=0.30),  # wide
+            _make_event(stereo_width=0.60),  # very wide
         ]
         classify_snare_notes(events, config)
         assert events[0]['classification'] == 0
@@ -349,33 +373,22 @@ class TestClassifySnareNotes:
         assert events[3]['classification'] == 3
 
     def test_expected_clusters_1_all_snare(self, default_config):
-        """expected_clusters=1 (default) → all events classification=0."""
+        """expected_clusters=1 → all events classification=0."""
+        config = {**default_config, 'snare': {'expected_clusters': 1}}
         events = [
-            _make_event(spectral_centroid_hz=300.0),
-            _make_event(spectral_centroid_hz=800.0),
-            _make_event(spectral_centroid_hz=5000.0),
-        ]
-        classify_snare_notes(events, default_config)
-        assert all(e['classification'] == 0 for e in events)
-
-    def test_expected_clusters_2_two_groups(self, default_config):
-        """expected_clusters=2 → split into snare (0) and rimshot (1)."""
-        config = {**default_config, 'snare': {'expected_clusters': 2}}
-        events = [
-            _make_event(spectral_centroid_hz=300.0),
-            _make_event(spectral_centroid_hz=5000.0),
+            _make_event(stereo_width=0.03),
+            _make_event(stereo_width=0.40),
         ]
         classify_snare_notes(events, config)
-        assert events[0]['classification'] == 0
-        assert events[1]['classification'] == 1
+        assert all(e['classification'] == 0 for e in events)
 
     def test_expected_clusters_3_three_groups(self, default_config):
-        """expected_clusters=3 → snare/rimshot/clap."""
+        """expected_clusters=3 → three stereo width clusters."""
         config = {**default_config, 'snare': {'expected_clusters': 3}}
         events = [
-            _make_event(spectral_centroid_hz=300.0),
-            _make_event(spectral_centroid_hz=1500.0),
-            _make_event(spectral_centroid_hz=5000.0),
+            _make_event(stereo_width=0.01),
+            _make_event(stereo_width=0.20),
+            _make_event(stereo_width=0.50),
         ]
         classify_snare_notes(events, config)
         assert events[0]['classification'] == 0
@@ -386,10 +399,10 @@ class TestClassifySnareNotes:
         """expected_clusters > 4 clamped to 4."""
         config = {**default_config, 'snare': {'expected_clusters': 10}}
         events = [
-            _make_event(spectral_centroid_hz=300.0),
-            _make_event(spectral_centroid_hz=800.0),
-            _make_event(spectral_centroid_hz=2000.0),
-            _make_event(spectral_centroid_hz=5000.0),
+            _make_event(stereo_width=0.01),
+            _make_event(stereo_width=0.10),
+            _make_event(stereo_width=0.30),
+            _make_event(stereo_width=0.60),
         ]
         classify_snare_notes(events, config)
         # Should behave like expected_clusters=4
@@ -399,35 +412,125 @@ class TestClassifySnareNotes:
         """Two unique values with expected_clusters=4 → k reduced to 2."""
         config = {**default_config, 'snare': {'expected_clusters': 4}}
         events = [
-            _make_event(spectral_centroid_hz=300.0),
-            _make_event(spectral_centroid_hz=300.0),
-            _make_event(spectral_centroid_hz=800.0),
+            _make_event(stereo_width=0.02),
+            _make_event(stereo_width=0.02),
+            _make_event(stereo_width=0.40),
         ]
         classify_snare_notes(events, config)
-        # Should produce only classifications 0 and a higher value
         classes = [e['classification'] for e in events]
-        assert classes[0] == classes[1]  # same centroid → same class
-        assert classes[0] != classes[2]  # different centroid → different class
+        assert classes[0] == classes[1]  # same width → same class
+        assert classes[0] != classes[2]  # different width → different class
 
-    def test_no_centroid_data(self, default_config):
-        """No centroid with expected_clusters > 1 → default snare (0)."""
+    def test_fallback_to_spectral_centroid(self, default_config):
+        """No stereo_width data → falls back to spectral_centroid_hz."""
+        config = {**default_config, 'snare': {'expected_clusters': 2}}
+        events = [
+            _make_event(spectral_centroid_hz=300.0),
+            _make_event(spectral_centroid_hz=5000.0),
+        ]
+        classify_snare_notes(events, config)
+        assert events[0]['classification'] == 0
+        assert events[1]['classification'] == 1
+
+    def test_no_feature_data(self, default_config):
+        """No stereo_width or centroid → all default snare (0)."""
         config = {**default_config, 'snare': {'expected_clusters': 4}}
         events = [_make_event()]
         classify_snare_notes(events, config)
         assert events[0]['classification'] == 0
+
+    def test_zero_stereo_width_is_valid(self, default_config):
+        """stereo_width=0.0 (mono) is a valid value, not skipped."""
+        config = {**default_config, 'snare': {'expected_clusters': 2}}
+        events = [
+            _make_event(stereo_width=0.0),
+            _make_event(stereo_width=0.4),
+        ]
+        classify_snare_notes(events, config)
+        assert events[0]['classification'] == 0  # narrow
+        assert events[1]['classification'] == 1  # wide
 
     def test_empty_events(self, default_config):
         result = classify_snare_notes([], default_config)
         assert result == []
 
     def test_default_config_no_snare_key(self):
-        """Config without 'snare' key defaults to expected_clusters=1."""
+        """Config without 'snare' key defaults to expected_clusters=2."""
         events = [
-            _make_event(spectral_centroid_hz=300.0),
-            _make_event(spectral_centroid_hz=5000.0),
+            _make_event(stereo_width=0.02),
+            _make_event(stereo_width=0.40),
         ]
         classify_snare_notes(events, {})
-        assert all(e['classification'] == 0 for e in events)
+        # Default is 2 clusters, so should split
+        assert events[0]['classification'] == 0
+        assert events[1]['classification'] == 1
+
+
+# ============================================================================
+# Cluster Analysis Tests
+# ============================================================================
+
+
+class TestAnalyzeClusters:
+    """Tests for analyze_clusters metadata extraction."""
+
+    def test_returns_cluster_info_per_classification(self, drum_mapping):
+        """Each unique classification gets a cluster info entry."""
+        events = [
+            _make_event(classification=0, stereo_width=0.03, note=38),
+            _make_event(classification=0, stereo_width=0.04, note=38),
+            _make_event(classification=1, stereo_width=0.35, note=37),
+        ]
+        result = analyze_clusters(events, 'snare', drum_mapping)
+        assert len(result) == 2
+        # Sorted by count descending
+        assert result[0]['classification'] == 0
+        assert result[0]['count'] == 2
+        assert result[1]['classification'] == 1
+        assert result[1]['count'] == 1
+
+    def test_cluster_info_has_required_fields(self, drum_mapping):
+        """Each cluster info dict has the expected keys."""
+        events = [
+            _make_event(classification=0, stereo_width=0.03, note=38),
+            _make_event(classification=1, stereo_width=0.35, note=37),
+        ]
+        result = analyze_clusters(events, 'snare', drum_mapping)
+        required_keys = {
+            'classification', 'note', 'note_label', 'count',
+            'features', 'distinguishing_feature', 'distinguishing_label',
+            'description',
+        }
+        for cluster in result:
+            assert required_keys.issubset(cluster.keys())
+
+    def test_feature_stats_computed(self, drum_mapping):
+        """Feature stats include mean, min, max."""
+        events = [
+            _make_event(classification=0, stereo_width=0.02, note=38),
+            _make_event(classification=0, stereo_width=0.06, note=38),
+        ]
+        result = analyze_clusters(events, 'snare', drum_mapping)
+        features = result[0]['features']
+        assert 'stereo_width' in features
+        sw = features['stereo_width']
+        assert sw['mean'] == pytest.approx(0.04, abs=0.001)
+        assert sw['min'] == pytest.approx(0.02, abs=0.001)
+        assert sw['max'] == pytest.approx(0.06, abs=0.001)
+
+    def test_single_cluster_has_description(self, drum_mapping):
+        """Single cluster still returns valid description."""
+        events = [
+            _make_event(classification=0, stereo_width=0.03, note=38),
+        ]
+        result = analyze_clusters(events, 'snare', drum_mapping)
+        assert len(result) == 1
+        assert result[0]['description']  # non-empty string
+
+    def test_empty_events(self, drum_mapping):
+        """Empty events list returns empty result."""
+        result = analyze_clusters([], 'snare', drum_mapping)
+        assert result == []
 
 
 # ============================================================================
@@ -486,6 +589,32 @@ class TestMapNote:
         event = {}
         assert _map_note(event, 'kick', drum_mapping) == 36
 
+    def test_cluster_note_map_overrides_default(self, drum_mapping):
+        """Config with cluster_note_map overrides default note mapping."""
+        config = {'snare': {'cluster_note_map': {0: 39, 1: 38}}}
+        event0 = {'classification': 0}
+        event1 = {'classification': 1}
+        assert _map_note(event0, 'snare', drum_mapping, config) == 39  # clap instead of snare
+        assert _map_note(event1, 'snare', drum_mapping, config) == 38  # snare instead of rimshot
+
+    def test_cluster_note_map_string_keys(self, drum_mapping):
+        """cluster_note_map works with string keys (from JSON deserialization)."""
+        config = {'snare': {'cluster_note_map': {'0': 40, '1': 37}}}
+        event = {'classification': 0}
+        assert _map_note(event, 'snare', drum_mapping, config) == 40
+
+    def test_cluster_note_map_missing_key_falls_through(self, drum_mapping):
+        """Classification not in cluster_note_map falls back to default map."""
+        config = {'snare': {'cluster_note_map': {0: 39}}}
+        event = {'classification': 1}
+        # classification 1 not in map, so falls back to default: rimshot=37
+        assert _map_note(event, 'snare', drum_mapping, config) == 37
+
+    def test_no_config_uses_default(self, drum_mapping):
+        """No config parameter uses default note mapping."""
+        event = {'classification': 0}
+        assert _map_note(event, 'snare', drum_mapping) == 38
+
 
 # ============================================================================
 # classify_notes Integration Tests
@@ -535,30 +664,54 @@ class TestClassifyNotes:
         assert events[1]['note'] == 51  # ride
         assert events[2]['note'] == 52  # chinese
 
-    def test_snare_default_all_snare(self, drum_mapping, default_config):
-        """Snare with default expected_clusters=1 → all note 38."""
+    def test_snare_default_two_clusters(self, drum_mapping, default_config):
+        """Snare with default expected_clusters=2 → snare + rimshot by stereo_width."""
         events = [
-            _make_event(spectral_centroid_hz=300.0),
-            _make_event(spectral_centroid_hz=800.0),
-            _make_event(spectral_centroid_hz=5000.0),
+            _make_event(stereo_width=0.03),
+            _make_event(stereo_width=0.35),
         ]
         classify_notes(events, 'snare', drum_mapping, default_config)
+        assert events[0]['note'] == 38  # snare (narrow)
+        assert events[1]['note'] == 37  # rimshot (wide)
+
+    def test_snare_single_cluster_all_snare(self, drum_mapping, default_config):
+        """Snare with expected_clusters=1 → all note 38."""
+        config = {**default_config, 'snare': {'expected_clusters': 1}}
+        events = [
+            _make_event(stereo_width=0.03),
+            _make_event(stereo_width=0.35),
+        ]
+        classify_notes(events, 'snare', drum_mapping, config)
         assert all(e['note'] == 38 for e in events)
 
-    def test_snare_classified_with_clusters(self, drum_mapping, default_config):
-        """Snare with expected_clusters=4 → varied notes by centroid."""
+    def test_snare_classified_with_four_clusters(self, drum_mapping, default_config):
+        """Snare with expected_clusters=4 → varied notes by stereo_width."""
         config = {**default_config, 'snare': {'expected_clusters': 4}}
         events = [
-            _make_event(spectral_centroid_hz=300.0),
-            _make_event(spectral_centroid_hz=800.0),
-            _make_event(spectral_centroid_hz=2000.0),
-            _make_event(spectral_centroid_hz=5000.0),
+            _make_event(stereo_width=0.01),
+            _make_event(stereo_width=0.10),
+            _make_event(stereo_width=0.30),
+            _make_event(stereo_width=0.60),
         ]
         classify_notes(events, 'snare', drum_mapping, config)
         assert events[0]['note'] == 38  # snare
         assert events[1]['note'] == 37  # rimshot
         assert events[2]['note'] == 39  # clap
         assert events[3]['note'] == 40  # clap+snare
+
+    def test_snare_with_cluster_note_map(self, drum_mapping, default_config):
+        """Snare with cluster_note_map overrides default note assignment."""
+        config = {**default_config, 'snare': {
+            'expected_clusters': 2,
+            'cluster_note_map': {0: 39, 1: 38},  # swap: narrow=clap, wide=snare
+        }}
+        events = [
+            _make_event(stereo_width=0.03),
+            _make_event(stereo_width=0.40),
+        ]
+        classify_notes(events, 'snare', drum_mapping, config)
+        assert events[0]['note'] == 39  # narrow → clap (overridden)
+        assert events[1]['note'] == 38  # wide → snare (overridden)
 
     def test_empty_events(self, drum_mapping, default_config):
         """Empty list returns empty list without error."""

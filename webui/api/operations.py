@@ -530,7 +530,10 @@ def reclassify():
 
         # Load config and merge overrides
         from stems_to_midi.config import load_config, DrumMapping
-        from stems_to_midi.note_classification_core import classify_notes
+        from stems_to_midi.note_classification_core import (
+            classify_notes,
+            analyze_clusters,
+        )
 
         config = load_config(project['path'] / 'midiconfig.yaml')
         drum_mapping = DrumMapping.from_config(config)
@@ -545,6 +548,11 @@ def reclassify():
         # Run classification
         classify_notes(kept_events, stem_type, drum_mapping, config)
 
+        # Analyze cluster characteristics for the UI
+        cluster_info = analyze_clusters(
+            kept_events, stem_type, drum_mapping,
+        )
+
         # Return minimal payload: time + classification fields
         result_events = []
         for event in kept_events:
@@ -557,7 +565,10 @@ def reclassify():
                 result_event['classification'] = event['classification']
             result_events.append(result_event)
 
-        return jsonify({'events': result_events}), 200
+        return jsonify({
+            'events': result_events,
+            'cluster_info': cluster_info,
+        }), 200
 
     except Exception as e:
         return jsonify({

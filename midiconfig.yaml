@@ -135,7 +135,7 @@ snare:
   
   # Clustering configuration
   onset_merge_window_ms: 100  # Merge L/R onsets within this window (ms)
-  expected_clusters: 1        # Expected number of distinct snare sounds (usually 1, or 2 with side-stick)
+  expected_clusters: 2        # Expected number of distinct snare sounds (2=snare+clap, 1=all snare)
   
   # Detection method selection (NEW: energy-based is default)
   # use_librosa_detection: false  # Set to true for A/B testing with old method
