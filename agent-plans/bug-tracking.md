@@ -116,9 +116,9 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 - **Priority**: High
 - **Description**: Code supports multiple MIDI notes per stem type (snare: 4 types, cymbal: 3 types) but config only exposes single `midi_note` field
 - **Details**:
-  - **Snare**: Code classifies into 4 types but config only has `midi_note: 38`
-    - Snare (38), Rimshot (37), Clap (39), Clap+Snare (40) - hardcoded in `DrumMapping`
-    - Config should expose: `midi_note_rimshot`, `midi_note_clap`, `midi_note_clap_snare`
+  - **Snare**: Code classifies into 3 types but config only has `midi_note: 38`
+    - Snare (38), Rimshot (37), Clap (39) - hardcoded in `DrumMapping`
+    - Config should expose: `midi_note_rimshot`, `midi_note_clap`
   - **Cymbals**: Code classifies into 3 types but config only has `midi_note: 57`
     - Crash (49), Ride (51), Chinese (52) - hardcoded in `DrumMapping`
     - Config should expose: `midi_note_crash`, `midi_note_ride`, `midi_note_chinese`

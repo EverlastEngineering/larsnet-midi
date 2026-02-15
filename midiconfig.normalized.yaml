@@ -157,7 +157,6 @@ snare:
   merge_window_ms: 150.0
   midi_note: 38
   midi_note_clap: 39
-  midi_note_clap_snare: 40
   midi_note_rimshot: 37
   min_absolute_energy: 0.015
   min_peak_spacing_ms: 80.0

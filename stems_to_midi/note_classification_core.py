@@ -338,7 +338,7 @@ def classify_snare_notes(
 
     Uses k-means on stereo_width to distinguish mono snare hits from
     wide stereo claps/layered sounds. The number of clusters is
-    controlled by config['snare']['expected_clusters'] (1-4, default 2).
+    controlled by config['snare']['expected_clusters'] (1-3, default 2).
     Sorted by width: 0=snare (narrowest/mono), 1=clap (wider stereo).
 
     When expected_clusters=1, all events are assigned classification=0
@@ -353,11 +353,11 @@ def classify_snare_notes(
         config: Full config dict. Reads snare.expected_clusters (default 2).
 
     Returns:
-        Same events with 'classification' field: 0-3.
+        Same events with 'classification' field: 0-2.
     """
     snare_config = config.get('snare', {})
     expected_clusters = snare_config.get('expected_clusters') or 2
-    expected_clusters = max(1, min(4, int(expected_clusters)))  # Clamp to 1-4
+    expected_clusters = max(1, min(3, int(expected_clusters)))  # Clamp to 1-3
 
     # With 1 cluster, all events are plain snare — skip clustering
     if expected_clusters == 1:
@@ -417,7 +417,6 @@ _NOTE_MAP = {
         0: 'snare',
         1: 'snare_rimshot',
         2: 'snare_clap',
-        3: 'snare_clap_snare',
     },
 }
 

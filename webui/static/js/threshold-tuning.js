@@ -1,7 +1,7 @@
 /**
  * Threshold Tuning Module
  *
- * Provides interactive client-side sliders that re-filter events_sensitive
+ * Provides interactive client-side sliders that re-filter events_configured
  * data in the browser. No server round-trip needed — filtering is just
  * comparisons on the pre-computed spectral features.
  *
@@ -29,7 +29,7 @@ let reclassifyTimeoutId = null;
 let reclassifyInFlight = false;
 
 /**
- * Cached deep-copy of events_sensitive for the active stem.
+ * Cached deep-copy of events_configured for the active stem.
  * Created once when entering tuning mode (or switching stems).
  * applyTuningFilter modifies status in-place on these — no re-copying.
  */
@@ -59,7 +59,7 @@ const STEM_SLIDER_CONFIGS = {
     snare: [
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 500, step: 1, fallback: 40, unit: '' },
         { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' },
-        { key: 'expected_clusters', label: '🥁 Sound Types', min: 1, max: 4, step: 1, fallback: 2, unit: '', classification: true }
+        { key: 'expected_clusters', label: '🥁 Sound Types', min: 1, max: 3, step: 1, fallback: 2, unit: '', classification: true }
     ],
     toms: [
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 500, step: 1, fallback: 80, unit: '' },
@@ -404,7 +404,6 @@ const STEM_NOTE_CHOICES = {
         { note: 38, label: 'Snare' },
         { note: 37, label: 'Rimshot' },
         { note: 39, label: 'Clap' },
-        { note: 40, label: 'Clap+Snare' },
     ],
     toms: [
         { note: 45, label: 'Low Tom' },
@@ -786,8 +785,12 @@ async function saveTuningAndReconvert() {
                 // Rebuild sliders from fresh logic block if panel is still open
                 if (tuningPanelOpen) {
                     buildSlidersForStem(stemType);
+                    // Re-enter tuning mode so the display stays in tuning view
+                    initTuningBaseEvents(stemType);
+                    applyTuningFilter();
+                } else {
+                    drawWaveform();
                 }
-                drawWaveform();
                 return;
             }
         } catch (rebuildErr) {
@@ -816,18 +819,24 @@ async function saveTuningAndReconvert() {
 // ─── Client-Side Filtering ───────────────────────────────────────────────
 
 /**
- * Create the cached base events for tuning from events_sensitive.
+ * Create the cached base events for tuning from events_configured.
  * Called once when entering tuning mode or switching stems.
+ *
+ * Uses events_configured (not events_sensitive) so the tune UI operates
+ * on the exact same onset set that the pipeline produces. Sensitive events
+ * have different onset start points and can contain events that don't exist
+ * in the configured set, making them unreliable for previewing reconvert
+ * results.
  */
 function initTuningBaseEvents(stemType) {
     const stemData = waveformAnalysisData?.stems?.[stemType];
-    const sensitiveEvents = stemData?.events_sensitive;
-    if (!sensitiveEvents || sensitiveEvents.length === 0) {
+    const configuredEvents = stemData?.events_configured;
+    if (!configuredEvents || configuredEvents.length === 0) {
         tuningBaseEvents = null;
         return;
     }
     // Deep-copy once — these are reused across filter passes
-    tuningBaseEvents = sensitiveEvents.map(e => ({ ...e }));
+    tuningBaseEvents = configuredEvents.map(e => ({ ...e }));
 }
 
 /**
@@ -904,7 +913,7 @@ function applySpectralFilter(events, params, filterMode) {
     const minStrength = params.min_strength_threshold;
 
     for (const event of events) {
-        // Start as KEPT (sensitive events are all pre-KEPT)
+        // Start as KEPT (re-evaluate from scratch each pass)
         event.status = 'KEPT';
 
         // Strength gate (applies first, all modes)

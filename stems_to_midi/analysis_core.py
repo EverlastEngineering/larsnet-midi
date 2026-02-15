@@ -1280,15 +1280,14 @@ def classify_cymbal_pitch(pitches: np.ndarray) -> np.ndarray:
 
 def classify_snare_pitch(pitches: np.ndarray) -> np.ndarray:
     """
-    Classify snare hits into 4 types using clustering.
+    Classify snare hits into 3 types using clustering.
     
     Pure function - no side effects.
     
     Types:
     0 = snare (most common, mid-range pitch)
     1 = rimshot (higher pitch, sharper)
-    2 = clap only (highest pitch, thin sound)
-    3 = clap+snare (layered, mid-high pitch)
+    2 = clap (highest pitch, thin sound)
     
     Note: Later can be enhanced with stereo info and envelope profile.
     
@@ -1296,7 +1295,7 @@ def classify_snare_pitch(pitches: np.ndarray) -> np.ndarray:
         pitches: Array of detected pitches in Hz
     
     Returns:
-        Array of classifications: 0=snare, 1=rimshot, 2=clap, 3=clap+snare
+        Array of classifications: 0=snare, 1=rimshot, 2=clap
     """
     if len(pitches) == 0:
         return np.array([])
@@ -1336,28 +1335,26 @@ def classify_snare_pitch(pitches: np.ndarray) -> np.ndarray:
                     classifications[i] = 1  # Rimshot (mid)
         return classifications
     else:
-        # 4+ unique pitches - use k-means clustering with k=4
+        # 4+ unique pitches - use k-means clustering with k=3
         try:
             from sklearn.cluster import KMeans
             
             # Reshape for sklearn
             X = valid_pitches.reshape(-1, 1)
-            kmeans = KMeans(n_clusters=4, random_state=42, n_init=10)
+            kmeans = KMeans(n_clusters=3, random_state=42, n_init=10)
             kmeans.fit(X)
             
-            # Sort clusters by center frequency (0=low, 1=mid-low, 2=mid-high, 3=high)
+            # Sort clusters by center frequency (0=low, 1=mid, 2=high)
             cluster_centers = kmeans.cluster_centers_.flatten()
             sorted_cluster_indices = np.argsort(cluster_centers)
             
             # Map to snare types based on pitch order
             # Lowest pitch = snare (0)
-            # Second = rimshot (1) 
-            # Third = clap+snare (3)
-            # Highest = clap only (2)
+            # Middle = rimshot (1) 
+            # Highest = clap (2)
             pitch_to_type = {sorted_cluster_indices[0]: 0,  # Lowest -> snare
-                           sorted_cluster_indices[1]: 1,  # Mid-low -> rimshot
-                           sorted_cluster_indices[2]: 3,  # Mid-high -> clap+snare
-                           sorted_cluster_indices[3]: 2}  # Highest -> clap
+                           sorted_cluster_indices[1]: 1,  # Mid -> rimshot
+                           sorted_cluster_indices[2]: 2}   # Highest -> clap
             
             # Classify all pitches (including failed detections)
             classifications = np.zeros(len(pitches), dtype=int)  # Default to snare
@@ -1371,22 +1368,19 @@ def classify_snare_pitch(pitches: np.ndarray) -> np.ndarray:
             return classifications
             
         except ImportError:
-            # Fallback: use percentiles to split into 4 groups
-            p25 = np.percentile(valid_pitches, 25)
-            p50 = np.percentile(valid_pitches, 50)
-            p75 = np.percentile(valid_pitches, 75)
+            # Fallback: use percentiles to split into 3 groups
+            p33 = np.percentile(valid_pitches, 33)
+            p66 = np.percentile(valid_pitches, 66)
             
             classifications = np.zeros(len(pitches), dtype=int)  # Default to snare
             for i, pitch in enumerate(pitches):
                 if pitch > 0:
-                    if pitch < p25:
+                    if pitch < p33:
                         classifications[i] = 0  # Snare (lowest)
-                    elif pitch < p50:
-                        classifications[i] = 1  # Rimshot
-                    elif pitch < p75:
-                        classifications[i] = 3  # Clap+Snare
+                    elif pitch < p66:
+                        classifications[i] = 1  # Rimshot (mid)
                     else:
-                        classifications[i] = 2  # Clap only (highest)
+                        classifications[i] = 2  # Clap (highest)
             return classifications
 
 

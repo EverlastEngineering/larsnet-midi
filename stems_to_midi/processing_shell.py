@@ -401,7 +401,7 @@ def _detect_snare_pitches(
         config: Configuration dictionary
     
     Returns:
-        Array of snare classifications (0=snare, 1=rimshot, 2=clap, 3=clap+snare) or None
+        Array of snare classifications (0=snare, 1=rimshot, 2=clap) or None
     """
     if len(onset_times) == 0:
         return None
@@ -438,21 +438,20 @@ def _detect_snare_pitches(
     else:
         print("    Warning: No valid pitches detected, all will use default (snare) note")
     
-    # Classify into snare/rimshot/clap/clap+snare
+    # Classify into snare/rimshot/clap
     snare_classifications = classify_snare_pitch(detected_pitches)
     
     # Show classification summary
     snare_count = np.sum(snare_classifications == 0)
     rimshot_count = np.sum(snare_classifications == 1)
     clap_count = np.sum(snare_classifications == 2)
-    clap_snare_count = np.sum(snare_classifications == 3)
-    print(f"    Snare classification: {snare_count} snare, {rimshot_count} rimshot, {clap_count} clap, {clap_snare_count} clap+snare")
+    print(f"    Snare classification: {snare_count} snare, {rimshot_count} rimshot, {clap_count} clap")
     
     # Show detailed pitch table (if not too many)
     if len(onset_times) <= 20:
         print(f"\n      {'Time':>8s} {'Pitch(Hz)':>10s} {'Type':>12s}")
         for i, (time, pitch, classification) in enumerate(zip(onset_times, detected_pitches, snare_classifications)):
-            type_name = ['Snare', 'Rimshot', 'Clap', 'Clap+Snare'][classification]
+            type_name = ['Snare', 'Rimshot', 'Clap'][classification]
             pitch_str = f"{pitch:.1f}" if pitch > 0 else "N/A"
             print(f"      {time:8.3f} {pitch_str:>10s} {type_name:>12s}")
     
@@ -491,7 +490,7 @@ def _create_midi_events(
         hihat_states: List of hihat states (closed/open/handclap)
         tom_classifications: Tom classifications (low/mid/high)
         cymbal_classifications: Cymbal classifications (crash/ride/chinese)
-        snare_classifications: Snare classifications (snare/rimshot/clap/clap+snare)
+        snare_classifications: Snare classifications (snare/rimshot/clap)
         drum_mapping: MIDI note mapping
         config: Configuration dictionary
         sustain_durations: Optional list of sustain durations in milliseconds (for cymbals and hihat foot-close events)
@@ -537,15 +536,13 @@ def _create_midi_events(
             else:  # ride or default
                 midi_note = drum_mapping.ride
         elif stem_type == 'snare' and snare_classifications is not None and i < len(snare_classifications):
-            # Use snare/rimshot/clap/clap+snare note based on pitch classification
+            # Use snare/rimshot/clap note based on pitch classification
             if snare_classifications[i] == 0:
                 midi_note = drum_mapping.snare
             elif snare_classifications[i] == 1:
                 midi_note = drum_mapping.snare_rimshot
-            elif snare_classifications[i] == 2:
+            else:  # clap
                 midi_note = drum_mapping.snare_clap
-            else:  # clap+snare
-                midi_note = drum_mapping.snare_clap_snare
         else:
             midi_note = note
         

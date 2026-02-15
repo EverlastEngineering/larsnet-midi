@@ -122,9 +122,8 @@ snare:
   midi_note: 38               # D1 - Acoustic Snare (default)
   midi_note_rimshot: 37       # C#1 - Side Stick (Rimshot)
   midi_note_clap: 39          # D#1 - Hand Clap
-  midi_note_clap_snare: 40    # E1 - Electric Snare (Clap+Snare layered)
   
-  # Pitch detection for classification (snare/rimshot/clap/clap+snare)
+  # Pitch detection for classification (snare/rimshot/clap)
   enable_pitch_detection: false  # Enable pitch-based classification (experimental)
   pitch_method: 'yin'            # Pitch detection method: 'yin' or 'pyin'
   min_pitch_hz: 100.0            # Minimum expected pitch (Hz)

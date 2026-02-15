@@ -224,7 +224,7 @@ def detect_snare_pitch(
     """
     Detect the pitch of a snare hit using YIN or pYIN algorithm.
     
-    Used to distinguish between snare types: regular snare, rimshot, clap, clap+snare.
+    Used to distinguish between snare types: regular snare, rimshot, clap.
     Note: Later can be enhanced with stereo info and envelope profile.
     
     Args:

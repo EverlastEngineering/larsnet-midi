@@ -198,7 +198,6 @@ These per-stem settings override global `energy_detection` defaults:
 | **Snare** | `midi_note` | `38` | D1 - Acoustic Snare |
 | | `midi_note_rimshot` | `37` | C#1 - Side Stick |
 | | `midi_note_clap` | `39` | D#1 - Hand Clap |
-| | `midi_note_clap_snare` | `40` | E1 - Electric Snare |
 | **Toms** | `midi_note_low` | `45` | A1 - Low Tom |
 | | `midi_note_mid` | `47` | B1 - Mid Tom |
 | | `midi_note_high` | `50` | D2 - High Tom |
@@ -222,7 +221,7 @@ Used for classifying detected events into subtypes (e.g., low/mid/high tom, cras
 | | `pitch_method` | `'yin'` | `'yin'` (faster) or `'pyin'` (more robust). |
 | | `min_pitch_hz` | `60` | Minimum expected tom pitch (Hz). |
 | | `max_pitch_hz` | `250` | Maximum expected tom pitch (Hz). |
-| **Snare** | `enable_pitch_detection` | `false` | Enable pitch-based snare/rimshot/clap classification. **Note:** Code default fallback is `True` (mismatch). |
+| **Snare** | `enable_pitch_detection` | `false` | Enable pitch-based snare/rimshot/clap classification. |
 | | `pitch_method` | `'yin'` | Same as toms. |
 | | `min_pitch_hz` | `100.0` | Minimum expected snare pitch. |
 | | `max_pitch_hz` | `500.0` | Maximum expected snare pitch. |

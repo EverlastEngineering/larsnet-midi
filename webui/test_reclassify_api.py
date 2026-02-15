@@ -142,7 +142,6 @@ def snare_analysis(tmp_path):
         "  midi_note: 38\n"
         "  midi_note_rimshot: 37\n"
         "  midi_note_clap: 39\n"
-        "  midi_note_clap_snare: 40\n"
     )
 
     analysis = {
