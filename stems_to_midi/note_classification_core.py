@@ -254,18 +254,33 @@ def classify_snare_notes(
     """
     Classify snare events into snare/rimshot/clap/clap+snare types.
 
-    Uses k-means (k up to 4) on spectral_centroid_hz. Sorted by centroid:
-    0=snare (lowest), 1=rimshot, 2=clap, 3=clap+snare (highest).
+    Uses k-means on spectral_centroid_hz. The number of clusters is
+    controlled by config['snare']['expected_clusters'] (1-4, default 1).
+    Sorted by centroid: 0=snare (lowest), 1=rimshot, 2=clap,
+    3=clap+snare (highest).
+
+    When expected_clusters=1, all events are assigned classification=0
+    (pure snare, no sub-type splitting).
 
     Automatically reduces k when fewer unique centroid values exist.
 
     Args:
         events: KEPT snare event dicts with spectral_centroid_hz field.
-        config: Full config dict.
+        config: Full config dict. Reads snare.expected_clusters (default 1).
 
     Returns:
         Same events with 'classification' field: 0-3.
     """
+    snare_config = config.get('snare', {})
+    expected_clusters = int(snare_config.get('expected_clusters', 1))
+    expected_clusters = max(1, min(4, expected_clusters))  # Clamp to 1-4
+
+    # With 1 cluster, all events are plain snare — skip clustering
+    if expected_clusters == 1:
+        for event in events:
+            event['classification'] = 0
+        return events
+
     values, valid_indices = _extract_feature_values(events, 'spectral_centroid_hz')
 
     if len(values) == 0:
@@ -274,9 +289,9 @@ def classify_snare_notes(
             event['classification'] = 0
         return events
 
-    # Use k = min(4, number of unique values) to avoid over-clustering
+    # Use k = min(expected_clusters, number of unique values)
     n_unique = len(np.unique(values))
-    k = min(4, n_unique)
+    k = min(expected_clusters, n_unique)
 
     labels = _cluster_values(values, k=k)
 

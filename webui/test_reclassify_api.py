@@ -128,6 +128,64 @@ def empty_stem_analysis(tmp_path):
     }
 
 
+@pytest.fixture
+def snare_analysis(tmp_path):
+    """Create a mock project with snare analysis data including spectral features."""
+    project_path = tmp_path / '3 - Snare Song'
+    midi_dir = project_path / 'midi'
+    midi_dir.mkdir(parents=True)
+
+    config_path = project_path / 'midiconfig.yaml'
+    config_path.write_text(
+        "snare:\n"
+        "  expected_clusters: 1\n"
+        "  midi_note: 38\n"
+        "  midi_note_rimshot: 37\n"
+        "  midi_note_clap: 39\n"
+        "  midi_note_clap_snare: 40\n"
+    )
+
+    analysis = {
+        'version': '3.0',
+        'stems': {
+            'snare': {
+                'logic': {
+                    'geomean_threshold': 40.0,
+                    'expected_clusters': 1,
+                },
+                'events_configured': [
+                    {
+                        'time': 1.0, 'status': 'KEPT', 'strength': 1.5,
+                        'note': 38, 'velocity': 100,
+                        'spectral_centroid_hz': 300.0, 'geomean': 200.0,
+                    },
+                    {
+                        'time': 2.0, 'status': 'KEPT', 'strength': 2.0,
+                        'note': 38, 'velocity': 110,
+                        'spectral_centroid_hz': 5000.0, 'geomean': 300.0,
+                    },
+                    {
+                        'time': 3.0, 'status': 'KEPT', 'strength': 1.8,
+                        'note': 38, 'velocity': 105,
+                        'spectral_centroid_hz': 800.0, 'geomean': 250.0,
+                    },
+                ],
+                'events_sensitive': [],
+            },
+        },
+    }
+    with open(midi_dir / 'Snare_Song.analysis.json', 'w') as f:
+        json.dump(analysis, f)
+
+    return {
+        'number': 3,
+        'name': 'Snare Song',
+        'path': project_path,
+        'created': datetime.now(),
+        'metadata': {},
+    }
+
+
 class TestReclassifyValidation:
     """Test request validation for POST /api/reclassify."""
 
@@ -392,3 +450,110 @@ class TestReclassifySettingsSchema:
 
         is_valid, _ = setting.validate(1000.0)
         assert not is_valid
+
+    def test_snare_expected_clusters_in_schema(self):
+        """snare_expected_clusters exists in settings registry."""
+        from webui.settings_schema import get_setting_by_key
+        setting = get_setting_by_key('snare_expected_clusters')
+        assert setting is not None
+        assert setting.default == 1
+        assert setting.yaml_path == ['snare', 'expected_clusters']
+
+    def test_snare_expected_clusters_validation(self):
+        """snare_expected_clusters validates within range."""
+        from webui.settings_schema import get_setting_by_key
+        setting = get_setting_by_key('snare_expected_clusters')
+
+        is_valid, _ = setting.validate(1)
+        assert is_valid
+
+        is_valid, _ = setting.validate(4)
+        assert is_valid
+
+        is_valid, _ = setting.validate(0)
+        assert not is_valid
+
+        is_valid, _ = setting.validate(6)
+        assert not is_valid
+
+
+class TestReclassifySnare:
+    """Test snare reclassification via POST /api/reclassify."""
+
+    @patch('webui.api.operations.get_project_by_number')
+    def test_default_clusters_all_snare(self, mock_get, client, snare_analysis):
+        """expected_clusters=1 (default) → all events are note 38."""
+        mock_get.return_value = snare_analysis
+        response = client.post(
+            '/api/reclassify',
+            data=json.dumps({
+                'project_number': 3,
+                'stem_type': 'snare',
+                'config_overrides': {},
+            }),
+            content_type='application/json',
+        )
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        notes = [e['note'] for e in data['events']]
+        assert all(n == 38 for n in notes), f'Expected all note 38, got {notes}'
+
+    @patch('webui.api.operations.get_project_by_number')
+    def test_override_clusters_3(self, mock_get, client, snare_analysis):
+        """expected_clusters=3 → events split into up to 3 sub-types."""
+        mock_get.return_value = snare_analysis
+        response = client.post(
+            '/api/reclassify',
+            data=json.dumps({
+                'project_number': 3,
+                'stem_type': 'snare',
+                'config_overrides': {'expected_clusters': 3},
+            }),
+            content_type='application/json',
+        )
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        notes = set(e['note'] for e in data['events'])
+        # With 3 clusters and 3 distinct spectral values, expect multiple sub-types
+        assert len(notes) >= 2, f'Expected multiple note types, got {notes}'
+        # All notes must be valid snare family
+        valid_snare_notes = {38, 37, 39, 40}
+        assert notes.issubset(valid_snare_notes), f'Unexpected notes: {notes - valid_snare_notes}'
+
+    @patch('webui.api.operations.get_project_by_number')
+    def test_reclassify_returns_classification(self, mock_get, client, snare_analysis):
+        """Reclassified snare events include classification field."""
+        mock_get.return_value = snare_analysis
+        response = client.post(
+            '/api/reclassify',
+            data=json.dumps({
+                'project_number': 3,
+                'stem_type': 'snare',
+                'config_overrides': {'expected_clusters': 3},
+            }),
+            content_type='application/json',
+        )
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        for event in data['events']:
+            assert 'classification' in event, f'Missing classification in event: {event}'
+            assert isinstance(event['classification'], int)
+
+    @patch('webui.api.operations.get_project_by_number')
+    def test_snare_no_disk_write(self, mock_get, client, snare_analysis):
+        """Snare reclassify is preview-only — analysis.json should not change."""
+        mock_get.return_value = snare_analysis
+        analysis_file = list((snare_analysis['path'] / 'midi').glob('*.analysis.json'))[0]
+        original_content = analysis_file.read_text()
+
+        client.post(
+            '/api/reclassify',
+            data=json.dumps({
+                'project_number': 3,
+                'stem_type': 'snare',
+                'config_overrides': {'expected_clusters': 3},
+            }),
+            content_type='application/json',
+        )
+
+        assert analysis_file.read_text() == original_content

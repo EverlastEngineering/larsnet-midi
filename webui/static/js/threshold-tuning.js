@@ -44,7 +44,8 @@ const STEM_SLIDER_CONFIGS = {
     ],
     snare: [
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 500, step: 1, fallback: 40, unit: '' },
-        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' }
+        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' },
+        { key: 'expected_clusters', label: '🥁 Sub-Types (1=Snare only, 2–4=+Rimshot/Clap)', min: 1, max: 4, step: 1, fallback: 1, unit: '', classification: true }
     ],
     toms: [
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 500, step: 1, fallback: 80, unit: '' },
@@ -267,7 +268,7 @@ function onSliderInput(e) {
 /**
  * Keys that are classification parameters (sent as config_overrides to reclassify).
  */
-const CLASSIFICATION_KEYS = new Set(['open_geomean_min', 'open_sustain_ms']);
+const CLASSIFICATION_KEYS = new Set(['open_geomean_min', 'open_sustain_ms', 'expected_clusters']);
 
 /**
  * Schedule a debounced reclassify API call (500ms).
