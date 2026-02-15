@@ -28,6 +28,20 @@ let reclassifyTimeoutId = null;
 /** Whether a reclassify request is in flight */
 let reclassifyInFlight = false;
 
+/**
+ * Cached deep-copy of events_sensitive for the active stem.
+ * Created once when entering tuning mode (or switching stems).
+ * applyTuningFilter modifies status in-place on these — no re-copying.
+ */
+let tuningBaseEvents = null;
+
+/**
+ * Cached classification results from the last reclassify call, keyed by time.
+ * Format: { timeKey: { classification, note, hihat_state } }
+ * Re-applied after each filter pass to avoid losing note colors.
+ */
+let lastClassification = null;
+
 // ─── Per-Stem Configuration ──────────────────────────────────────────────
 
 /**
@@ -101,7 +115,10 @@ function toggleTuningPanel() {
         // Initialize sliders for the active stem
         if (waveformActiveStem) {
             buildSlidersForStem(waveformActiveStem);
+            initTuningBaseEvents(waveformActiveStem);
             applyTuningFilter();
+            // Immediately reclassify so events get colored on open
+            scheduleReclassify();
         }
     } else {
         panel.classList.add('hidden');
@@ -110,8 +127,10 @@ function toggleTuningPanel() {
         // Cancel any pending reclassify
         if (reclassifyTimeoutId) { clearTimeout(reclassifyTimeoutId); reclassifyTimeoutId = null; }
 
-        // Clear cluster UI
+        // Clear cluster UI and caches
         hideClusterCards();
+        tuningBaseEvents = null;
+        lastClassification = null;
 
         // Clear tuning overlay — revert to configured display
         waveformTuningEvents = null;
@@ -136,8 +155,12 @@ function onTuningStemChanged(stemType) {
     // Cancel any pending reclassify from the previous stem
     if (reclassifyTimeoutId) { clearTimeout(reclassifyTimeoutId); reclassifyTimeoutId = null; }
     hideClusterCards();
+    tuningBaseEvents = null;
+    lastClassification = null;
     buildSlidersForStem(stemType);
+    initTuningBaseEvents(stemType);
     applyTuningFilter();
+    scheduleReclassify();
 }
 
 /**
@@ -153,9 +176,13 @@ function resetTuningSliders() {
     delete tuningSliderValues[waveformActiveStem];
     delete clusterNoteOverrides[waveformActiveStem];
     delete clusterFeatureOverrides[waveformActiveStem];
+    lastClassification = null;
+    tuningBaseEvents = null;
     hideClusterCards();
     buildSlidersForStem(waveformActiveStem);
+    initTuningBaseEvents(waveformActiveStem);
     applyTuningFilter();
+    scheduleReclassify();
     updateTuningSaveButton();
 }
 
@@ -427,19 +454,28 @@ async function doReclassify() {
         const result = await api.reclassify(currentProject.number, stemType, configOverrides);
         if (!result || !result.events) return;
 
-        // Build a time-keyed lookup for fast merging
+        // Build a time-keyed lookup and cache for reapplication after filter passes
         const classificationByTime = {};
+        const noteOverrides = clusterNoteOverrides[stemType] || {};
+
         for (const ev of result.events) {
             if (ev.time != null) {
                 const timeKey = ev.time.toFixed(4);
-                classificationByTime[timeKey] = ev;
+                // Apply note override if set in dropdown
+                const overrideNote = ev.classification != null ? noteOverrides[ev.classification] : undefined;
+                classificationByTime[timeKey] = {
+                    classification: ev.classification,
+                    note: overrideNote != null ? overrideNote : ev.note,
+                    hihat_state: ev.hihat_state,
+                };
             }
         }
 
+        // Cache for reapplication after future filter passes
+        lastClassification = classificationByTime;
+
         // Merge into the displayed events (tuning or configured)
         const displayEvents = waveformTuningEvents || getEventsForStem(waveformAnalysisData.stems[stemType]);
-        const noteOverrides = clusterNoteOverrides[stemType] || {};
-
         for (const event of displayEvents) {
             if (event.status !== 'KEPT' || event.time == null) continue;
             const timeKey = event.time.toFixed(4);
@@ -447,9 +483,7 @@ async function doReclassify() {
             if (cls) {
                 if (cls.hihat_state != null) event.hihat_state = cls.hihat_state;
                 if (cls.classification != null) event.classification = cls.classification;
-                // Apply note: use dropdown override if set, otherwise server default
-                const overrideNote = noteOverrides[cls.classification];
-                event.note = overrideNote != null ? overrideNote : cls.note;
+                if (cls.note != null) event.note = cls.note;
             }
         }
 
@@ -554,8 +588,14 @@ function onClusterNoteChange(e) {
     if (!clusterNoteOverrides[stemType]) clusterNoteOverrides[stemType] = {};
     clusterNoteOverrides[stemType][classification] = newNote;
 
-    // Dot color stays per-classification (not per-note)
-    // No dot update needed since classification doesn't change on note reassign
+    // Update the classification cache so filter re-application preserves the override
+    if (lastClassification) {
+        for (const entry of Object.values(lastClassification)) {
+            if (entry.classification === classification) {
+                entry.note = newNote;
+            }
+        }
+    }
 
     // Re-map displayed events immediately (no server round-trip)
     const displayEvents = waveformTuningEvents || getEventsForStem(waveformAnalysisData?.stems?.[stemType]);
@@ -736,6 +776,8 @@ async function saveTuningAndReconvert() {
                 // Reset tuning state since changes are now committed
                 waveformTuningEvents = null;
                 waveformTuningActive = false;
+                tuningBaseEvents = null;
+                lastClassification = null;
                 delete tuningSliderValues[stemType];
                 delete clusterNoteOverrides[stemType];
                 delete clusterFeatureOverrides[stemType];
@@ -774,9 +816,46 @@ async function saveTuningAndReconvert() {
 // ─── Client-Side Filtering ───────────────────────────────────────────────
 
 /**
- * Apply the current slider values to events_sensitive and update the
- * waveform display. This is the core re-filtering logic that replicates
- * the server-side filter passes from analysis_core.py.
+ * Create the cached base events for tuning from events_sensitive.
+ * Called once when entering tuning mode or switching stems.
+ */
+function initTuningBaseEvents(stemType) {
+    const stemData = waveformAnalysisData?.stems?.[stemType];
+    const sensitiveEvents = stemData?.events_sensitive;
+    if (!sensitiveEvents || sensitiveEvents.length === 0) {
+        tuningBaseEvents = null;
+        return;
+    }
+    // Deep-copy once — these are reused across filter passes
+    tuningBaseEvents = sensitiveEvents.map(e => ({ ...e }));
+}
+
+/**
+ * Re-apply cached classification results to the current tuning events.
+ * Called after each filter pass to preserve note colors across slider drags.
+ */
+function reapplyClassification(events) {
+    if (!lastClassification) return;
+    for (const event of events) {
+        if (event.status !== 'KEPT' || event.time == null) continue;
+        const timeKey = event.time.toFixed(4);
+        const cls = lastClassification[timeKey];
+        if (cls) {
+            if (cls.classification != null) event.classification = cls.classification;
+            if (cls.note != null) event.note = cls.note;
+            if (cls.hihat_state != null) event.hihat_state = cls.hihat_state;
+        }
+    }
+}
+
+/**
+ * Apply the current slider values to the cached tuning events and update
+ * the waveform display. This replicates the server-side filter passes
+ * from analysis_core.py.
+ *
+ * Uses tuningBaseEvents (created once) rather than deep-copying every call.
+ * After filtering, re-applies cached classification so note colors persist
+ * across slider drags.
  */
 function applyTuningFilter() {
     if (!waveformActiveStem || !waveformAnalysisData) return;
@@ -785,8 +864,7 @@ function applyTuningFilter() {
     const stemData = waveformAnalysisData.stems[stemType];
     if (!stemData) return;
 
-    const sensitiveEvents = stemData.events_sensitive;
-    if (!sensitiveEvents || sensitiveEvents.length === 0) {
+    if (!tuningBaseEvents || tuningBaseEvents.length === 0) {
         waveformTuningEvents = null;
         waveformTuningActive = false;
         updateEventCounts(stemData);
@@ -797,20 +875,20 @@ function applyTuningFilter() {
     const params = tuningSliderValues[stemType] || {};
     const filterMode = STEM_FILTER_MODES[stemType] || 'geomean_only';
 
-    // Deep-copy events so we don't mutate the original data
-    const events = sensitiveEvents.map(e => ({ ...e }));
-
     // Pass 1: Spectral filter (geomean + sustain + strength)
-    applySpectralFilter(events, params, filterMode);
+    applySpectralFilter(tuningBaseEvents, params, filterMode);
 
     // Pass 2: Reverb continuation filter
     const attackThreshold = params.reverb_continuation_attack_threshold;
     if (attackThreshold != null) {
-        applyReverbContinuationFilter(events, attackThreshold);
+        applyReverbContinuationFilter(tuningBaseEvents, attackThreshold);
     }
 
+    // Re-apply any cached classification data (note colors, types)
+    reapplyClassification(tuningBaseEvents);
+
     // Set tuning state for waveform.js
-    waveformTuningEvents = events;
+    waveformTuningEvents = tuningBaseEvents;
     waveformTuningActive = true;
 
     updateEventCounts(stemData);

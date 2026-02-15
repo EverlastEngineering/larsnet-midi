@@ -192,6 +192,9 @@ def _serialize_onset_events(
             if midi_idx < len(midi_events):
                 event['note'] = midi_events[midi_idx].get('note')
                 event['velocity'] = midi_events[midi_idx].get('velocity')
+                classification = midi_events[midi_idx].get('classification')
+                if classification is not None:
+                    event['classification'] = classification
                 midi_idx += 1
 
         events.append(event)
@@ -280,8 +283,11 @@ def save_analysis_sidecar(
             if stem_type == 'hihat':
                 logic['open_geomean_min'] = stem_config.get('open_geomean_min', 262.0)
                 logic['open_sustain_ms'] = stem_config.get('open_sustain_ms', 150.0)
-            if stem_type == 'snare':
-                logic['expected_clusters'] = int(stem_config.get('expected_clusters', 1))
+            if stem_type in ('snare', 'toms', 'cymbals'):
+                defaults = {'snare': 2, 'toms': 3, 'cymbals': 2}
+                raw = stem_config.get('expected_clusters')
+                logic['expected_clusters'] = int(raw) if raw is not None else defaults[stem_type]
+                logic['cluster_feature'] = stem_config.get('cluster_feature', 'auto')
 
         # Serialize configured events (KEPT + FILTERED from configured detection)
         if all_onset_data:
