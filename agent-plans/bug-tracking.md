@@ -68,11 +68,19 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 - **Fix**: Read `reverb_continuation_attack_threshold` from `config['filtering']` in both `save_analysis_sidecar` and `_build_logic_block`, storing it in the logic block for the frontend to read.
 
 ### Detection Analysis section not visible after MIDI job completes
-- **Status**: Open
+- **Status**: Fixed
 - **Priority**: Medium
 - **Description**: After running the MIDI conversion step, the Detection Analysis section does not appear. User must click to another project and come back for it to show.
 - **Expected Behavior**: Detection Analysis section appears immediately when the MIDI job completes (since analysis data is now available).
 - **Actual Behavior**: Section stays hidden until the project is re-selected.
+- **Fix**: Added explicit show/expand logic in `onComplete` handler for 'stems-to-midi' jobs in operations.js to ensure the analysis section becomes visible and expanded after the project data is refreshed.
+
+### Detection Analysis box doesn't expand when Sound Types slider increases content
+- **Status**: Fixed
+- **Priority**: Medium
+- **Description**: When Sound Types (or Tune option) is enabled, the Detection Analysis collapsible box doesn't expand to fit the new content. User must click the expand arrow twice to "grow" it to the correct size.
+- **Root Cause**: When cluster cards are rendered after reclassification, `updateCollapsibleHeights()` was not called to recalculate the container's max-height.
+- **Fix**: Added `updateCollapsibleHeights()` call via `requestAnimationFrame` after rendering/hiding cluster cards in the reclassification flow.
 
 ### Energy envelope renders as flat line at bottom of canvas
 - **Status**: Open

@@ -493,6 +493,13 @@ async function doReclassify() {
             hideClusterCards();
         }
 
+        // Update collapsible section height after content changes
+        requestAnimationFrame(() => {
+            if (typeof updateCollapsibleHeights === 'function') {
+                updateCollapsibleHeights();
+            }
+        });
+
         // Re-render with updated colors
         drawWaveform();
     } catch (err) {
