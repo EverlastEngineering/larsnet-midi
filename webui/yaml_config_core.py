@@ -362,6 +362,11 @@ class YAMLConfigEngine:
         # Update the final key
         final_key = path[-1]
         if final_key not in current:
+            # Allow creating new keys within existing dict sections
+            # (e.g., cluster_note_map added dynamically by the UI)
+            if isinstance(current, dict) and len(path) >= 2:
+                current[final_key] = new_value
+                return True, ""
             return False, f"Key not found: {final_key}"
         
         # CRITICAL: Prevent replacing dictionaries with primitive values
