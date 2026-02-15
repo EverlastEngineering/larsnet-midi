@@ -97,6 +97,59 @@ def _extract_feature_values(
     return np.array(values), valid_indices
 
 
+# Per-stem feature fallback priorities (first match with data wins)
+_FEATURE_PRIORITIES = {
+    'snare': ['stereo_width', 'spectral_centroid_hz'],
+    'toms': ['spectral_centroid_hz', 'stereo_width'],
+    'cymbals': ['spectral_centroid_hz', 'stereo_width'],
+}
+
+# Features where 0.0 is a valid measurement (not missing data)
+_ALLOW_ZERO_FEATURES = {'stereo_width', 'pan_confidence'}
+
+
+def _resolve_cluster_feature(
+    events: List[Dict],
+    stem_type: str,
+    config: Dict,
+) -> Tuple[np.ndarray, List[int]]:
+    """
+    Resolve which feature to cluster on and extract its values.
+
+    Reads config[stem_type]['cluster_feature']. When 'auto' (default),
+    walks the priority list for the stem and uses the first feature with
+    sufficient data. When a specific feature is named, tries it first
+    then falls back to the priority chain.
+
+    Args:
+        events: Event dicts with feature data.
+        stem_type: Stem type for priority lookup.
+        config: Full config dict.
+
+    Returns:
+        Tuple of (values array, valid indices list).
+    """
+    stem_config = config.get(stem_type, {})
+    chosen = stem_config.get('cluster_feature', 'auto')
+    priorities = _FEATURE_PRIORITIES.get(stem_type, ['spectral_centroid_hz'])
+
+    # Build ordered feature list: explicit choice first, then fallbacks
+    if chosen and chosen != 'auto':
+        feature_order = [chosen] + [f for f in priorities if f != chosen]
+    else:
+        feature_order = list(priorities)
+
+    for feat in feature_order:
+        allow_zero = feat in _ALLOW_ZERO_FEATURES
+        values, valid_indices = _extract_feature_values(
+            events, feat, allow_zero=allow_zero,
+        )
+        if len(values) > 0:
+            return values, valid_indices
+
+    return np.array([]), []
+
+
 def _cluster_values(
     values: np.ndarray,
     k: int,
@@ -170,33 +223,46 @@ def classify_tom_notes(
     config: Dict,
 ) -> List[Dict]:
     """
-    Classify tom events into low/mid/high using spectral centroid clustering.
+    Classify tom events into low/mid/high using configurable feature clustering.
 
-    Uses k-means (k=3) on spectral_centroid_hz to separate tom types.
-    Lower centroid → low tom, higher → high tom.
+    Default: k-means (k=3) on spectral_centroid_hz. The clustering feature
+    can be overridden via config['toms']['cluster_feature'] (e.g. 'stereo_width'
+    for panning-based separation). Falls through a priority chain when the
+    chosen feature has insufficient data.
 
     Args:
         events: KEPT tom event dicts with spectral_centroid_hz field.
-        config: Full config dict (reserved for future per-stem tuning).
+        config: Full config dict. Reads toms.expected_clusters (default 3)
+            and toms.cluster_feature (default 'auto').
 
     Returns:
         Same events with 'classification' field: 0=low, 1=mid, 2=high.
     """
-    values, valid_indices = _extract_feature_values(events, 'spectral_centroid_hz')
+    toms_config = config.get('toms', {})
+    expected_clusters = toms_config.get('expected_clusters') or 3
+    expected_clusters = max(1, min(4, int(expected_clusters)))
 
-    if len(values) == 0:
-        # No valid centroid data — default all to mid (1)
+    if expected_clusters == 1:
         for event in events:
-            event['classification'] = 1
+            event['classification'] = 0
         return events
 
-    labels = _cluster_values(values, k=3)
+    values, valid_indices = _resolve_cluster_feature(
+        events, 'toms', config,
+    )
 
-    # Set default for events without valid centroid
+    if len(values) == 0:
+        for event in events:
+            event['classification'] = 1  # mid tom default
+        return events
+
+    n_unique = len(np.unique(values))
+    k = min(expected_clusters, n_unique)
+    labels = _cluster_values(values, k=k)
+
     for event in events:
         event['classification'] = 1  # mid tom default
 
-    # Apply cluster labels to valid events
     for idx, vi in enumerate(valid_indices):
         events[vi]['classification'] = int(labels[idx])
 
@@ -213,33 +279,45 @@ def classify_cymbal_notes(
     config: Dict,
 ) -> List[Dict]:
     """
-    Classify cymbal events into crash/ride/chinese using spectral centroid.
+    Classify cymbal events into crash/ride/chinese using configurable feature.
 
-    Uses k-means (k=3) on spectral_centroid_hz. Lower centroid → crash,
-    mid → ride, higher → chinese.
+    Default: k-means on spectral_centroid_hz. The clustering feature can be
+    overridden via config['cymbals']['cluster_feature'] (e.g. 'stereo_width'
+    for L/R panning-based separation).
 
     Args:
         events: KEPT cymbal event dicts with spectral_centroid_hz field.
-        config: Full config dict.
+        config: Full config dict. Reads cymbals.expected_clusters (default 2)
+            and cymbals.cluster_feature (default 'auto').
 
     Returns:
         Same events with 'classification' field: 0=crash, 1=ride, 2=chinese.
     """
-    values, valid_indices = _extract_feature_values(events, 'spectral_centroid_hz')
+    cymbal_config = config.get('cymbals', {})
+    expected_clusters = cymbal_config.get('expected_clusters') or 2
+    expected_clusters = max(1, min(4, int(expected_clusters)))
 
-    if len(values) == 0:
-        # No valid centroid data — default all to crash (0)
+    if expected_clusters == 1:
         for event in events:
             event['classification'] = 0
         return events
 
-    labels = _cluster_values(values, k=3)
+    values, valid_indices = _resolve_cluster_feature(
+        events, 'cymbals', config,
+    )
 
-    # Set default for events without valid centroid
+    if len(values) == 0:
+        for event in events:
+            event['classification'] = 0  # crash default
+        return events
+
+    n_unique = len(np.unique(values))
+    k = min(expected_clusters, n_unique)
+    labels = _cluster_values(values, k=k)
+
     for event in events:
         event['classification'] = 0  # crash default
 
-    # Apply cluster labels to valid events
     for idx, vi in enumerate(valid_indices):
         events[vi]['classification'] = int(labels[idx])
 
@@ -278,8 +356,8 @@ def classify_snare_notes(
         Same events with 'classification' field: 0-3.
     """
     snare_config = config.get('snare', {})
-    expected_clusters = int(snare_config.get('expected_clusters', 2))
-    expected_clusters = max(1, min(4, expected_clusters))  # Clamp to 1-4
+    expected_clusters = snare_config.get('expected_clusters') or 2
+    expected_clusters = max(1, min(4, int(expected_clusters)))  # Clamp to 1-4
 
     # With 1 cluster, all events are plain snare — skip clustering
     if expected_clusters == 1:
@@ -287,16 +365,9 @@ def classify_snare_notes(
             event['classification'] = 0
         return events
 
-    # Primary: cluster on stereo_width (allow_zero=True since 0.0 = mono is valid)
-    values, valid_indices = _extract_feature_values(
-        events, 'stereo_width', allow_zero=True,
+    values, valid_indices = _resolve_cluster_feature(
+        events, 'snare', config,
     )
-
-    # Fallback to spectral_centroid_hz if no stereo data
-    if len(values) == 0:
-        values, valid_indices = _extract_feature_values(
-            events, 'spectral_centroid_hz',
-        )
 
     if len(values) == 0:
         for event in events:

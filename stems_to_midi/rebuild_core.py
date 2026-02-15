@@ -610,8 +610,12 @@ def _build_logic_block(
         if stem_type == 'hihat':
             logic['open_geomean_min'] = stem_config.get('open_geomean_min', 262.0)
             logic['open_sustain_ms'] = stem_config.get('open_sustain_ms', 150.0)
-        if stem_type == 'snare':
-            logic['expected_clusters'] = int(stem_config.get('expected_clusters', 2))
+        if stem_type in ('snare', 'toms', 'cymbals'):
+            defaults = {'snare': 2, 'toms': 3, 'cymbals': 2}
+            logic['expected_clusters'] = int(
+                stem_config.get('expected_clusters', defaults[stem_type])
+            )
+            logic['cluster_feature'] = stem_config.get('cluster_feature', 'auto')
             cluster_note_map = stem_config.get('cluster_note_map')
             if cluster_note_map:
                 logic['cluster_note_map'] = cluster_note_map

@@ -49,7 +49,8 @@ const STEM_SLIDER_CONFIGS = {
     ],
     toms: [
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 500, step: 1, fallback: 80, unit: '' },
-        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' }
+        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' },
+        { key: 'expected_clusters', label: '🥁 Sound Types', min: 1, max: 4, step: 1, fallback: 3, unit: '', classification: true }
     ],
     hihat: [
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 200, step: 0.5, fallback: 8, unit: '' },
@@ -63,7 +64,8 @@ const STEM_SLIDER_CONFIGS = {
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 1000, step: 5, fallback: 100, unit: '' },
         { key: 'min_sustain_ms', label: 'Min Sustain', min: 0, max: 500, step: 5, fallback: 150, unit: 'ms' },
         { key: 'min_strength_threshold', label: 'Min Strength', min: 0, max: 1.0, step: 0.01, fallback: 0.1, unit: '' },
-        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' }
+        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' },
+        { key: 'expected_clusters', label: '🎵 Sound Types', min: 1, max: 4, step: 1, fallback: 2, unit: '', classification: true }
     ]
 };
 
@@ -150,6 +152,7 @@ function resetTuningSliders() {
     // Clear stored values so buildSlidersForStem reads from logic block
     delete tuningSliderValues[waveformActiveStem];
     delete clusterNoteOverrides[waveformActiveStem];
+    delete clusterFeatureOverrides[waveformActiveStem];
     hideClusterCards();
     buildSlidersForStem(waveformActiveStem);
     applyTuningFilter();
@@ -212,6 +215,36 @@ function buildSlidersForStem(stemType) {
             </div>`;
     }).join('');
 
+    // Add cluster feature dropdown if this stem supports it
+    const featureChoices = STEM_FEATURE_CHOICES[stemType];
+    if (featureChoices) {
+        const configuredFeature = logic.cluster_feature || 'auto';
+        const currentFeature = clusterFeatureOverrides[stemType] || configuredFeature;
+
+        const options = featureChoices.map(fc => {
+            const selected = fc.value === currentFeature ? 'selected' : '';
+            return `<option value="${fc.value}" ${selected}>${fc.label}</option>`;
+        }).join('');
+
+        const configuredLabel = configuredFeature !== 'auto'
+            ? `<span class="text-gray-600 text-xs ml-1">(configured: ${configuredFeature})</span>`
+            : '';
+
+        container.insertAdjacentHTML('beforeend', `
+            <div class="tuning-slider-row">
+                <div class="flex items-center justify-between mb-1">
+                    <label class="text-xs text-gray-300">🔬 Cluster By${configuredLabel}</label>
+                </div>
+                <select id="tuning-cluster-feature"
+                        class="w-full text-xs bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-gray-200"
+                        data-stem="${stemType}">
+                    ${options}
+                </select>
+            </div>`);
+
+        document.getElementById('tuning-cluster-feature')?.addEventListener('change', onClusterFeatureChange);
+    }
+
     // Attach input listeners
     container.querySelectorAll('input[type=range]').forEach(input => {
         input.addEventListener('input', onSliderInput);
@@ -272,15 +305,69 @@ function onSliderInput(e) {
 }
 
 /**
+ * Handle cluster feature dropdown change — stores override and reclassifies.
+ */
+function onClusterFeatureChange(e) {
+    const stemType = e.target.dataset.stem;
+    const feature = e.target.value;
+
+    if (feature === 'auto') {
+        delete clusterFeatureOverrides[stemType];
+    } else {
+        clusterFeatureOverrides[stemType] = feature;
+    }
+
+    // Clear existing cluster note overrides since clusters will change
+    delete clusterNoteOverrides[stemType];
+
+    // Store in slider values so it gets sent as config override
+    if (!tuningSliderValues[stemType]) tuningSliderValues[stemType] = {};
+    tuningSliderValues[stemType]['cluster_feature'] = feature;
+
+    updateTuningSaveButton();
+    scheduleReclassify();
+}
+
+/**
  * Keys that are classification parameters (sent as config_overrides to reclassify).
  */
-const CLASSIFICATION_KEYS = new Set(['open_geomean_min', 'open_sustain_ms', 'expected_clusters']);
+const CLASSIFICATION_KEYS = new Set(['open_geomean_min', 'open_sustain_ms', 'expected_clusters', 'cluster_feature']);
 
 /**
  * Per-stem note assignment overrides from cluster dropdowns.
  * Format: { stemType: { classificationIndex: noteNumber } }
  */
 let clusterNoteOverrides = {};
+
+/**
+ * Per-stem cluster feature override from dropdown.
+ * Format: { stemType: featureName }
+ */
+let clusterFeatureOverrides = {};
+
+/**
+ * Available clustering features per stem for the feature dropdown.
+ */
+const STEM_FEATURE_CHOICES = {
+    snare: [
+        { value: 'auto', label: 'Auto' },
+        { value: 'stereo_width', label: 'Stereo Width' },
+        { value: 'pan_confidence', label: 'Pan Position' },
+        { value: 'spectral_centroid_hz', label: 'Pitch / Brightness' },
+    ],
+    toms: [
+        { value: 'auto', label: 'Auto' },
+        { value: 'spectral_centroid_hz', label: 'Pitch / Brightness' },
+        { value: 'stereo_width', label: 'Stereo Width' },
+        { value: 'pan_confidence', label: 'Pan Position' },
+    ],
+    cymbals: [
+        { value: 'auto', label: 'Auto' },
+        { value: 'spectral_centroid_hz', label: 'Pitch / Brightness' },
+        { value: 'stereo_width', label: 'Stereo Width' },
+        { value: 'pan_confidence', label: 'Pan Position' },
+    ],
+};
 
 /**
  * Available MIDI note choices per stem for the cluster note dropdowns.
@@ -531,6 +618,14 @@ function updateTuningSaveButton() {
         }
     }
 
+    // Check if cluster feature has been changed
+    if (!hasChanges && clusterFeatureOverrides[stemType]) {
+        const configuredFeature = logic.cluster_feature || 'auto';
+        if (clusterFeatureOverrides[stemType] !== configuredFeature) {
+            hasChanges = true;
+        }
+    }
+
     btn.classList.toggle('hidden', !hasChanges);
 }
 
@@ -568,11 +663,22 @@ function buildConfigUpdates(stemType) {
     // Include cluster note overrides if any
     const noteOverrides = clusterNoteOverrides[stemType];
     if (noteOverrides && Object.keys(noteOverrides).length > 0) {
-        // Convert { 0: 38, 1: 39 } → config path [stemType, 'cluster_note_map']
         updates.push({
             path: [stemType, 'cluster_note_map'],
             value: noteOverrides,
         });
+    }
+
+    // Include cluster feature override if changed
+    const featureOverride = clusterFeatureOverrides[stemType];
+    if (featureOverride) {
+        const configuredFeature = logic.cluster_feature || 'auto';
+        if (featureOverride !== configuredFeature) {
+            updates.push({
+                path: [stemType, 'cluster_feature'],
+                value: featureOverride,
+            });
+        }
     }
 
     return updates;
@@ -637,6 +743,7 @@ async function saveTuningAndReconvert() {
                 waveformTuningEvents = null;
                 waveformTuningActive = false;
                 delete clusterNoteOverrides[stemType];
+                delete clusterFeatureOverrides[stemType];
                 hideClusterCards();
                 drawWaveform();
                 return;

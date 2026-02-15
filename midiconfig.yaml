@@ -180,7 +180,7 @@ toms:
   
   # Clustering configuration
   onset_merge_window_ms: 100  # Merge L/R onsets within this window (ms)
-  expected_clusters: null     # null = disabled (toms use pitch-based classification)
+  expected_clusters: 3        # Expected number of distinct tom sounds (3=high/mid/low)
   
   # Detection method selection (NEW: energy-based is default)
   # use_librosa_detection: false  # Set to true for A/B testing with old method

@@ -18,6 +18,7 @@ from stems_to_midi.note_classification_core import (
     _cluster_values,
     _extract_feature_values,
     _map_note,
+    _resolve_cluster_feature,
 )
 from stems_to_midi.config import DrumMapping
 
@@ -286,7 +287,8 @@ class TestClassifyTomNotes:
         classify_tom_notes(events, default_config)
         assert events[0]['classification'] == 0  # low
         assert events[1]['classification'] == 1  # default mid
-        assert events[2]['classification'] == 2  # high
+        # Only 2 unique values → k=min(3,2)=2, so max classification is 1
+        assert events[2]['classification'] == 1  # high (but only 2 clusters)
 
     def test_all_same_centroid(self, default_config):
         """All same centroid → all get classification 0."""
@@ -311,13 +313,14 @@ class TestClassifyCymbalNotes:
     """Tests for cymbal crash/ride/chinese classification."""
 
     def test_three_distinct_cymbals(self, default_config):
-        """Three clearly different centroids → crash/ride/chinese."""
+        """Three clearly different centroids → crash/ride/chinese with 3 clusters."""
+        config = {**default_config, 'cymbals': {'expected_clusters': 3}}
         events = [
             _make_event(spectral_centroid_hz=2000.0),  # crash (lowest)
             _make_event(spectral_centroid_hz=5000.0),  # ride (mid)
             _make_event(spectral_centroid_hz=8000.0),  # chinese (highest)
         ]
-        classify_cymbal_notes(events, default_config)
+        classify_cymbal_notes(events, config)
         assert events[0]['classification'] == 0  # crash
         assert events[1]['classification'] == 1  # ride
         assert events[2]['classification'] == 2  # chinese
@@ -464,6 +467,256 @@ class TestClassifySnareNotes:
         # Default is 2 clusters, so should split
         assert events[0]['classification'] == 0
         assert events[1]['classification'] == 1
+
+
+# ============================================================================
+# _resolve_cluster_feature Tests
+# ============================================================================
+
+
+class TestResolveClusterFeature:
+    """Tests for the shared cluster feature resolution helper."""
+
+    def test_auto_snare_prefers_stereo_width(self):
+        """Auto mode for snare picks stereo_width when available."""
+        events = [
+            _make_event(stereo_width=0.1, spectral_centroid_hz=300.0),
+            _make_event(stereo_width=0.4, spectral_centroid_hz=5000.0),
+        ]
+        values, indices = _resolve_cluster_feature(events, 'snare', {})
+        assert len(values) == 2
+        # Should be stereo_width values
+        assert np.isclose(values[0], 0.1)
+        assert np.isclose(values[1], 0.4)
+
+    def test_auto_toms_prefers_spectral_centroid(self):
+        """Auto mode for toms picks spectral_centroid_hz first."""
+        events = [
+            _make_event(spectral_centroid_hz=200.0, stereo_width=0.1),
+            _make_event(spectral_centroid_hz=800.0, stereo_width=0.3),
+        ]
+        values, indices = _resolve_cluster_feature(events, 'toms', {})
+        assert len(values) == 2
+        assert np.isclose(values[0], 200.0)
+        assert np.isclose(values[1], 800.0)
+
+    def test_explicit_feature_override(self):
+        """Explicit cluster_feature overrides auto priority."""
+        events = [
+            _make_event(stereo_width=0.1, spectral_centroid_hz=300.0),
+            _make_event(stereo_width=0.4, spectral_centroid_hz=5000.0),
+        ]
+        config = {'toms': {'cluster_feature': 'stereo_width'}}
+        values, indices = _resolve_cluster_feature(events, 'toms', config)
+        # Should use stereo_width despite toms default being centroid
+        assert np.isclose(values[0], 0.1)
+        assert np.isclose(values[1], 0.4)
+
+    def test_explicit_feature_falls_back_when_missing(self):
+        """Explicit feature with no data falls back to next priority."""
+        events = [
+            _make_event(spectral_centroid_hz=300.0),
+            _make_event(spectral_centroid_hz=5000.0),
+        ]
+        # Request stereo_width but events don't have it → falls back to centroid
+        config = {'snare': {'cluster_feature': 'stereo_width'}}
+        values, indices = _resolve_cluster_feature(events, 'snare', config)
+        assert len(values) == 2
+        assert np.isclose(values[0], 300.0)
+
+    def test_auto_with_no_data_returns_empty(self):
+        """No feature data available → empty arrays."""
+        events = [_make_event(), _make_event()]
+        values, indices = _resolve_cluster_feature(events, 'snare', {})
+        assert len(values) == 0
+        assert len(indices) == 0
+
+    def test_zero_stereo_width_is_valid(self):
+        """stereo_width=0.0 is valid (mono signal), not treated as missing."""
+        events = [
+            _make_event(stereo_width=0.0),
+            _make_event(stereo_width=0.3),
+        ]
+        values, indices = _resolve_cluster_feature(events, 'snare', {})
+        assert len(values) == 2
+        assert np.isclose(values[0], 0.0)
+
+    def test_auto_selects_first_feature_with_data(self):
+        """Auto mode for cymbals: centroid first, then stereo_width."""
+        # Only stereo_width available, not centroid
+        events = [
+            _make_event(stereo_width=0.1),
+            _make_event(stereo_width=0.5),
+        ]
+        values, indices = _resolve_cluster_feature(events, 'cymbals', {})
+        assert len(values) == 2
+        # Fell back to stereo_width since centroid missing
+        assert np.isclose(values[0], 0.1)
+
+
+# ============================================================================
+# cluster_feature Config Override Tests
+# ============================================================================
+
+
+class TestClusterFeatureOverride:
+    """Tests for cluster_feature config override on classify functions."""
+
+    def test_tom_explicit_stereo_width(self, default_config):
+        """Toms with cluster_feature='stereo_width' clusters by width."""
+        config = {
+            **default_config,
+            'toms': {'expected_clusters': 2, 'cluster_feature': 'stereo_width'},
+        }
+        events = [
+            _make_event(stereo_width=0.05, spectral_centroid_hz=500.0),
+            _make_event(stereo_width=0.40, spectral_centroid_hz=500.0),
+        ]
+        classify_tom_notes(events, config)
+        assert events[0]['classification'] == 0
+        assert events[1]['classification'] == 1
+
+    def test_cymbal_explicit_stereo_width(self, default_config):
+        """Cymbals with cluster_feature='stereo_width' clusters by width."""
+        config = {
+            **default_config,
+            'cymbals': {'expected_clusters': 2, 'cluster_feature': 'stereo_width'},
+        }
+        events = [
+            _make_event(stereo_width=0.05, spectral_centroid_hz=3000.0),
+            _make_event(stereo_width=0.40, spectral_centroid_hz=3000.0),
+        ]
+        classify_cymbal_notes(events, config)
+        assert events[0]['classification'] == 0
+        assert events[1]['classification'] == 1
+
+    def test_snare_explicit_spectral_centroid(self, default_config):
+        """Snare with cluster_feature='spectral_centroid_hz' uses centroid."""
+        config = {
+            **default_config,
+            'snare': {
+                'expected_clusters': 2,
+                'cluster_feature': 'spectral_centroid_hz',
+            },
+        }
+        events = [
+            _make_event(spectral_centroid_hz=300.0, stereo_width=0.3),
+            _make_event(spectral_centroid_hz=5000.0, stereo_width=0.3),
+        ]
+        classify_snare_notes(events, config)
+        assert events[0]['classification'] == 0
+        assert events[1]['classification'] == 1
+
+
+# ============================================================================
+# expected_clusters=None (YAML null) Tests
+# ============================================================================
+
+
+class TestExpectedClustersNull:
+    """Tests that expected_clusters=None (YAML null) doesn't crash."""
+
+    def test_tom_null_clusters_uses_default(self, default_config):
+        """Toms with expected_clusters=None uses default of 3."""
+        config = {**default_config, 'toms': {'expected_clusters': None}}
+        events = [
+            _make_event(spectral_centroid_hz=200.0),
+            _make_event(spectral_centroid_hz=500.0),
+            _make_event(spectral_centroid_hz=1000.0),
+        ]
+        classify_tom_notes(events, config)
+        assert events[0]['classification'] == 0
+        assert events[1]['classification'] == 1
+        assert events[2]['classification'] == 2
+
+    def test_cymbal_null_clusters_uses_default(self, default_config):
+        """Cymbals with expected_clusters=None uses default of 2."""
+        config = {**default_config, 'cymbals': {'expected_clusters': None}}
+        events = [
+            _make_event(spectral_centroid_hz=2000.0),
+            _make_event(spectral_centroid_hz=8000.0),
+        ]
+        classify_cymbal_notes(events, config)
+        assert events[0]['classification'] == 0
+        assert events[1]['classification'] == 1
+
+    def test_snare_null_clusters_uses_default(self, default_config):
+        """Snare with expected_clusters=None uses default of 2."""
+        config = {**default_config, 'snare': {'expected_clusters': None}}
+        events = [
+            _make_event(stereo_width=0.02),
+            _make_event(stereo_width=0.40),
+        ]
+        classify_snare_notes(events, config)
+        assert events[0]['classification'] == 0
+        assert events[1]['classification'] == 1
+
+
+# ============================================================================
+# expected_clusters for toms/cymbals Tests
+# ============================================================================
+
+
+class TestExpectedClustersTomsAndCymbals:
+    """Tests for configurable expected_clusters on toms and cymbals."""
+
+    def test_toms_expected_clusters_1(self, default_config):
+        """expected_clusters=1 → all toms get classification 0."""
+        config = {**default_config, 'toms': {'expected_clusters': 1}}
+        events = [
+            _make_event(spectral_centroid_hz=200.0),
+            _make_event(spectral_centroid_hz=1000.0),
+        ]
+        classify_tom_notes(events, config)
+        assert all(e['classification'] == 0 for e in events)
+
+    def test_toms_expected_clusters_4(self, default_config):
+        """expected_clusters=4 → four tom groups."""
+        config = {**default_config, 'toms': {'expected_clusters': 4}}
+        events = [
+            _make_event(spectral_centroid_hz=150.0),
+            _make_event(spectral_centroid_hz=400.0),
+            _make_event(spectral_centroid_hz=700.0),
+            _make_event(spectral_centroid_hz=1200.0),
+        ]
+        classify_tom_notes(events, config)
+        assert events[0]['classification'] == 0
+        assert events[3]['classification'] == 3
+
+    def test_cymbals_expected_clusters_1(self, default_config):
+        """expected_clusters=1 → all cymbals get classification 0."""
+        config = {**default_config, 'cymbals': {'expected_clusters': 1}}
+        events = [
+            _make_event(spectral_centroid_hz=2000.0),
+            _make_event(spectral_centroid_hz=8000.0),
+        ]
+        classify_cymbal_notes(events, config)
+        assert all(e['classification'] == 0 for e in events)
+
+    def test_cymbals_expected_clusters_3(self, default_config):
+        """expected_clusters=3 → three cymbal groups."""
+        config = {**default_config, 'cymbals': {'expected_clusters': 3}}
+        events = [
+            _make_event(spectral_centroid_hz=2000.0),
+            _make_event(spectral_centroid_hz=5000.0),
+            _make_event(spectral_centroid_hz=8000.0),
+        ]
+        classify_cymbal_notes(events, config)
+        assert events[0]['classification'] == 0
+        assert events[1]['classification'] == 1
+        assert events[2]['classification'] == 2
+
+    def test_toms_clusters_clamped_to_max_4(self, default_config):
+        """expected_clusters > 4 clamped to 4."""
+        config = {**default_config, 'toms': {'expected_clusters': 10}}
+        events = [
+            _make_event(spectral_centroid_hz=150.0),
+            _make_event(spectral_centroid_hz=400.0),
+            _make_event(spectral_centroid_hz=700.0),
+            _make_event(spectral_centroid_hz=1200.0),
+        ]
+        classify_tom_notes(events, config)
+        assert events[3]['classification'] == 3  # max classification = k-1 = 3
 
 
 # ============================================================================
@@ -653,13 +906,14 @@ class TestClassifyNotes:
         assert events[2]['note'] == 50  # high tom
 
     def test_cymbals_classified(self, drum_mapping, default_config):
-        """Cymbals get crash/ride/chinese based on centroid clustering."""
+        """Cymbals get crash/ride/chinese based on centroid clustering (3 clusters)."""
+        config = {**default_config, 'cymbals': {'expected_clusters': 3}}
         events = [
             _make_event(spectral_centroid_hz=2000.0),
             _make_event(spectral_centroid_hz=5000.0),
             _make_event(spectral_centroid_hz=8000.0),
         ]
-        classify_notes(events, 'cymbals', drum_mapping, default_config)
+        classify_notes(events, 'cymbals', drum_mapping, config)
         assert events[0]['note'] == 49  # crash
         assert events[1]['note'] == 51  # ride
         assert events[2]['note'] == 52  # chinese
