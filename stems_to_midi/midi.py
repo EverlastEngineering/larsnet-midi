@@ -277,6 +277,13 @@ def save_analysis_sidecar(
                 passes.append('statistical')
             logic['passes'] = passes
 
+        # Include global filtering thresholds for frontend slider defaults
+        if config:
+            filtering_config = config.get('filtering', {})
+            logic['reverb_continuation_attack_threshold'] = filtering_config.get(
+                'reverb_continuation_attack_threshold', 0.4
+            )
+
         # Include classification thresholds for frontend slider defaults
         if config:
             stem_config = config.get(stem_type, {})

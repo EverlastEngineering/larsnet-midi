@@ -17,6 +17,7 @@ from .rebuild_core import (
     _events_to_midi,
     _thresholds_changed,
     _thresholds_lowered,
+    _build_logic_block,
     rebuild_events_from_analysis,
 )
 from .config import DrumMapping
@@ -705,6 +706,32 @@ class TestRebuildEventsFromAnalysis:
         # Non-threshold fields preserved
         assert logic['freq_bands'] == ['fundamental', 'body', 'attack']
         assert logic['passes'] == ['geomean']
+
+    def test_logic_block_includes_reverb_threshold(self):
+        """Logic block includes reverb_continuation_attack_threshold from filtering config."""
+        analysis = _make_analysis_data({
+            'toms': {
+                'logic': {'geomean_threshold': 80.0, 'min_sustain_ms': None},
+                'events_configured': [_make_event(1.0, geomean=100.0, status='KEPT')],
+                'events_sensitive': [],
+            }
+        })
+        config = _make_config('toms', geomean_threshold=80.0)
+        config['filtering'] = {'reverb_continuation_attack_threshold': 0.3}
+
+        updated, _ = rebuild_events_from_analysis(analysis, {}, config)
+
+        logic = updated['stems']['toms']['logic']
+        assert logic['reverb_continuation_attack_threshold'] == 0.3
+
+    def test_logic_block_reverb_threshold_defaults_when_missing(self):
+        """Logic block defaults reverb threshold to 0.4 when filtering config absent."""
+        spectral_config = {'geomean_threshold': 50.0, 'min_sustain_ms': None}
+        stored_logic = {'geomean_threshold': 50.0}
+        config = {'kick': {}}  # No filtering section
+
+        logic = _build_logic_block(spectral_config, stored_logic, 'kick', config)
+        assert logic['reverb_continuation_attack_threshold'] == 0.4
 
     def test_logic_block_unchanged_when_same_thresholds(self):
         """Logic block not updated when thresholds haven't changed."""

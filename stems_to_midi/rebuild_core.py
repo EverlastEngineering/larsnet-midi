@@ -614,6 +614,13 @@ def _build_logic_block(
     logic['geomean_threshold'] = spectral_config.get('geomean_threshold')
     logic['min_sustain_ms'] = spectral_config.get('min_sustain_ms')
 
+    # Include global filtering thresholds so the frontend can read them
+    if config:
+        filtering_config = config.get('filtering', {})
+        logic['reverb_continuation_attack_threshold'] = filtering_config.get(
+            'reverb_continuation_attack_threshold', 0.4
+        )
+
     # Include classification thresholds so the frontend can read them
     if config:
         stem_config = config.get(stem_type, {})

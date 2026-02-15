@@ -60,6 +60,13 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 - **Validation**: Project 21 real data — all 5 stems produce identical event counts when thresholds match.
 - **Fixed in Commit**: aa96887
 
+### Reverb threshold slider reverts to default after save
+- **Status**: Fixed
+- **Priority**: High
+- **Description**: Changing `reverb_continuation_attack_threshold` in the tuning panel and saving always reverts the slider to the hardcoded fallback (0.4). The config YAML is updated correctly, and the rebuild uses the correct value, but the returned analysis.json logic block never includes the key. On re-render, the slider reads `logic['reverb_continuation_attack_threshold']` → undefined → falls back to 0.4.
+- **Root Cause**: Neither `save_analysis_sidecar` (midi.py) nor `_build_logic_block` (rebuild_core.py) included `reverb_continuation_attack_threshold` in the logic block. This key lives in the global `[filtering]` config section rather than per-stem, so neither function picked it up.
+- **Fix**: Read `reverb_continuation_attack_threshold` from `config['filtering']` in both `save_analysis_sidecar` and `_build_logic_block`, storing it in the logic block for the frontend to read.
+
 ### Detection Analysis section not visible after MIDI job completes
 - **Status**: Open
 - **Priority**: Medium
