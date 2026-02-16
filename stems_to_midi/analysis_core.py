@@ -503,6 +503,137 @@ def calculate_spectral_flux(
     return flux
 
 
+def detect_pitch_autocorrelation(
+    audio: np.ndarray,
+    onset_time: float,
+    sr: int,
+    window_ms: float = 50.0,
+    fmin: float = 40.0,
+    fmax: float = 500.0,
+    peak_search_ms: float = 10.0
+) -> Optional[float]:
+    """
+    Detect fundamental pitch using autocorrelation - optimal for short, decaying percussive sounds.
+    
+    Autocorrelation is well-suited for drum hits because:
+    1. It works directly on the time-domain signal (no FFT needed)
+    2. It detects periodicity even in short bursts
+    3. It's robust against noise and transients
+    
+    This implementation also searches for the peak amplitude within a window after
+    the onset time, since onset detection finds the START of the transient but
+    the actual drum hit peak is slightly later.
+    
+    Pure function - no side effects.
+    
+    Args:
+        audio: Full audio signal (mono)
+        onset_time: Onset time in seconds
+        sr: Sample rate
+        window_ms: Analysis window in milliseconds  
+        fmin: Minimum frequency to detect (Hz)
+        fmax: Maximum frequency to detect (Hz)
+        peak_search_ms: Window after onset to search for peak (ms)
+        
+    Returns:
+        Detected pitch in Hz, or None if no pitch detected
+    """
+    import librosa
+    
+    onset_sample = int(onset_time * sr)
+    
+    # First, search for the peak within a window after onset
+    # This handles the case where onset detection finds the START of transient
+    # but the actual drum hit peak is slightly later
+    peak_search_samples = int(peak_search_ms * sr / 1000)
+    search_start = onset_sample
+    search_end = min(len(audio), onset_sample + peak_search_samples)
+    
+    peak_amplitude = 0.0
+    if search_end > search_start:
+        search_segment = audio[search_start:search_end]
+        if len(search_segment) > 0:
+            peak_idx = np.argmax(np.abs(search_segment))
+            peak_amplitude = np.abs(search_segment[peak_idx])
+            # Use the peak position for pitch detection
+            onset_sample = search_start + peak_idx
+    
+    window_samples = int(window_ms * sr / 1000)
+    start = onset_sample
+    end = min(len(audio), onset_sample + window_samples)
+    segment = audio[start:end]
+    
+    # Need at least 2 periods of fmax to detect pitch
+    min_samples = int(2 * sr / fmax)
+    if len(segment) < min_samples:
+        return None
+    
+    # Compute autocorrelation using librosa
+    try:
+        max_lag = int(sr / fmin)  # Maximum lag to check (lowest freq)
+        min_lag = int(sr / fmax)   # Minimum lag to check (highest freq)
+        
+        if max_lag >= len(segment):
+            max_lag = len(segment) - 1
+        
+        if min_lag < 1:
+            min_lag = 1
+            
+        # Compute normalized autocorrelation
+        ac = librosa.autocorrelate(segment, maxLag=max_lag)
+        
+        if len(ac) == 0:
+            return None
+            
+        # Normalize by the zero-lag value
+        ac = ac / ac[0] if ac[0] > 0 else ac
+        
+        # Find peaks in the autocorrelation in the valid frequency range
+        # Use adaptive threshold based on signal amplitude
+        # Lower amplitude signals need lower correlation threshold
+        if peak_amplitude > 0.3:
+            min_corr = 0.25
+        elif peak_amplitude > 0.1:
+            min_corr = 0.15
+        else:
+            min_corr = 0.08  # Very quiet signals need lower threshold
+        
+        best_lag = None
+        best_corr = min_corr
+        
+        for lag in range(min_lag, min(max_lag + 1, len(ac))):
+            if lag > 0 and lag < len(ac) - 1:
+                # Check if this is a local maximum
+                if ac[lag] > ac[lag - 1] and ac[lag] > ac[lag + 1]:
+                    if ac[lag] > best_corr:
+                        best_corr = ac[lag]
+                        best_lag = lag
+        
+        # If no clear peak found, try weighted approach
+        if best_lag is None:
+            # Weight by correlation value
+            total_weight = 0.0
+            weighted_lag = 0.0
+            for lag in range(min_lag, min(max_lag + 1, len(ac))):
+                if ac[lag] > min_corr:
+                    weighted_lag += lag * ac[lag]
+                    total_weight += ac[lag]
+            if total_weight > 0:
+                best_lag = int(weighted_lag / total_weight)
+                best_corr = min_corr  # Will use this
+        
+        if best_lag is not None and best_lag > 0:
+            pitch = sr / best_lag
+            # Verify pitch is in valid range
+            if fmin <= pitch <= fmax:
+                return float(pitch)
+        
+        return None
+        
+    except Exception:
+        return None
+
+
 def detect_pitch(
     audio: np.ndarray,
     onset_time: float,
@@ -512,7 +643,10 @@ def detect_pitch(
     fmax: float = 2000.0
 ) -> Optional[float]:
     """
-    Detect fundamental pitch using librosa's pyin algorithm.
+    Detect fundamental pitch using YIN algorithm - optimized for percussive sounds.
+    
+    YIN is specifically designed for short, decaying sounds like drum hits.
+    Falls back to autocorrelation if YIN fails.
     
     Pure function - no side effects.
     
@@ -530,8 +664,20 @@ def detect_pitch(
     import librosa
     
     onset_sample = int(onset_time * sr)
-    window_samples = int(window_ms * sr / 1000)
     
+    # Search for peak within a window after onset
+    # Onset detection finds START of transient but drum hit peak is slightly later
+    peak_search_samples = int(10 * sr / 1000)  # 10ms search
+    search_start = onset_sample
+    search_end = min(len(audio), onset_sample + peak_search_samples)
+    
+    if search_end > search_start:
+        search_segment = audio[search_start:search_end]
+        if len(search_segment) > 0:
+            peak_idx = np.argmax(np.abs(search_segment))
+            onset_sample = search_start + peak_idx
+    
+    window_samples = int(window_ms * sr / 1000)
     start = onset_sample
     end = min(len(audio), onset_sample + window_samples)
     segment = audio[start:end]
@@ -539,34 +685,30 @@ def detect_pitch(
     if len(segment) < 512:
         return None
     
-    # Ensure frame_length is valid for the given fmin
-    # librosa requirement: fmin > sr / frame_length
-    frame_length = 2048  # Use larger frame for better low-frequency resolution
-    
-    # Adjust fmin to be at least sr / frame_length + small buffer
-    min_valid_fmin = (sr / frame_length) + 1
-    effective_fmin = max(fmin, min_valid_fmin)
-    
     try:
-        # Use pyin for pitch detection
-        f0, voiced_flag, voiced_probs = librosa.pyin(
+        # Use YIN algorithm - better for short, decaying percussive sounds
+        # YIN uses difference function instead of spectral methods
+        f0 = librosa.yin(
             segment,
-            fmin=effective_fmin,
+            fmin=max(fmin, 40),  # YIN can handle lower fmin
             fmax=fmax,
             sr=sr,
-            frame_length=frame_length
+            frame_length=2048
         )
         
-        # Filter out unvoiced frames and NaN values
-        valid_pitches = f0[~np.isnan(f0)]
+        # Filter out invalid values
+        valid_pitches = f0[~np.isnan(f0) & (f0 > 0)]
         
         if len(valid_pitches) == 0:
-            return None
+            # Fallback to autocorrelation
+            return detect_pitch_autocorrelation(audio, onset_time, sr, window_ms, fmin, fmax)
         
         # Return median pitch
         return float(np.median(valid_pitches))
+        
     except Exception:
-        return None
+        # Fallback to autocorrelation
+        return detect_pitch_autocorrelation(audio, onset_time, sr, window_ms, fmin, fmax)
 
 
 def calculate_gap_from_previous(
