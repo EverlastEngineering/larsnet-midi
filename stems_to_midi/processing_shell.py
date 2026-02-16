@@ -595,6 +595,8 @@ def _create_midi_events(
                 event['sustain_ms'] = onset_info.get('sustain_ms')
             if 'spectral_centroid_hz' in onset_info:
                 event['spectral_centroid_hz'] = onset_info['spectral_centroid_hz']
+            if 'pitch_hz' in onset_info:
+                event['pitch_hz'] = onset_info['pitch_hz']
         
         events.append(event)
         

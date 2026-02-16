@@ -98,9 +98,10 @@ def _extract_feature_values(
 
 
 # Per-stem feature fallback priorities (first match with data wins)
+# Note: pitch_hz is only available for toms (calculated in analysis_core.py)
 _FEATURE_PRIORITIES = {
     'snare': ['stereo_width', 'spectral_centroid_hz'],
-    'toms': ['spectral_centroid_hz', 'stereo_width'],
+    'toms': ['pitch_hz', 'spectral_centroid_hz', 'stereo_width'],
     'cymbals': ['spectral_centroid_hz', 'stereo_width'],
 }
 
@@ -475,9 +476,10 @@ def _map_note(
 # ============================================================================
 
 # Features to analyze per cluster, in priority order for each stem
+# Note: pitch_hz is only available for toms (calculated in analysis_core.py)
 _CLUSTER_FEATURES = {
     'snare': ['stereo_width', 'pan_confidence', 'spectral_centroid_hz'],
-    'toms': ['spectral_centroid_hz', 'stereo_width', 'pan_confidence'],
+    'toms': ['pitch_hz', 'spectral_centroid_hz', 'stereo_width', 'pan_confidence'],
     'cymbals': ['spectral_centroid_hz', 'stereo_width', 'pan_confidence'],
     'hihat': ['geomean', 'duration_sec'],
 }
@@ -486,7 +488,8 @@ _CLUSTER_FEATURES = {
 _FEATURE_LABELS = {
     'stereo_width': 'Stereo Width',
     'pan_confidence': 'Pan Position',
-    'spectral_centroid_hz': 'Pitch',
+    'spectral_centroid_hz': 'Brightness',
+    'pitch_hz': 'Pitch',
     'geomean': 'Energy',
     'duration_sec': 'Duration',
     'total_energy': 'Total Energy',

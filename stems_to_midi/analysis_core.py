@@ -539,14 +539,22 @@ def detect_pitch(
     if len(segment) < 512:
         return None
     
+    # Ensure frame_length is valid for the given fmin
+    # librosa requirement: fmin > sr / frame_length
+    frame_length = 2048  # Use larger frame for better low-frequency resolution
+    
+    # Adjust fmin to be at least sr / frame_length + small buffer
+    min_valid_fmin = (sr / frame_length) + 1
+    effective_fmin = max(fmin, min_valid_fmin)
+    
     try:
         # Use pyin for pitch detection
         f0, voiced_flag, voiced_probs = librosa.pyin(
             segment,
-            fmin=fmin,
+            fmin=effective_fmin,
             fmax=fmax,
             sr=sr,
-            frame_length=512
+            frame_length=frame_length
         )
         
         # Filter out unvoiced frames and NaN values
@@ -1601,8 +1609,13 @@ def filter_onsets_by_spectral(
             spectral_centroid_hz = calculate_spectral_centroid(audio, onset_time, sr)
             spectral_flux_value = calculate_spectral_flux(audio, onset_time, sr)
             
-            # Pitch detection (optional, can be slow)
-            # detected_pitch = detect_pitch(audio, onset_time, sr)
+            # Pitch detection - enabled for toms (fundamental is strong, good for clustering)
+            # Disabled for other stems (too slow, spectral_centroid_hz is sufficient)
+            # Note: Tom fundamental is typically 40-250Hz, using 40-500 range to capture fundamentals
+            if stem_type == 'toms':
+                detected_pitch = detect_pitch(audio, onset_time, sr, fmin=40.0, fmax=500.0)
+            else:
+                detected_pitch = None
             
             # Gap from previous onset
             if len(filtered_times) > 0:
