@@ -11,6 +11,14 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 
 ## Open Bugs (Not Yet in GitHub)
 
+### Min Sustain slider has no effect on hihat filtering
+- **Status**: Open
+- **Priority**: High
+- **Description**: The "Min Sustain" slider in the hihat tuning panel appears to do nothing. Changing its value does not affect which events are kept or filtered. User expects it to work like a "minimum time between events" filter.
+- **Expected Behavior**: Events with sustain duration below the threshold should be filtered out.
+- **Actual Behavior**: Changing the slider has no visible effect on event filtering.
+- **Steps to Reproduce**: Open hihat stem in WebUI, open tuning panel, adjust Min Sustain slider, save and reconvert - no change in event count.
+
 ### Classification settings don't affect MIDI file output
 - **Status**: Fixed
 - **Priority**: High
