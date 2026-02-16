@@ -991,7 +991,7 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
             'has_sustain_analysis': True,
             'use_sustain_duration': False,
             'has_spectral_data': True,
-            'filter_mode': 'geomean_only'
+            'filter_mode': 'require_both'
         }
     
     elif stem_type == 'cymbals':

@@ -12,12 +12,13 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 ## Open Bugs (Not Yet in GitHub)
 
 ### Min Sustain slider has no effect on hihat filtering
-- **Status**: Open
+- **Status**: Fixed
 - **Priority**: High
-- **Description**: The "Min Sustain" slider in the hihat tuning panel appears to do nothing. Changing its value does not affect which events are kept or filtered. User expects it to work like a "minimum time between events" filter.
-- **Expected Behavior**: Events with sustain duration below the threshold should be filtered out.
-- **Actual Behavior**: Changing the slider has no visible effect on event filtering.
-- **Steps to Reproduce**: Open hihat stem in WebUI, open tuning panel, adjust Min Sustain slider, save and reconvert - no change in event count.
+- **Description**: The "Min Sustain" slider in the hihat tuning panel appeared to do nothing. Changing its value did not affect which events were kept or filtered.
+- **Root Cause**: filter_mode for hihat was incorrectly set to 'geomean_only' instead of 'require_both' in both:
+  - analysis_core.py get_spectral_config_for_stem() (line ~997)
+  - threshold-tuning.js STEM_FILTER_MODES constant (line ~93)
+- **Fix**: Changed hihat filter_mode from 'geomean_only' to 'require_both' in both files, so that min_sustain_ms is now properly used in the filtering logic.
 
 ### Classification settings don't affect MIDI file output
 - **Status**: Fixed

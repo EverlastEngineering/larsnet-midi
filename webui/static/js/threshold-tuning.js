@@ -91,7 +91,7 @@ const STEM_FILTER_MODES = {
     kick: 'geomean_only',
     snare: 'geomean_only',
     toms: 'geomean_only',
-    hihat: 'geomean_only',
+    hihat: 'require_both',
     cymbals: 'require_both'
 };
 
