@@ -1,0 +1,89 @@
+# MkDocs Configuration for DrumToMIDI
+
+site_name: DrumToMIDI
+site_description: Audio to MIDI conversion for drum tracks
+site_author: Everlast Engineering
+docs_dir: new_docs
+
+repo_url: https://github.com/EverlastEngineering/DrumToMIDI
+repo_name: DrumToMIDI
+
+# Navigation
+nav:
+  - Home: index.md
+  - Architecture:
+    - ARCH_OVERVIEW.md
+    - ARCH_CONTAINERS.md
+    - ARCH_PATTERNS.md
+    - FILE_INVENTORY.md
+  - Guides:
+    - ADDING_FEATURES.md
+  - API Reference:
+    - api_reference.md
+
+# Theme
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: blue
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep-purple
+      accent: blue
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - search.highlight
+    - search.suggest
+
+# Extensions
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.snippets
+
+# Plugins
+plugins:
+  - search:
+      lang: en
+  - autorefs
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [.]
+          options:
+            show_source: true
+            show_root_heading: true
+            show_signature: true
+            show_docstring_returns: true
+            heading_level: 3
+
+# Python packages to include in API docs
+extra_javascript:
+  - https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.0/MathJax.js?config=TeX-MML-AMCHTML
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+# Exclude from build
+exclude_docs: |
+  archive/
+  lib_v5/
+  __pycache__/
+  .pytest_cache/
+  api_*.md  # Generated manually, use api_reference.md instead
+
+# Watch for changes in these directories
+watch:
+  - .
+  - stems_to_midi
+  - moderngl_renderer
+  - webui
+
+# Build options
+strict: false
