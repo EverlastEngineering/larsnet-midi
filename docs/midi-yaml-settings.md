@@ -218,9 +218,10 @@ Used for classifying detected events into subtypes (e.g., low/mid/high tom, cras
 | Stem | Setting | Default | Description |
 |---|---|---|---|
 | **Toms** | `enable_pitch_detection` | `true` | Enable pitch-based low/mid/high classification. |
-| | `pitch_method` | `'yin'` | `'yin'` (faster) or `'pyin'` (more robust). |
+| | `pitch_method` | `'yin'` | `'yin'` (faster) or `'pyin'` (more robust). Note: YIN is recommended for short decaying percussive sounds like toms. |
 | | `min_pitch_hz` | `60` | Minimum expected tom pitch (Hz). |
 | | `max_pitch_hz` | `250` | Maximum expected tom pitch (Hz). |
+| | `cluster_feature` | `'pitch_hz'` | Feature to use for clustering: `'pitch_hz'` (recommended for toms), `'spectral_centroid_hz'` (brightness), `'stereo_width'`, `'pan_confidence'`, or `'auto'`. Default is `'pitch_hz'` which provides best separation for toms. |
 | **Snare** | `enable_pitch_detection` | `false` | Enable pitch-based snare/rimshot/clap classification. |
 | | `pitch_method` | `'yin'` | Same as toms. |
 | | `min_pitch_hz` | `100.0` | Minimum expected snare pitch. |
