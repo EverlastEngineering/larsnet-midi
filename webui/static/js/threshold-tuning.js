@@ -91,7 +91,7 @@ const STEM_FILTER_MODES = {
     kick: 'geomean_only',
     snare: 'geomean_only',
     toms: 'geomean_only',
-    hihat: 'require_both',
+    hihat: 'geomean_only',  // min_sustain applied at end (after reverb)
     cymbals: 'require_both'
 };
 
@@ -901,6 +901,13 @@ function applyTuningFilter() {
         applyReverbContinuationFilter(tuningBaseEvents, attackThreshold);
     }
 
+    // Pass 3: Final min_sustain filter for hihat (after reverb filtering)
+    // This catches events with very short sustain that got through earlier filters
+    const minSustainMs = params.min_sustain_ms;
+    if (minSustainMs != null && stemType === 'hihat') {
+        applyMinSustainFilter(tuningBaseEvents, minSustainMs);
+    }
+
     // Re-apply any cached classification data (note colors, types)
     reapplyClassification(tuningBaseEvents);
 
@@ -1006,6 +1013,27 @@ function applyReverbContinuationFilter(events, attackThreshold) {
 
         if (isAdjacent && isAmplitudeContinuous && isSmooth) {
             curr.status = 'REVERB_CONTINUATION';
+        }
+    }
+}
+
+/**
+ * Pass 3: Min sustain filter for hihat - applied after reverb filtering.
+ * This catches events with very short sustain that got through earlier filters.
+ * Only filters if sustain data is available.
+ */
+function applyMinSustainFilter(events, minSustainMs) {
+    // Sort events by time
+    events.sort((a, b) => a.time - b.time);
+    
+    // Filter: keep events with sustain >= minSustainMs, or where sustain is null
+    // (to avoid over-filtering when sustain data isn't available)
+    for (const event of events) {
+        if (event.status !== 'KEPT') continue;
+        
+        const sustain = event.sustain_ms;
+        if (sustain != null && sustain < minSustainMs) {
+            event.status = 'FILTERED';
         }
     }
 }

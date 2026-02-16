@@ -991,7 +991,7 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
             'has_sustain_analysis': True,
             'use_sustain_duration': False,
             'has_spectral_data': True,
-            'filter_mode': 'require_both'
+            'filter_mode': 'geomean_only'  # Sustain filter applied at end, after reverb
         }
     
     elif stem_type == 'cymbals':
@@ -2042,6 +2042,44 @@ def filter_onsets_by_spectral(
         if filtered_spectral:
             filtered_spectral = [filtered_spectral[i] for i in keep_indices if i < len(filtered_spectral)]
         filtered_onset_data = [d for d in filtered_onset_data if d['time'] not in reverb_times]
+    
+    # Final pass: min_sustain_ms filter (hihat only, after reverb filtering)
+    # This catches any events with very short sustain that got through earlier filters
+    # Applied separately from the main filtering to avoid interaction with geomean
+    if min_sustain_ms is not None and stem_type in ['hihat']:
+        # Build list of times to keep based on sustain duration
+        final_times = []
+        final_strengths = []
+        final_amplitudes = []
+        final_geomeans = []
+        final_sustains = []
+        final_onset_data = []
+        
+        for i, time in enumerate(filtered_times):
+            sustain = filtered_sustains[i] if i < len(filtered_sustains) else None
+            # Keep if sustain >= threshold OR if sustain data not available (to avoid over-filtering)
+            if sustain is None or sustain >= min_sustain_ms:
+                final_times.append(time)
+                final_strengths.append(filtered_strengths[i])
+                final_amplitudes.append(filtered_amplitudes[i])
+                final_geomeans.append(filtered_geomeans[i])
+                if i < len(filtered_sustains):
+                    final_sustains.append(filtered_sustains[i])
+                if i < len(filtered_onset_data):
+                    final_onset_data.append(filtered_onset_data[i])
+        
+        filtered_times = final_times
+        filtered_strengths = final_strengths
+        filtered_amplitudes = final_amplitudes
+        filtered_geomeans = final_geomeans
+        filtered_sustains = final_sustains
+        filtered_onset_data = final_onset_data
+        
+        # Update status in all_onset_data for filtered events
+        final_times_set = set(final_times)
+        for onset_data in all_onset_data:
+            if onset_data['status'] == 'KEPT' and onset_data['time'] not in final_times_set:
+                onset_data['status'] = 'FILTERED'  # Filtered by sustain pass
     
     return {
         'filtered_times': np.array(filtered_times),

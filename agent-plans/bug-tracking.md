@@ -14,11 +14,12 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 ### Min Sustain slider has no effect on hihat filtering
 - **Status**: Fixed
 - **Priority**: High
-- **Description**: The "Min Sustain" slider in the hihat tuning panel appeared to do nothing. Changing its value did not affect which events were kept or filtered.
-- **Root Cause**: filter_mode for hihat was incorrectly set to 'geomean_only' instead of 'require_both' in both:
-  - analysis_core.py get_spectral_config_for_stem() (line ~997)
-  - threshold-tuning.js STEM_FILTER_MODES constant (line ~93)
-- **Fix**: Changed hihat filter_mode from 'geomean_only' to 'require_both' in both files, so that min_sustain_ms is now properly used in the filtering logic.
+- **Description**: The "Min Sustain" slider in the hihat tuning panel appeared to do nothing.
+- **Root Cause**: filter_mode was set to 'geomean_only' so min_sustain_ms was ignored.
+- **New Approach**: Apply min_sustain_ms as a final catch filter AFTER reverb continuation filtering (Pass 3), rather than at the same time as geomean filtering. This avoids the issue where sustain filtering at the same time as other filters causes wrong notes to be allowed/filtered.
+- **Fix**: 
+  - analysis_core.py: Added Pass 3 sustain filter after reverb filtering for hihat
+  - threshold-tuning.js: Added applyMinSustainFilter() after reverb filter in WebUI
 
 ### Classification settings don't affect MIDI file output
 - **Status**: Fixed
