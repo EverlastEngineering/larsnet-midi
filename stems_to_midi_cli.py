@@ -22,8 +22,9 @@ import sys
 
 # Import modules (thin orchestration layer)
 from stems_to_midi.config import DrumMapping
-from stems_to_midi.midi import create_midi_file, save_analysis_sidecar, save_envelope_data
+from stems_to_midi.midi import create_midi_file, save_analysis_sidecar, save_envelope_data, load_analysis_sidecar
 from stems_to_midi.processing_shell import process_stem_to_midi
+from stems_to_midi.rebuild_core import rebuild_events_from_analysis
 
 # Import project manager
 from project_manager import (
@@ -281,7 +282,9 @@ def _process_stems_to_midi(
             stem_progress = int((song_idx - 1) / total_songs * 90 + (processed_stems / total_stems) * (90 / total_songs))
             print(f"Progress: {stem_progress}%")
         
-        # Create MIDI file
+        # Create MIDI file using rebuild logic (same as "Save & Reconvert")
+        # This ensures initial conversion uses the same filtering/classification
+        # as reconvert, producing consistent results.
         if events_by_stem:
             # Add suffix for learning mode
             if learning_mode:
@@ -289,20 +292,34 @@ def _process_stems_to_midi(
                 midi_path = midi_dir / f"{base_name}{suffix}.mid"
             else:
                 midi_path = midi_dir / f"{base_name}.mid"
-            
-            create_midi_file(
-                events_by_stem,
-                midi_path,
-                tempo=tempo,
-                track_name=f"Drums - {base_name}",
-                config=config
-            )
-            
-            # Save analysis sidecar with spectral data (Detection Output Contract v3)
+
+            # Step 1: Save analysis sidecar FIRST (Detection Output Contract v3)
             save_analysis_sidecar(
                 events_by_stem, midi_path, tempo=tempo,
                 analysis_by_stem=analysis_by_stem if analysis_by_stem else None,
                 config=config,
+            )
+
+            # Step 2: Load the analysis sidecar and rebuild MIDI from it
+            # This uses the same rebuild logic as "Save & Reconvert"
+            analysis_data = load_analysis_sidecar(midi_path)
+            if not analysis_data:
+                raise RuntimeError(f"Failed to save analysis sidecar for {midi_path}")
+
+            # Rebuild MIDI from analysis data (honors thresholds, applies all filters)
+            updated_analysis, rebuild_events = rebuild_events_from_analysis(
+                analysis_data=analysis_data,
+                overrides={},  # No manual overrides for initial conversion
+                config=config,
+            )
+
+            # Create MIDI from rebuilt events
+            create_midi_file(
+                rebuild_events,
+                midi_path,
+                tempo=tempo,
+                track_name=f"Drums - {base_name}",
+                config=config
             )
             
             # Save energy envelope data for waveform visualization

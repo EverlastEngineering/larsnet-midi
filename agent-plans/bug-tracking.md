@@ -58,6 +58,24 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 - **Description**: FILTERED (red) and REVERB_CONTINUATION (orange) events visible when tuning is closed.
 - **Fix**: Filter `displayEvents` to KEPT-only when `!waveformTuningActive`. Legend also hides filtered/reverb counts when tuning is closed.
 
+### Initial MIDI conversion produces poor quality vs. "Save & Reconvert"
+- **Status**: Fixed
+- **Priority**: High
+- **Description**: When first processing a MIDI file using the webui "Convert Stems to MIDI" button, the output MIDI file has many errors. However, clicking "Save & Reconvert" produces correct MIDI output - and even changing a setting then changing it BACK produces good output.
+- **Root Cause**: TWO SEPARATE CODE PATHS for creating MIDI:
+  1. **Legacy path** (initial conversion in `stems_to_midi_cli.py`): 
+     - Ran detection → created MIDI directly from detection events
+     - Then saved analysis.json SEPARATELY
+  2. **New path** (reconvert in `rebuild_shell.py`):
+     - Loaded analysis.json → ran rebuild logic → created MIDI
+     - Applied additional filtering/classification from stored data
+- **The Fix**: Modified `stems_to_midi_cli.py` to:
+  1. Save analysis sidecar first after detection
+  2. Load that sidecar and run rebuild to create MIDI
+  3. Removed fallback code that created MIDI directly
+  4. Now both initial conversion and reconvert use identical rebuild logic
+
+
 ### Rebuild-from-analysis produces degraded MIDI output
 - **Status**: Fixed
 - **Priority**: High
