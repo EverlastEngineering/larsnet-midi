@@ -75,6 +75,53 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
   3. Removed fallback code that created MIDI directly
   4. Now both initial conversion and reconvert use identical rebuild logic
 
+### Hihat open/closed detection inconsistency and missing UI
+- **Status**: Open
+- **Priority**: High
+- **Description**: Hihat open/closed detection works differently from other stems and lacks UI controls. The detection must be enabled via YAML config (`detect_open: true`) or CLI/API parameter, requiring a full reconvert to change. No interactive tuning UI exists for hihat classification like other stems have.
+
+#### Part 1: Parameter Name Mismatch
+- **Locations**: 
+  - YAML config: `hihat.detect_open` (defaults to `true` in midiconfig.yaml line 250)
+  - CLI parameter: `--detect-hihat-open` / `detect_hihat_open` (defaults to `False`)
+  - API parameter: `detect_hihat_open` (defaults to `False`)
+- **Root Cause**: The YAML uses `detect_open` but the CLI/API uses `detect_hihat_open`. The CLI tries to read `detect_open` from config as fallback (stems_to_midi_cli.py lines 247-251), but the webui sends `detect_hihat_open` which bypasses the YAML setting entirely.
+- **Flow**:
+  1. WebUI calls API with `detect_hihat_open: false` (or omitted → defaults to false)
+  2. This overrides the YAML's `detect_open: true` setting
+  3. Detection runs with open/closed disabled → all hihats marked as 'closed'
+  4. Rebuild always re-runs classification using current config thresholds
+
+#### Part 2: Rebuild Overwrites hihat_state
+- **Location**: `note_classification_core.classify_hihat_notes()` (lines 25-65)
+- **Behavior**: Unlike other stems that preserve stored classification, hihat's classification ALWAYS overwrites `hihat_state` based on current config thresholds (`open_geomean_min`, `open_sustain_ms`)
+- **Impact**: Changing hihat classification thresholds triggers reclassification during rebuild, producing different MIDI than initial conversion
+
+#### Part 3: Missing Hihat UI in Tuning Panel
+- **Location**: `webui/static/js/threshold-tuning.js`
+- **Current State**:
+  - snare/toms/cymbals: Have `expected_clusters` slider and clustering visualization
+  - hihat: NO clustering slider, NO cluster visualization
+- **Only UI exposed**: Geomean threshold, reverb attack threshold, min sustain (via Pass 3 filter)
+- **Missing from UI**: `detect_open`, `open_geomean_min`, `open_sustain_ms` settings
+
+#### Part 4: Data Saved to JSON
+- **Verified**: `hihat_state` IS saved to analysis.json (confirmed in user_files project)
+- **Saved fields**: `body_energy`, `sizzle_energy`, `geomean`, `sustain_ms`, `hihat_state`
+- **Issue**: Classification re-runs on rebuild even when data is already classified
+
+#### Recommended Fixes
+1. **Unify parameter names**: Change CLI/API to use `detect_open` to match YAML, OR change YAML to use `detect_hihat_open`
+2. **Fix webui to not override**: Don't send `detect_hihat_open` in API call unless explicitly toggled by user, let YAML config take precedence
+3. **Add hihat tuning UI**: Expose `open_geomean_min`, `open_sustain_ms` sliders in hihat tuning panel
+4. **Preserve hihat_state in rebuild**: Don't re-classify hihat if `hihat_state` already exists in stored data (similar to how other stems preserve classification)
+
+#### Affected Files
+- `stems_to_midi_cli.py`: Lines 48, 247-251 (detect_hihat_open vs detect_open)
+- `webui/api/operations.py`: Line 310 (detect_hihat_open parameter)
+- `webui/static/js/threshold-tuning.js`: No hihat-specific classification sliders
+- `stems_to_midi/note_classification_core.py`: Lines 25-65 (classify_hihat_notes always overwrites)
+
 
 ### Rebuild-from-analysis produces degraded MIDI output
 - **Status**: Fixed
