@@ -1018,24 +1018,38 @@ function applyReverbContinuationFilter(events, attackThreshold) {
 }
 
 /**
- * Pass 3: Min sustain filter for hihat - applied after reverb filtering.
- * This catches events with very short sustain that got through earlier filters.
- * Only filters if sustain data is available.
+ * Pass 3: Temporal filter for hihat - applied after reverb filtering.
+ * This catches events that are too close to the previous kept event (likely bleed/double-triggers).
+ * Uses minSustainMs as the minimum time gap in milliseconds.
  */
 function applyMinSustainFilter(events, minSustainMs) {
+    if (!minSustainMs || minSustainMs <= 0) return events;
+    
     // Sort events by time
     events.sort((a, b) => a.time - b.time);
     
-    // Filter: keep events with sustain >= minSustainMs, or where sustain is null
-    // (to avoid over-filtering when sustain data isn't available)
+    // Temporal filter: keep event only if gap from previous kept event >= minSustainMs
+    const keptTimes = [];
     for (const event of events) {
         if (event.status !== 'KEPT') continue;
         
-        const sustain = event.sustain_ms;
-        if (sustain != null && sustain < minSustainMs) {
+        // Check gap from last kept event
+        let canKeep = true;
+        if (keptTimes.length > 0) {
+            const gapMs = (event.time - keptTimes[keptTimes.length - 1]) * 1000;
+            if (gapMs < minSustainMs) {
+                canKeep = false;
+            }
+        }
+        
+        if (canKeep) {
+            keptTimes.push(event.time);
+        } else {
             event.status = 'FILTERED';
         }
     }
+    
+    return events;
 }
 
 // ─── UI Updates ──────────────────────────────────────────────────────────
