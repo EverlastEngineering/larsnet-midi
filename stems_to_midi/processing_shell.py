@@ -22,6 +22,9 @@ from .analysis_core import (
     classify_snare_pitch
 )
 
+# Import temporal filtering (post-spectral post-processing)
+from .filters.temporal_filter import filter_by_min_interval
+
 # Import detection functions
 from .detection_shell import (
     detect_onsets,
@@ -962,6 +965,37 @@ def process_stem_to_midi(
                 if key in time_to_stereo:
                     onset_d['pan_confidence'] = time_to_stereo[key][0]
                     onset_d['stereo_width'] = time_to_stereo[key][1]
+
+        # Post-spectral temporal filter: filter events based on minimum time gap
+        # This catches bleed/double-triggers that got through spectral filtering
+        # Uses the same min_sustain_ms config but interprets as temporal gap (ms)
+        if spectral_config and spectral_config.get('min_sustain_ms') is not None and stem_type in ['hihat']:
+            min_interval_ms = spectral_config['min_sustain_ms']
+            if min_interval_ms > 0 and len(onset_times) > 0:
+                # Apply temporal filter to the filtered times
+                original_times = onset_times.copy() if hasattr(onset_times, 'copy') else np.array(onset_times)
+                filtered_times = filter_by_min_interval(
+                    event_times=onset_times,
+                    min_interval_ms=min_interval_ms
+                )
+                
+                # Update onset_times to temporally filtered results
+                onset_times = filtered_times
+                
+                # Also filter the corresponding arrays
+                if len(onset_times) > 0:
+                    # Create mask for which indices to keep
+                    onset_times_set = set(onset_times)
+                    keep_mask = np.array([t in onset_times_set for t in original_times])
+                    onset_strengths = onset_strengths[keep_mask]
+                    peak_amplitudes = peak_amplitudes[keep_mask]
+                    stem_geomeans = stem_geomeans[keep_mask]
+                    
+                    # Update all_onset_data status for filtered events
+                    kept_set = set(onset_times)
+                    for onset_d in all_onset_data:
+                        if onset_d['status'] == 'KEPT' and onset_d['time'] not in kept_set:
+                            onset_d['status'] = 'FILTERED'
 
         # Show ALL onset data and spectral chart if debug flags are enabled
         if show_all_onsets or show_spectral_data:
