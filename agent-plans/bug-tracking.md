@@ -11,6 +11,28 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 
 ## Open Bugs (Not Yet in GitHub)
 
+### MIDI timing wrong on initial conversion (works on reconvert)
+- **Status**: Open
+- **Priority**: High
+- **Description**: MIDI file plays way too fast on initial process, but works correctly after "Save & Reconvert".
+- **Root Cause**: Unknown - possibly related to commit 15a5461 which changed initial conversion to use rebuild path, or different tempo handling between initial vs rebuild.
+- **Expected Behavior**: Both initial conversion and reconvert should produce identical MIDI timing.
+- **Actual Behavior**: Initial conversion produces MIDI that plays too fast.
+
+### Filtering/keeping events inconsistent between UI and saved MIDI
+- **Status**: Open
+- **Priority**: High
+- **Description**: Events show as filtered or kept in the UI, but when saving/disk they disappear or stay when they shouldn't. Also depends on whether note classification is enabled.
+- **Expected Behavior**: UI display should match what's actually saved to MIDI.
+- **Actual Behavior**: Inconsistency between UI filtering display and final MIDI output.
+
+### Reverb filter adds/removes events differently in UI vs actual filter
+- **Status**: Open
+- **Priority**: High
+- **Description**: The reverb continuation filter shows different event counts or decisions in the UI waveform than what actually gets filtered when saving MIDI.
+- **Expected Behavior**: UI should accurately reflect what's being filtered.
+- **Actual Behavior**: Discrepancy between UI visualization and actual filter results.
+
 ### events_configured contains events not in events_sensitive (data integrity)
 - **Status**: Open
 - **Priority**: High
@@ -20,6 +42,17 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 - **Actual Behavior**: events_configured contained extra events not in events_sensitive
 - **Mitigation**: Deleted MIDI data and re-ran conversion to fix
 - **Prevention**: Consider adding validation in analysis loading or a toast warning in UI if this data inconsistency is detected
+
+### Testing gaps - no e2e verification of filtering/keeping/MIDI output
+- **Status**: Open
+- **Priority**: High
+- **Description**: No automated tests verify that UI filtering/keeping decisions match what's actually saved to MIDI files. Current tests don't cover the full pipeline: detection → analysis.json → rebuild → MIDI output → verify notes match expectations.
+- **Needed**: 
+  - Test fixtures with known audio inputs
+  - Test cases for each filtering scenario (geomean, sustain, reverb continuation, classification)
+  - Read back generated MIDI files and verify note times/durations match expected values
+  - A/B testing between different config settings
+- **Impact**: Bugs like "filtering inconsistent between UI and MIDI" go undetected because there's no automated verification.
 
 ### Min Sustain slider has no effect on hihat filtering
 - **Status**: Fixed
