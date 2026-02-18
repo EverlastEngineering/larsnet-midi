@@ -63,7 +63,15 @@ def create_midi_file(
     time = 0
     
     midi.addTrackName(track, time, track_name)
-    midi.addTempo(track, time, tempo)
+    
+    # NOTE: We intentionally do NOT add tempo here.
+    # Adding tempo (e.g., 120 BPM) causes DAWs to interpret note timings
+    # relative to that tempo. When a DAW project has a different tempo
+    # (e.g., from detecting the song), this causes timing drift.
+    # 
+    # By omitting tempo, the MIDI file plays back at absolute timing
+    # regardless of DAW tempo - "raw" timing is preserved.
+    # See: "the raw timing of the events was perfect" - historical fix
     
     # Add a marker/text event at time 0 to anchor the MIDI file
     # This ensures proper alignment when importing into DAWs
