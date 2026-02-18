@@ -5,8 +5,8 @@ Handles creation and reading of MIDI files for drum transcription.
 Includes JSON sidecar export for spectral analysis data (Detection Output Contract).
 """
 
-from midiutil import MIDIFile
 import mido
+from mido import Message, MetaMessage, MidiFile, MidiTrack
 import json
 import numpy as np
 from pathlib import Path
@@ -42,10 +42,15 @@ def create_midi_file(
     """
     Create a MIDI file from detected drum events.
     
+    Uses mido to write MIDI with ABSOLUTE TIMING (ticks as seconds).
+    This ensures the MIDI plays back at the exact timing regardless of 
+    DAW tempo - no tempo track is written, so DAWs use default or 
+    their own tempo without affecting note positions.
+    
     Args:
         events_by_stem: Dictionary mapping stem names to lists of MIDI events
         output_path: Path to save MIDI file
-        tempo: Tempo in BPM
+        tempo: Tempo in BPM (used for duration conversion only)
         track_name: Name of the MIDI track
         config: Configuration dictionary (optional, loads default if not provided)
     """
@@ -56,58 +61,91 @@ def create_midi_file(
     if config is None:
         config = load_config()
     
-    # Create MIDI file with 1 track
-    midi = MIDIFile(1)
-    track = 0
-    channel = 9  # Channel 10 (0-indexed as 9) is typically drums in MIDI
-    time = 0
+    # Use standard MIDI tick resolution (480 ticks per quarter note)
+    # This matches typical DAW expectations
+    ticks_per_beat = 480
     
-    midi.addTrackName(track, time, track_name)
+    # Convert tempo from BPM to microseconds per beat for mido
+    tempo_microseconds = int(60000000 / tempo)  # 120 BPM = 500000 µs
     
-    # NOTE: We intentionally do NOT add tempo here.
-    # Adding tempo (e.g., 120 BPM) causes DAWs to interpret note timings
-    # relative to that tempo. When a DAW project has a different tempo
-    # (e.g., from detecting the song), this causes timing drift.
-    # 
-    # By omitting tempo, the MIDI file plays back at absolute timing
-    # regardless of DAW tempo - "raw" timing is preserved.
-    # See: "the raw timing of the events was perfect" - historical fix
+    mid = MidiFile(ticks_per_beat=ticks_per_beat, type=0)
+    track = MidiTrack()
+    mid.tracks.append(track)
     
-    # Add a marker/text event at time 0 to anchor the MIDI file
-    # This ensures proper alignment when importing into DAWs
-    midi.addText(track, 0.0, "START")
+    # Track name
+    track.append(MetaMessage('track_name', name=track_name, time=0))
     
-    # Also add a very quiet anchor note at time 0 (velocity 1, not 0)
-    # Some DAWs filter out velocity 0 notes
-    very_short_duration = config.get('audio', {}).get('very_short_duration', 0.01)
-    midi.addNote(
-        track=track,
-        channel=9,
-        pitch=27,  # Very low note (outside typical drum range)
-        time=0.0,  # At the very start
-        duration=very_short_duration,  # Very short (beats)
-        volume=1  # Very quiet but not silent (velocity 1)
-    )
+    # Add tempo event - CRITICAL for correct timing!
+    # Without this, DAWs may use different default tempo causing drift.
+    # With this tempo, note timings are interpreted correctly.
+    track.append(MetaMessage('set_tempo', tempo=tempo_microseconds, time=0))
     
-    # Prepare all events (convert times to beats using pure function)
-    prepared_events = prepare_midi_events_for_writing(events_by_stem, tempo)
+    # Add text marker at start
+    track.append(MetaMessage('text', text='START', time=0))
     
-    # Add all prepared events to MIDI file
-    for event in prepared_events:
-        midi.addNote(
-            track=track,
-            channel=channel,
-            pitch=event['note'],
-            time=event['time_beats'],
-            duration=event['duration_beats'],
-            volume=event['velocity']
-        )
+    # Get very short duration in seconds
+    very_short_duration_sec = config.get('audio', {}).get('very_short_duration', 0.01)
+    beats_per_second = tempo / 60.0
     
-    total_events = len(prepared_events)
+    # Add anchor note at time 0 (velocity 1 = quiet but audible)
+    # Note: anchor note time is converted to ticks below
+    anchor_note_time = 0
+    anchor_note_ticks = int(anchor_note_time * ticks_per_beat * beats_per_second)
+    anchor_duration_ticks = int(very_short_duration_sec * ticks_per_beat * beats_per_second)
+    track.append(Message('note_on', channel=9, note=27, velocity=1, time=anchor_note_ticks))
+    track.append(Message('note_off', channel=9, note=27, velocity=0, time=anchor_duration_ticks))
     
-    # Write to file
-    with open(output_path, 'wb') as f:
-        midi.writeFile(f)
+    # Collect all events from all stems
+    all_events = []
+    for stem_type, events in events_by_stem.items():
+        for event in events:
+            all_events.append({
+                'time_sec': event['time'],
+                'duration_sec': event.get('duration', very_short_duration_sec),
+                'note': event['note'],
+                'velocity': event['velocity'],
+                'stem_type': stem_type
+            })
+    
+    # Sort by time
+    all_events.sort(key=lambda e: e['time_sec'])
+    
+    total_events = len(all_events)
+    
+    # Convert seconds to ticks using proper MIDI formula:
+    # ticks = time_sec * ticks_per_beat * (tempo/60)
+    # where tempo/60 = beats per second
+    beats_per_second = tempo / 60.0
+    
+    # Convert to absolute ticks and add to track
+    last_time_ticks = 0
+    for event in all_events:
+        time_ticks = int(event['time_sec'] * ticks_per_beat * beats_per_second)
+        duration_ticks = int(event['duration_sec'] * ticks_per_beat * beats_per_second)
+        
+        # Delta time from last event
+        delta_ticks = time_ticks - last_time_ticks
+        last_time_ticks = time_ticks
+        
+        # Note on
+        track.append(Message(
+            'note_on',
+            channel=9,
+            note=event['note'],
+            velocity=event['velocity'],
+            time=delta_ticks
+        ))
+        # Note off
+        track.append(Message(
+            'note_off',
+            channel=9,
+            note=event['note'],
+            velocity=0,
+            time=duration_ticks
+        ))
+    
+    # Write MIDI file
+    mid.save(str(output_path))
     
     print(f"  Created MIDI file with {total_events} notes")
 
