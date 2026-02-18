@@ -48,8 +48,8 @@ def _thresholds_changed(
     """
     Determine if current config thresholds differ from stored analysis logic.
 
-    Compares geomean_threshold and min_sustain_ms — the two parameters
-    that the user can tune via sliders.
+    Compares geomean_threshold, min_sustain_ms, and min_strength_threshold —
+    the parameters that the user can tune via sliders.
 
     Args:
         spectral_config: Current config from get_spectral_config_for_stem().
@@ -64,9 +64,14 @@ def _thresholds_changed(
     current_sustain = spectral_config.get('min_sustain_ms')
     stored_sustain = stored_logic.get('min_sustain_ms')
 
+    current_strength = spectral_config.get('min_strength_threshold')
+    stored_strength = stored_logic.get('min_strength_threshold')
+
     if current_geomean != stored_geomean:
         return True
     if current_sustain != stored_sustain:
+        return True
+    if current_strength != stored_strength:
         return True
 
     return False
@@ -85,7 +90,8 @@ def _thresholds_lowered(
         stored_logic: The 'logic' block from analysis.json for this stem.
 
     Returns:
-        True if geomean threshold was lowered or sustain threshold was lowered.
+        True if geomean threshold was lowered, sustain threshold was lowered, 
+        or strength threshold was lowered.
     """
     current_geomean = spectral_config.get('geomean_threshold', 0)
     stored_geomean = stored_logic.get('geomean_threshold', 0)
@@ -104,6 +110,20 @@ def _thresholds_lowered(
     elif stored_sustain is not None and current_sustain is None:
         # Sustain filter removed = more permissive
         return True
+
+    # Check min_strength_threshold
+    current_strength = spectral_config.get('min_strength_threshold')
+    stored_strength = stored_logic.get('min_strength_threshold')
+    
+    if stored_strength is not None and current_strength is not None:
+        if current_strength < stored_strength:
+            return True
+    elif stored_strength is not None and current_strength is None:
+        # Strength filter removed = more permissive
+        return True
+    elif stored_strength is None and current_strength is not None:
+        # Strength filter added = more restrictive (not lowered)
+        pass
 
     return False
 

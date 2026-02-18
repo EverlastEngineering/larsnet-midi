@@ -365,8 +365,7 @@ Detect drum hits in stems and convert to MIDI notes.
   "hop_length": 512,           // optional: Samples between frames (default: 512)
   "min_velocity": 80,          // optional: Minimum MIDI velocity (default: 80)
   "max_velocity": 110,         // optional: Maximum MIDI velocity (default: 110)
-  "tempo": 120.0,              // optional: Tempo in BPM (default: detected)
-  "detect_hihat_open": false   // optional: Detect open hi-hat (default: false)
+  "tempo": 120.0               // optional: Tempo in BPM (default: detected)
 }
 ```
 

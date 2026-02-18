@@ -235,7 +235,6 @@ Used for classifying detected events into subtypes (e.g., low/mid/high tom, cras
 
 | Setting | Default | Type | Code Location | Description |
 |---|---|---|---|---|
-| `detect_open` | `true` | bool | [stems_to_midi_cli.py](../stems_to_midi_cli.py#L250) | Enable open/closed hi-hat detection. **Note:** Code default fallback is `False` (mismatch with YAML `true`). Also overridable via CLI `--detect-hihat-open`. |
 | `decay_threshold` | `0.65` | float | — | **DEAD CONFIG.** Not read by current code. Open/closed detection now uses `open_sustain_ms` + `open_geomean_min` instead. |
 | `open_sustain_ms` | `100` | float (ms) | [detection_shell.py](../stems_to_midi/detection_shell.py#L441), [processing_shell.py](../stems_to_midi/processing_shell.py#L1044) | Sustain threshold for open detection. Events with sustain ≥ this AND geomean ≥ `open_geomean_min` are classified as "open". **Note:** Code default fallback is `150` (mismatch with YAML `100`). |
 | `open_geomean_min` | `262.0` | float | [detection_shell.py](../stems_to_midi/detection_shell.py#L442) | GeoMean threshold for open detection. Used in conjunction with `open_sustain_ms`. |
@@ -346,6 +345,5 @@ Cases where the YAML value differs from the code's fallback default (the fallbac
 |---|---|---|---|
 | `reverb_continuation_attack_threshold` | `0.4` | `0.2` | Low (YAML wins when config is loaded) |
 | `statistical_badness_threshold` | `0.3` | `0.6` | Low (YAML wins when config is loaded) |
-| `detect_open` (hihat) | `true` | `False` | Low (YAML wins when config is loaded) |
 | `open_sustain_ms` (hihat) | `100` | `150` | Low (YAML wins when config is loaded) |
 | `enable_pitch_detection` (snare) | `false` | `True` | Low (YAML wins when config is loaded) |

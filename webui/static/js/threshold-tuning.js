@@ -16,6 +16,9 @@
 /** Whether the tuning panel is open */
 let tuningPanelOpen = false;
 
+/** Whether hihat open/closed classification is enabled (per stem) */
+let hihatClassificationEnabled = {};
+
 /** Current slider values per stem (persisted across tab switches) */
 let tuningSliderValues = {};
 
@@ -224,7 +227,7 @@ function buildSlidersForStem(stemType) {
             : '';
 
         return `
-            <div class="tuning-slider-row">
+            <div class="tuning-slider-row" data-slider-key="${slider.key}">
                 <div class="flex items-center justify-between mb-1">
                     <label class="text-xs text-gray-300">${slider.label}${defaultLabel}</label>
                     <span class="text-xs text-larsnet-primary font-mono" id="tuning-val-${slider.key}">${formatSliderValue(currentVal)}${unitLabel}</span>
@@ -270,6 +273,37 @@ function buildSlidersForStem(stemType) {
             </div>`);
 
         document.getElementById('tuning-cluster-feature')?.addEventListener('change', onClusterFeatureChange);
+    }
+
+    // Add hihat open/closed classification toggle (only for hihat stem)
+    if (stemType === 'hihat') {
+        const enabled = hihatClassificationEnabled[stemType] !== false; // default true
+        
+        container.insertAdjacentHTML('beforeend', `
+            <div class="tuning-slider-row mt-3 pt-2 border-t border-gray-700">
+                <div class="flex items-center justify-between">
+                    <div class="flex-1">
+                        <label class="text-xs text-gray-300">🔔 Open/Closed Classification</label>
+                        <p class="text-[10px] text-gray-500">Distinguish open vs closed hi-hat</p>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer flex-shrink-0">
+                        <input type="checkbox" id="tuning-hihat-classify" class="sr-only peer" ${enabled ? 'checked' : ''}>
+                        <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-larsnet-primary"></div>
+                    </label>
+                </div>
+            </div>`);
+
+        document.getElementById('tuning-hihat-classify')?.addEventListener('change', onHihatClassificationToggle);
+        
+        // Initialize slider visibility based on toggle state
+        const sliderKeys = ['open_geomean_min', 'open_sustain_ms'];
+        const isEnabled = hihatClassificationEnabled[stemType] !== false;
+        sliderKeys.forEach(key => {
+            const sliderRow = document.querySelector(`[data-slider-key="${key}"]`);
+            if (sliderRow) {
+                sliderRow.style.display = isEnabled ? '' : 'none';
+            }
+        });
     }
 
     // Attach input listeners
@@ -352,6 +386,28 @@ function onClusterFeatureChange(e) {
     tuningSliderValues[stemType]['cluster_feature'] = feature;
 
     updateTuningSaveButton();
+    scheduleReclassify();
+}
+
+/**
+ * Handle hihat open/closed classification toggle.
+ */
+function onHihatClassificationToggle(e) {
+    const enabled = e.target.checked;
+    const stemType = waveformActiveStem || 'hihat';
+    
+    hihatClassificationEnabled[stemType] = enabled;
+    
+    // Show/hide the open/closed classification sliders
+    const sliderKeys = ['open_geomean_min', 'open_sustain_ms'];
+    sliderKeys.forEach(key => {
+        const sliderRow = document.querySelector(`[data-slider-key="${key}"]`);
+        if (sliderRow) {
+            sliderRow.style.display = enabled ? '' : 'none';
+        }
+    });
+    
+    // Re-run classification
     scheduleReclassify();
 }
 

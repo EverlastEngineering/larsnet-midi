@@ -45,7 +45,6 @@ def stems_to_midi_for_project(
     min_velocity: int = 80,
     max_velocity: int = 110,
     tempo: float = None,
-    detect_hihat_open: bool = False,
     stems_to_process: List[str] = None,
     max_duration: float = None,
     learning_mode: bool = False
@@ -62,7 +61,6 @@ def stems_to_midi_for_project(
         min_velocity: Minimum MIDI velocity
         max_velocity: Maximum MIDI velocity
         tempo: Tempo in BPM (None = use config)
-        detect_hihat_open: Try to detect open hi-hat hits
         stems_to_process: List of stem types to process (default: all)
         max_duration: Maximum duration in seconds (for faster learning)
         learning_mode: Enable learning mode (export all detections)
@@ -118,7 +116,6 @@ def stems_to_midi_for_project(
         min_velocity=min_velocity,
         max_velocity=max_velocity,
         tempo=tempo,
-        detect_hihat_open=detect_hihat_open,
         stems_to_process=stems_to_process,
         max_duration=max_duration,
         learning_mode=learning_mode
@@ -151,7 +148,6 @@ def _process_stems_to_midi(
     min_velocity: int,
     max_velocity: int,
     tempo: float,
-    detect_hihat_open: bool,
     stems_to_process: List[str],
     max_duration: float,
     learning_mode: bool
@@ -160,6 +156,9 @@ def _process_stems_to_midi(
     Internal function to process stems to MIDI (extracted from original stems_to_midi).
     
     This handles the core conversion logic, called by stems_to_midi_for_project().
+    
+    Hihat open/closed classification is always run using config thresholds
+    (open_geomean_min, open_sustain_ms) - no separate toggle.
     """
     # Apply learning mode if enabled
     if learning_mode:
@@ -199,7 +198,6 @@ def _process_stems_to_midi(
     print(f"  Hop length: {hop_length}")
     print(f"  Velocity range: {min_velocity}-{max_velocity}")
     print(f"  Tempo: {tempo} BPM")
-    print(f"  Detect open hi-hat: {detect_hihat_open}")
     if max_duration is not None:
         print(f"  Max duration: {max_duration} seconds (fast learning mode)")
     print()
@@ -244,12 +242,7 @@ def _process_stems_to_midi(
             
             stem_file = stem_files_dict[stem_type]
             
-            # For hihat, check config for detect_open setting (can be overridden by command-line flag)
-            hihat_detect = detect_hihat_open
-            if stem_type == 'hihat' and not detect_hihat_open:
-                # If not set via command-line, check config
-                hihat_detect = config.get('hihat', {}).get('detect_open', False)
-            
+            # Hihat open/closed classification always runs using config thresholds
             result = process_stem_to_midi(
                 stem_file,
                 stem_type,
@@ -261,7 +254,6 @@ def _process_stems_to_midi(
                 hop_length=hop_length,
                 min_velocity=min_velocity,
                 max_velocity=max_velocity,
-                detect_hihat_open=hihat_detect,
                 max_duration=max_duration
             )
             
@@ -392,8 +384,6 @@ MIDI Note Mapping (General MIDI):
                         help="Maximum MIDI velocity (1-127, default: 127).")
     parser.add_argument('--tempo', type=float, default=None,
                         help="Tempo in BPM for MIDI timing (default: read from midiconfig.yaml).")
-    parser.add_argument('--detect-hihat-open', action='store_true',
-                        help="Enable open/closed hi-hat detection (disabled by default - most hits will be closed).")
     parser.add_argument('--stems', type=str, nargs='+',
                         choices=['kick', 'snare', 'toms', 'hihat', 'cymbals'],
                         help="Specific stems to process (default: all).")
@@ -459,7 +449,6 @@ MIDI Note Mapping (General MIDI):
         min_velocity=args.min_vel,
         max_velocity=args.max_vel,
         tempo=args.tempo,
-        detect_hihat_open=args.detect_hihat_open,
         stems_to_process=args.stems,
         max_duration=args.maxtime,
         learning_mode=args.learn

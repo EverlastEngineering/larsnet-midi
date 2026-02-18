@@ -76,8 +76,7 @@ async function startMidi() {
             hop_length: null, // Not exposed in basic UI
             min_velocity: settings.min_velocity,
             max_velocity: settings.max_velocity,
-            tempo: settings.tempo,
-            detect_hihat_open: settings.detect_hihat_open
+            tempo: settings.tempo
         });
         
         showToast('MIDI conversion started', 'success');

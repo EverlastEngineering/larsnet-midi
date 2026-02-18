@@ -734,7 +734,6 @@ def process_stem_to_midi(
     hop_length: int,
     min_velocity: int = 80,
     max_velocity: int = 110,
-    detect_hihat_open: bool = True,
     max_duration: Optional[float] = None
 ) -> List[Dict]:
     """
@@ -754,7 +753,6 @@ def process_stem_to_midi(
         onset_threshold: Threshold for onset detection (0-1)
         min_velocity: Minimum MIDI velocity
         max_velocity: Maximum MIDI velocity
-        detect_hihat_open: Try to detect open hi-hat
         max_duration: Maximum duration in seconds to analyze (None = all)
     
     Returns:
@@ -1158,10 +1156,11 @@ def process_stem_to_midi(
     # Step 5: Get MIDI note number (default for stem type)
     note = getattr(drum_mapping, stem_type)
     
-    # Step 6: Classify hihat state (open/closed/handclap) from stored features
-    # Hihat uses detect_hihat_state which already works from spectral data.
+    # Step 6: Classify hihat state (open/closed) from stored features
+    # Hihat uses detect_hihat_state which works from spectral data.
     # Foot-close events are generated during MIDI creation based on hihat_state.
-    if stem_type == 'hihat' and detect_hihat_open:
+    # Always run classification using config thresholds (open_geomean_min, open_sustain_ms)
+    if stem_type == 'hihat':
         hihat_config = config.get('hihat', {})
         open_sustain_threshold = hihat_config.get('open_sustain_ms', 150)
         hihat_states = detect_hihat_state(

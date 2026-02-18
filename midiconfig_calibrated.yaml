@@ -63,7 +63,6 @@ hihat:
   onset_threshold: 0.05
   onset_delta: 0.01
   onset_wait: 5
-  detect_open: true
   decay_threshold: 0.65
   open_sustain_ms: 150
   min_sustain_ms: 25

@@ -11,6 +11,16 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 
 ## Open Bugs (Not Yet in GitHub)
 
+### events_configured contains events not in events_sensitive (data integrity)
+- **Status**: Open
+- **Priority**: High
+- **Description**: The events_configured array contained events that were not present in the events_sensitive array. This indicates corrupted analysis data.
+- **Steps to Reproduce**: Unknown - user reported this after changing settings and re-running
+- **Expected Behavior**: events_configured should always be a subset of events_sensitive
+- **Actual Behavior**: events_configured contained extra events not in events_sensitive
+- **Mitigation**: Deleted MIDI data and re-ran conversion to fix
+- **Prevention**: Consider adding validation in analysis loading or a toast warning in UI if this data inconsistency is detected
+
 ### Min Sustain slider has no effect on hihat filtering
 - **Status**: Fixed
 - **Priority**: High
@@ -168,6 +178,15 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 - **Status**: Open
 - **Priority**: High
 - **Description**: Dense stems (e.g., hi-hat, cymbals) have too many events packed together to see anything useful. No way to zoom in horizontally or pan across the waveform.
+
+### events_configured contains events not in events_sensitive
+- **Status**: Open
+- **Priority**: High
+- **Description**: Some events appeared in `events_configured` that were not present in `events_sensitive` array. This should never happen - if an event passes the configured threshold, it should either have been detected in the sensitive pass OR the threshold is lower than what is in config.
+- **Steps to Reproduce**: Unknown - user reported it after changing hihat tuning settings, fixed by deleting MIDI data and re-running
+- **Expected Behavior**: events_configured should always be a subset of events + events_sensitive
+- **Actual Behavior**: Some events in events_configured were not in events_sensitive
+- **Suggestion**: Add validation in the analysis data to detect this inconsistency and warn user (toast notification)
 - **Expected Behavior**: User can zoom in to see detail on dense passages and pan to navigate.
 - **Actual Behavior**: Entire track is rendered at full width with no zoom capability.
 

@@ -419,17 +419,6 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         cli_flag='--tempo',
     ),
     
-    SettingDefinition(
-        key='detect_hihat_open',
-        type=SettingType.BOOL,
-        default=False,
-        label='Detect Open Hi-Hat',
-        description='Distinguish between open and closed hi-hat using sustain analysis',
-        category=SettingCategory.MIDI_OUTPUT,
-        ui_control=UIControl.CHECKBOX,
-        cli_flag='--detect-hihat-open',
-    ),
-    
     # =================
     # Per-Stem Settings
     # =================

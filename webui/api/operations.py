@@ -306,8 +306,7 @@ def stems_to_midi():
             "hop_length": 512,       # optional
             "min_velocity": 80,      # optional
             "max_velocity": 110,     # optional
-            "tempo": 120.0,          # optional
-            "detect_hihat_open": false  # optional
+            "tempo": 120.0           # optional
         }
         
     Returns:

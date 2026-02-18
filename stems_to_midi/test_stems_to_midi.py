@@ -440,8 +440,7 @@ class TestProcessDrumToMIDI:
             onset_threshold=onset_threshold,
             onset_delta=onset_delta,
             onset_wait=onset_wait,
-            hop_length=hop_length,
-            detect_hihat_open=False
+            hop_length=hop_length
         )
         
         # Should return dict with events

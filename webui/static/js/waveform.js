@@ -59,6 +59,10 @@ const CLASSIFICATION_COLORS = [
     '#eab308',   // 3 — yellow
 ];
 
+// Hihat open/closed classification colors
+const HIHAT_OPEN_COLOR = '#f97316';   // Orange - open hi-hat
+const HIHAT_CLOSED_COLOR = '#06b6d4';  // Cyan - closed hi-hat
+
 const STEM_ORDER = ['kick', 'snare', 'toms', 'hihat', 'cymbals'];
 
 // Padding for each canvas panel (in CSS pixels)
@@ -510,7 +514,7 @@ function drawEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer
 
         const color = isSensitiveLayer
             ? WAVEFORM_COLORS.markerSensitive
-            : getMarkerColor(event.status, event.classification);
+            : getMarkerColor(event.status, event.classification, event.hihat_state);
 
         // Bar height from velocity (0-127)
         // When velocity is missing (sensitive/tuning events), estimate from strength
@@ -785,9 +789,17 @@ function drawThresholdLine(ctx, threshold, geomeanToY, PAD, plotW) {
     ctx.fillText('thr', PAD.left - 4, y + 3);
 }
 
-function getMarkerColor(status, classification) {
+function getMarkerColor(status, classification, hihatState = null) {
     switch (status) {
         case 'KEPT':
+            // Check for hihat open/closed classification first
+            if (hihatState === 'open') {
+                return HIHAT_OPEN_COLOR;
+            }
+            if (hihatState === 'closed') {
+                return HIHAT_CLOSED_COLOR;
+            }
+            // Fall back to classification index colors
             if (classification != null && CLASSIFICATION_COLORS[classification]) {
                 return CLASSIFICATION_COLORS[classification];
             }
@@ -822,28 +834,47 @@ function updateLegendBar(stemData, displayEvents) {
     const items = [];
 
     // Group KEPT events by classification index for color-coded legend
+    // For hihat stem, also group by hihat_state (open/closed)
     const classGroups = {};
+    const hihatOpenGroups = { open: 0, closed: 0 };
+    const isHihat = waveformActiveStem === 'hihat';
+    
     for (const e of keptEvents) {
-        const cls = e.classification != null ? e.classification : 0;
-        if (!classGroups[cls]) classGroups[cls] = 0;
-        classGroups[cls]++;
+        // Check for hihat open/closed classification first
+        if (isHihat && e.hihat_state) {
+            hihatOpenGroups[e.hihat_state]++;
+        } else {
+            const cls = e.classification != null ? e.classification : 0;
+            if (!classGroups[cls]) classGroups[cls] = 0;
+            classGroups[cls]++;
+        }
     }
 
-    const classKeys = Object.keys(classGroups).map(Number).sort();
-    if (classKeys.length <= 1) {
-        // Single classification (or no data) — show simple "Kept (N)"
-        if (keptEvents.length > 0) {
-            const cls = classKeys.length === 1 ? classKeys[0] : 0;
-            items.push({
-                color: CLASSIFICATION_COLORS[cls] || WAVEFORM_COLORS.markerKept,
-                label: `Kept (${keptEvents.length})`
-            });
+    // For hihat stem, show open/closed legend instead of classification colors
+    if (isHihat && (hihatOpenGroups.open > 0 || hihatOpenGroups.closed > 0)) {
+        if (hihatOpenGroups.open > 0) {
+            items.push({ color: HIHAT_OPEN_COLOR, label: `🔓 Open (${hihatOpenGroups.open})` });
+        }
+        if (hihatOpenGroups.closed > 0) {
+            items.push({ color: HIHAT_CLOSED_COLOR, label: `🔒 Closed (${hihatOpenGroups.closed})` });
         }
     } else {
-        // Multiple classifications — show each with its color
-        for (const cls of classKeys) {
-            const color = CLASSIFICATION_COLORS[cls] || WAVEFORM_COLORS.markerKept;
-            items.push({ color, label: `Type ${cls + 1} (${classGroups[cls]})` });
+        const classKeys = Object.keys(classGroups).map(Number).sort();
+        if (classKeys.length <= 1) {
+            // Single classification (or no data) — show simple "Kept (N)"
+            if (keptEvents.length > 0) {
+                const cls = classKeys.length === 1 ? classKeys[0] : 0;
+                items.push({
+                    color: CLASSIFICATION_COLORS[cls] || WAVEFORM_COLORS.markerKept,
+                    label: `Kept (${keptEvents.length})`
+                });
+            }
+        } else {
+            // Multiple classifications — show each with its color
+            for (const cls of classKeys) {
+                const color = CLASSIFICATION_COLORS[cls] || WAVEFORM_COLORS.markerKept;
+                items.push({ color, label: `Type ${cls + 1} (${classGroups[cls]})` });
+            }
         }
     }
 

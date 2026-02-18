@@ -303,6 +303,8 @@ def get_project_envelope(project_number, stem_type):
 
     Get energy envelope data for a specific stem, converted from .npz to JSON.
     Returns downsampled arrays suitable for Canvas rendering.
+    
+    Response is gzip-compressed for faster transfer.
 
     Args:
         stem_type: One of kick, snare, hihat, cymbals, toms
@@ -311,9 +313,15 @@ def get_project_envelope(project_number, stem_type):
         200: {times: [...], left: [...], right: [...], sr, hop_length, method}
         404: Project, stem, or envelope file not found
     """
+    import gzip
     import numpy as np
+    from flask import make_response
+    import time as time_module
 
     try:
+        # Performance checkpoint 1: Validation
+        t0 = time_module.perf_counter()
+        
         valid_stems = ['kick', 'snare', 'hihat', 'cymbals', 'toms']
         if stem_type not in valid_stems:
             return jsonify({
@@ -343,30 +351,38 @@ def get_project_envelope(project_number, stem_type):
                 'error': 'No envelope data',
                 'message': f'No envelope data for {stem_type} — re-run MIDI conversion to generate'
             }), 404
-
         data = np.load(npz_files[0], allow_pickle=False)
 
-        # Downsample if needed (target ~8000 points for high-res Canvas rendering)
-        times = data['times'].astype(float)
-        left = data['left'].astype(float)
-        right = data['right'].astype(float)
+        # Downsample if needed (target ~48000 points for high-res Canvas rendering)
+        # Load your data as usual
+        times_raw = data['times']
+        left_raw = data['left']
+        right_raw = data['right']
 
-        max_points = 8000
-        if len(times) > max_points:
-            step = len(times) / max_points
-            indices = np.arange(0, len(times), step).astype(int)[:max_points]
-            times = times[indices]
-            # Use max within each window for envelope (peak-preserving downsample)
-            left_ds = np.zeros(len(indices))
-            right_ds = np.zeros(len(indices))
-            for i, idx in enumerate(indices):
-                end = min(int(idx + step), len(data['left']))
-                left_ds[i] = data['left'][idx:end].max()
-                right_ds[i] = data['right'][idx:end].max()
-            left = left_ds
-            right = right_ds
+        max_points = 32000
+        n = len(times_raw)
 
-        return jsonify({
+        if n > max_points:
+            # 1. Calculate window size
+            window_size = n // max_points
+            # 2. Trim to a perfect multiple of window_size
+            limit = window_size * max_points
+            
+            # 3. Perform Vectorized Aggregation (Max)
+            # We reshape to (32000, window_size) then find the max of each row
+            left = left_raw[:limit].reshape(max_points, window_size).max(axis=1).astype(float)
+            right = right_raw[:limit].reshape(max_points, window_size).max(axis=1).astype(float)
+            
+            # 4. Downsample Time
+            # Taking the first timestamp of each window to keep them aligned
+            times = times_raw[:limit:window_size].astype(float)
+        else:
+            # If data is already small, just ensure types are correct for the web viewer
+            times = times_raw.astype(float)
+            left = left_raw.astype(float)
+            right = right_raw.astype(float)
+
+        response_data = {
             'stem_type': stem_type,
             'times': [round(float(t), 4) for t in times],
             'left': [round(float(v), 6) for v in left],
@@ -375,7 +391,26 @@ def get_project_envelope(project_number, stem_type):
             'hop_length': int(data['hop_length']),
             'method': str(data['method']),
             'sample_count': len(times),
-        }), 200
+        }
+        
+        # Only gzip if client explicitly accepts it (browser auto-decompresses)
+        accept_encoding = request.headers.get('Accept-Encoding', '')
+        
+        if 'gzip' in accept_encoding.lower():
+            json_str = json.dumps(response_data)
+            json_bytes = json_str.encode('utf-8')
+            compressed = gzip.compress(json_bytes, compresslevel=6)
+            
+            response = make_response(compressed)
+            response.headers['Content-Type'] = 'application/json'
+            response.headers['Content-Length'] = len(compressed)
+            response.headers['Content-Encoding'] = 'gzip'
+        else:
+            # Return uncompressed JSON for test clients
+            response = make_response(response_data)
+            response.headers['Content-Type'] = 'application/json'
+            
+        return response, 200
 
     except Exception as e:
         return jsonify({
