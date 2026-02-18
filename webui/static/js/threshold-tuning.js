@@ -863,6 +863,13 @@ async function saveTuningAndReconvert() {
         }
 
         // Step 3: Fall back to full pipeline
+        // Clear all tuning state before full reconvert - new analysis will be loaded when job completes
+        waveformTuningEvents = null;
+        waveformTuningActive = false;
+        tuningBaseEvents = null;
+        lastClassification = null;
+        if (typeof hideClusterCards === 'function') hideClusterCards();
+
         if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Reconverting…';
         const result = await api.stemsToMidi(currentProject.number);
         showToast('Full MIDI reconversion started (no cached analysis)', 'info');
