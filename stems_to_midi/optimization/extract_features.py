@@ -25,6 +25,7 @@ from stems_to_midi.analysis_core import (
     ensure_mono,
     calculate_peak_amplitude,
     filter_onsets_by_spectral,
+    get_spectral_config_for_stem,
     should_keep_onset
 )
 from project_manager import get_stem_file, get_project_by_number
@@ -141,13 +142,14 @@ def extract_features_from_stem(project_number: int, stem_type: str, output_dir: 
         min_sustain_ms = spectral_config.get('min_sustain_ms')
         min_strength_threshold = spectral_config.get('min_strength_threshold')
         
+        filter_mode = spectral_config.get('filter_mode', 'geomean_only')
         df['Status'] = df.apply(
             lambda row: 'KEPT' if should_keep_onset(
-                geomean=row['body_wire_geomean'],
+                geomean=row['geomean'],
                 sustain_ms=row.get('sustain_ms'),
                 geomean_threshold=geomean_threshold,
                 min_sustain_ms=min_sustain_ms,
-                stem_type=stem_type,
+                filter_mode=filter_mode,
                 strength=row.get('strength'),
                 min_strength_threshold=min_strength_threshold
             ) else 'REJECTED',
@@ -166,8 +168,8 @@ def extract_features_from_stem(project_number: int, stem_type: str, output_dir: 
         sustain_durations = [row.get('sustain_ms') for row in all_onset_data]
         spectral_data = [
             {
-                'primary_energy': row['primary_energy'],
-                'secondary_energy': row['secondary_energy']
+                'body_energy': row['body_energy'],
+                'sizzle_energy': row['sizzle_energy']
             }
             for row in all_onset_data
         ]
@@ -196,24 +198,19 @@ def extract_features_from_stem(project_number: int, stem_type: str, output_dir: 
               f"{sum(1 for s in hihat_states if s == 'closed')} closed")
     
     # Reorder columns for readability
-    column_order = ['time', 'strength', 'amplitude']
+    # Band energy columns are dynamic per stem (e.g., body_energy, wire_energy)
+    spectral_cfg = get_spectral_config_for_stem(stem_type, config)
+    geomean_bands = spectral_cfg.get('geomean_bands', [])
+    energy_labels = spectral_cfg.get('energy_labels', {})
+    band_energy_cols = [f'{b}_energy' for b in geomean_bands]
     
-    # Add stem-specific columns
+    column_order = ['time', 'strength', 'amplitude']
+    column_order.extend(band_energy_cols)
+    column_order.extend(['total_energy', 'geomean', 'sustain_ms', 'Status'])
+    
     if stem_type == 'hihat':
-        column_order.extend(['primary_energy', 'secondary_energy', 'total_energy', 
-                            'body_wire_geomean', 'sustain_ms', 'Status',
-                            'detected_open', 'detected_closed',
+        column_order.extend(['detected_open', 'detected_closed',
                             'actual_open', 'actual_closed'])
-    elif stem_type == 'kick':
-        if 'tertiary_energy' in df.columns:
-            column_order.extend(['primary_energy', 'secondary_energy', 'tertiary_energy', 
-                                'total_energy', 'body_wire_geomean', 'Status'])
-        else:
-            column_order.extend(['primary_energy', 'secondary_energy', 'total_energy', 
-                                'body_wire_geomean', 'Status'])
-    else:
-        column_order.extend(['primary_energy', 'secondary_energy', 'total_energy', 
-                            'body_wire_geomean', 'Status'])
     
     # Keep only columns that exist
     column_order = [col for col in column_order if col in df.columns]
@@ -224,13 +221,14 @@ def extract_features_from_stem(project_number: int, stem_type: str, output_dir: 
         'time': 'Time',
         'strength': 'Str',
         'amplitude': 'Amp',
-        'primary_energy': 'BodyE' if stem_type != 'kick' else 'FundE',
-        'secondary_energy': 'SizzleE' if stem_type == 'hihat' else 'WireE' if stem_type == 'snare' else 'BodyE',
-        'tertiary_energy': 'AttackE',  # Kick only
         'total_energy': 'Total',
-        'body_wire_geomean': 'GeoMean',
+        'geomean': 'GeoMean',
         'sustain_ms': 'SustainMs'
     }
+    # Add dynamic band energy renames (e.g., body_energy -> BodyE)
+    for band in geomean_bands:
+        label = energy_labels.get(band, band.capitalize())
+        rename_map[f'{band}_energy'] = f'{label}E'
     df = df.rename(columns=rename_map)
     
     # Remove Status column - we'll populate from actual MIDI output

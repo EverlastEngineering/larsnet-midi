@@ -1,0 +1,760 @@
+"""
+Note Classification — Functional Core
+
+Classifies MIDI note assignments from stored spectral features on the
+final KEPT event set. Runs identically in both the full pipeline and
+the rebuild pipeline.
+
+Pass 2 of the two-pass architecture:
+  Pass 1: Detect onsets, compute spectral features, apply threshold filters.
+  Pass 2: Classify notes from stored features on KEPT events only (this module).
+
+Pure functions — no I/O, no audio, no side effects.
+"""
+
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+
+
+# ============================================================================
+# Hihat Classification (threshold-based)
+# ============================================================================
+
+
+def classify_hihat_notes(
+    events: List[Dict],
+    config: Dict,
+) -> List[Dict]:
+    """
+    Classify hihat events as open or closed from stored spectral features.
+
+    Uses geomean (sqrt(body_energy * sizzle_energy)) and sustain_ms
+    to distinguish open from closed hits. Matches the logic in
+    detection_shell.detect_hihat_state() but operates on stored data.
+
+    Args:
+        events: KEPT hihat event dicts with body_energy, sizzle_energy,
+            sustain_ms, and optionally geomean fields.
+        config: Full config dict. Reads hihat.open_geomean_min (default 262)
+            and hihat.open_sustain_ms (default 150).
+
+    Returns:
+        Same events with 'hihat_state' field set to 'open' or 'closed'.
+    """
+    hihat_config = config.get('hihat', {})
+    open_geomean_min = hihat_config.get('open_geomean_min', 262.0)
+    open_sustain_ms = hihat_config.get('open_sustain_ms', 150.0)
+
+    for event in events:
+        # Use stored geomean if available, otherwise compute from energies
+        geomean = event.get('geomean')
+        if geomean is None:
+            body = event.get('body_energy', 0)
+            sizzle = event.get('sizzle_energy', 0)
+            geomean = np.sqrt(body * sizzle) if (body > 0 and sizzle > 0) else 0
+
+        sustain = event.get('sustain_ms', 0) or 0
+
+        if geomean >= open_geomean_min and sustain >= open_sustain_ms:
+            event['hihat_state'] = 'open'
+        else:
+            event['hihat_state'] = 'closed'
+
+    return events
+
+
+# ============================================================================
+# Clustering Helpers
+# ============================================================================
+
+
+def _extract_feature_values(
+    events: List[Dict],
+    feature_key: str,
+    allow_zero: bool = False,
+) -> Tuple[np.ndarray, List[int]]:
+    """
+    Extract a numeric feature from events, returning values and valid indices.
+
+    Args:
+        events: Event dicts.
+        feature_key: Key to extract (e.g. 'spectral_centroid_hz').
+        allow_zero: If True, include zero values as valid. Use for features
+            like stereo_width where 0.0 is meaningful (perfectly mono).
+
+    Returns:
+        Tuple of (values array for valid events, list of valid indices).
+    """
+    values = []
+    valid_indices = []
+    for i, event in enumerate(events):
+        val = event.get(feature_key)
+        if val is not None:
+            if allow_zero or val > 0:
+                values.append(float(val))
+                valid_indices.append(i)
+    return np.array(values), valid_indices
+
+
+# Per-stem feature fallback priorities (first match with data wins)
+# Note: pitch_hz is only available for toms (calculated in analysis_core.py)
+_FEATURE_PRIORITIES = {
+    'snare': ['stereo_width', 'spectral_centroid_hz'],
+    'toms': ['pitch_hz', 'spectral_centroid_hz', 'stereo_width'],
+    'cymbals': ['spectral_centroid_hz', 'stereo_width'],
+}
+
+# Features where 0.0 is a valid measurement (not missing data)
+_ALLOW_ZERO_FEATURES = {'stereo_width', 'pan_confidence'}
+
+
+def _resolve_cluster_feature(
+    events: List[Dict],
+    stem_type: str,
+    config: Dict,
+) -> Tuple[np.ndarray, List[int]]:
+    """
+    Resolve which feature to cluster on and extract its values.
+
+    Reads config[stem_type]['cluster_feature']. When 'auto' (default),
+    walks the priority list for the stem and uses the first feature with
+    sufficient data. When a specific feature is named, tries it first
+    then falls back to the priority chain.
+
+    Args:
+        events: Event dicts with feature data.
+        stem_type: Stem type for priority lookup.
+        config: Full config dict.
+
+    Returns:
+        Tuple of (values array, valid indices list).
+    """
+    stem_config = config.get(stem_type, {})
+    chosen = stem_config.get('cluster_feature', 'auto')
+    priorities = _FEATURE_PRIORITIES.get(stem_type, ['spectral_centroid_hz'])
+
+    # Build ordered feature list: explicit choice first, then fallbacks
+    if chosen and chosen != 'auto':
+        feature_order = [chosen] + [f for f in priorities if f != chosen]
+    else:
+        feature_order = list(priorities)
+
+    for feat in feature_order:
+        allow_zero = feat in _ALLOW_ZERO_FEATURES
+        values, valid_indices = _extract_feature_values(
+            events, feat, allow_zero=allow_zero,
+        )
+        if len(values) > 0:
+            return values, valid_indices
+
+    return np.array([]), []
+
+
+def _cluster_values(
+    values: np.ndarray,
+    k: int,
+) -> np.ndarray:
+    """
+    Cluster 1-D values into k groups using k-means, sorted by magnitude.
+
+    Returns classification indices 0..k-1 where 0 = lowest centroid.
+    Falls back to percentile-based splitting when sklearn is unavailable
+    or when fewer than k unique values exist.
+
+    Args:
+        values: 1-D array of positive numeric values.
+        k: Number of clusters.
+
+    Returns:
+        Array of classification indices (same length as values).
+    """
+    if len(values) == 0:
+        return np.array([], dtype=int)
+
+    unique = np.unique(values)
+    n_unique = len(unique)
+
+    # Fewer unique values than clusters — assign by rank
+    if n_unique < k:
+        sorted_unique = np.sort(unique)
+        # Spread unique values across classification range
+        # e.g., 2 unique with k=3 → assign to indices 0 and 2
+        if n_unique == 1:
+            return np.zeros(len(values), dtype=int)
+        spacing = (k - 1) / (n_unique - 1)
+        rank_map = {v: int(round(i * spacing)) for i, v in enumerate(sorted_unique)}
+        return np.array([rank_map[v] for v in values], dtype=int)
+
+    # Try sklearn k-means
+    try:
+        from sklearn.cluster import KMeans
+
+        X = values.reshape(-1, 1)
+        kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+        kmeans.fit(X)
+
+        # Sort clusters by center value (0 = lowest)
+        centers = kmeans.cluster_centers_.flatten()
+        sorted_indices = np.argsort(centers)
+        label_map = {old: new for new, old in enumerate(sorted_indices)}
+
+        return np.array([label_map[lbl] for lbl in kmeans.labels_], dtype=int)
+
+    except ImportError:
+        # Fallback: percentile-based splitting
+        percentiles = [100 * (i + 1) / k for i in range(k - 1)]
+        thresholds = [np.percentile(values, p) for p in percentiles]
+
+        classifications = np.zeros(len(values), dtype=int)
+        for i, val in enumerate(values):
+            for j, threshold in enumerate(thresholds):
+                if val > threshold:
+                    classifications[i] = j + 1
+        return classifications
+
+
+# ============================================================================
+# Tom Classification (k-means on spectral centroid)
+# ============================================================================
+
+
+def classify_tom_notes(
+    events: List[Dict],
+    config: Dict,
+) -> List[Dict]:
+    """
+    Classify tom events into low/mid/high using configurable feature clustering.
+
+    Default: k-means (k=3) on spectral_centroid_hz. The clustering feature
+    can be overridden via config['toms']['cluster_feature'] (e.g. 'stereo_width'
+    for panning-based separation). Falls through a priority chain when the
+    chosen feature has insufficient data.
+
+    Args:
+        events: KEPT tom event dicts with spectral_centroid_hz field.
+        config: Full config dict. Reads toms.expected_clusters (default 3)
+            and toms.cluster_feature (default 'auto').
+
+    Returns:
+        Same events with 'classification' field: 0=low, 1=mid, 2=high.
+    """
+    toms_config = config.get('toms', {})
+    expected_clusters = toms_config.get('expected_clusters') or 3
+    expected_clusters = max(1, min(4, int(expected_clusters)))
+
+    if expected_clusters == 1:
+        for event in events:
+            event['classification'] = 0
+        return events
+
+    values, valid_indices = _resolve_cluster_feature(
+        events, 'toms', config,
+    )
+
+    if len(values) == 0:
+        for event in events:
+            event['classification'] = 1  # mid tom default
+        return events
+
+    n_unique = len(np.unique(values))
+    k = min(expected_clusters, n_unique)
+    labels = _cluster_values(values, k=k)
+
+    for event in events:
+        event['classification'] = 1  # mid tom default
+
+    for idx, vi in enumerate(valid_indices):
+        events[vi]['classification'] = int(labels[idx])
+
+    return events
+
+
+# ============================================================================
+# Cymbal Classification (k-means on spectral centroid)
+# ============================================================================
+
+
+def classify_cymbal_notes(
+    events: List[Dict],
+    config: Dict,
+) -> List[Dict]:
+    """
+    Classify cymbal events into crash/ride/chinese using configurable feature.
+
+    Default: k-means on spectral_centroid_hz. The clustering feature can be
+    overridden via config['cymbals']['cluster_feature'] (e.g. 'stereo_width'
+    for L/R panning-based separation).
+
+    Args:
+        events: KEPT cymbal event dicts with spectral_centroid_hz field.
+        config: Full config dict. Reads cymbals.expected_clusters (default 2)
+            and cymbals.cluster_feature (default 'auto').
+
+    Returns:
+        Same events with 'classification' field: 0=crash, 1=ride, 2=chinese.
+    """
+    cymbal_config = config.get('cymbals', {})
+    expected_clusters = cymbal_config.get('expected_clusters') or 2
+    expected_clusters = max(1, min(4, int(expected_clusters)))
+
+    if expected_clusters == 1:
+        for event in events:
+            event['classification'] = 0
+        return events
+
+    values, valid_indices = _resolve_cluster_feature(
+        events, 'cymbals', config,
+    )
+
+    if len(values) == 0:
+        for event in events:
+            event['classification'] = 0  # crash default
+        return events
+
+    n_unique = len(np.unique(values))
+    k = min(expected_clusters, n_unique)
+    labels = _cluster_values(values, k=k)
+
+    for event in events:
+        event['classification'] = 0  # crash default
+
+    for idx, vi in enumerate(valid_indices):
+        events[vi]['classification'] = int(labels[idx])
+
+    return events
+
+
+# ============================================================================
+# Snare Classification (k-means on stereo width)
+# ============================================================================
+
+
+def classify_snare_notes(
+    events: List[Dict],
+    config: Dict,
+) -> List[Dict]:
+    """
+    Classify snare events into sub-types using stereo width.
+
+    Uses k-means on stereo_width to distinguish mono snare hits from
+    wide stereo claps/layered sounds. The number of clusters is
+    controlled by config['snare']['expected_clusters'] (1-3, default 2).
+    Sorted by width: 0=snare (narrowest/mono), 1=clap (wider stereo).
+
+    When expected_clusters=1, all events are assigned classification=0
+    (pure snare, no sub-type splitting).
+
+    Falls back to spectral_centroid_hz when stereo_width data is absent
+    (mono source audio).
+
+    Args:
+        events: KEPT snare event dicts with stereo_width and/or
+            spectral_centroid_hz fields.
+        config: Full config dict. Reads snare.expected_clusters (default 2).
+
+    Returns:
+        Same events with 'classification' field: 0-2.
+    """
+    snare_config = config.get('snare', {})
+    expected_clusters = snare_config.get('expected_clusters') or 2
+    expected_clusters = max(1, min(3, int(expected_clusters)))  # Clamp to 1-3
+
+    # With 1 cluster, all events are plain snare — skip clustering
+    if expected_clusters == 1:
+        for event in events:
+            event['classification'] = 0
+        return events
+
+    values, valid_indices = _resolve_cluster_feature(
+        events, 'snare', config,
+    )
+
+    if len(values) == 0:
+        for event in events:
+            event['classification'] = 0
+        return events
+
+    # Use k = min(expected_clusters, number of unique values)
+    n_unique = len(np.unique(values))
+    k = min(expected_clusters, n_unique)
+
+    labels = _cluster_values(values, k=k)
+
+    # Set default for events without valid feature data
+    for event in events:
+        event['classification'] = 0  # snare default
+
+    # Apply cluster labels to valid events
+    for idx, vi in enumerate(valid_indices):
+        events[vi]['classification'] = int(labels[idx])
+
+    return events
+
+
+# ============================================================================
+# Note Mapping
+# ============================================================================
+
+
+# Maps (stem_type, classification_index) → DrumMapping attribute name
+_NOTE_MAP = {
+    'hihat': {
+        'open': 'hihat_open',
+        'closed': 'hihat_closed',
+        'handclap': 'handclap',
+    },
+    'toms': {
+        0: 'tom_low',
+        1: 'tom_mid',
+        2: 'tom_high',
+    },
+    'cymbals': {
+        0: 'crash',
+        1: 'ride',
+        2: 'chinese',
+    },
+    'snare': {
+        0: 'snare',
+        1: 'snare_rimshot',
+        2: 'snare_clap',
+    },
+}
+
+
+def _map_note(
+    event: Dict,
+    stem_type: str,
+    drum_mapping,
+    config: Optional[Dict] = None,
+) -> int:
+    """
+    Map a classified event to its MIDI note number.
+
+    When config contains a cluster_note_map for the stem, use it directly
+    (maps classification index → MIDI note number). Otherwise fall back
+    to the default _NOTE_MAP → DrumMapping attribute lookup.
+
+    Args:
+        event: Event dict with 'hihat_state' (hihat) or 'classification' (others).
+        stem_type: One of 'hihat', 'toms', 'cymbals', 'snare', 'kick'.
+        drum_mapping: DrumMapping instance.
+        config: Optional full config dict. When present, checks for
+            config[stem_type]['cluster_note_map'] = {0: 38, 1: 39, ...}.
+
+    Returns:
+        MIDI note number.
+    """
+    if stem_type == 'hihat':
+        state = event.get('hihat_state', 'closed')
+        attr = _NOTE_MAP['hihat'].get(state, 'hihat_closed')
+        return getattr(drum_mapping, attr)
+
+    # Check for custom cluster→note mapping in config
+    if config:
+        stem_config = config.get(stem_type, {})
+        cluster_note_map = stem_config.get('cluster_note_map')
+        if cluster_note_map:
+            cls = event.get('classification', 0)
+            note = cluster_note_map.get(cls) or cluster_note_map.get(str(cls))
+            if note is not None:
+                return int(note)
+
+    mapping = _NOTE_MAP.get(stem_type)
+    if mapping is not None:
+        cls = event.get('classification', 0)
+        attr = mapping.get(cls)
+        if attr is not None:
+            return getattr(drum_mapping, attr)
+
+    # Fallback: default note for stem type
+    return getattr(drum_mapping, stem_type, 36)
+
+
+# ============================================================================
+# Cluster Analysis
+# ============================================================================
+
+# Features to analyze per cluster, in priority order for each stem
+# Note: pitch_hz is only available for toms (calculated in analysis_core.py)
+_CLUSTER_FEATURES = {
+    'snare': ['stereo_width', 'pan_confidence', 'spectral_centroid_hz'],
+    'toms': ['pitch_hz', 'spectral_centroid_hz', 'stereo_width', 'pan_confidence'],
+    'cymbals': ['spectral_centroid_hz', 'stereo_width', 'pan_confidence'],
+    'hihat': ['geomean', 'duration_sec'],
+}
+
+# Human-readable labels for features
+_FEATURE_LABELS = {
+    'stereo_width': 'Stereo Width',
+    'pan_confidence': 'Pan Position',
+    'spectral_centroid_hz': 'Brightness',
+    'pitch_hz': 'Pitch',
+    'geomean': 'Energy',
+    'duration_sec': 'Duration',
+    'total_energy': 'Total Energy',
+}
+
+
+def analyze_clusters(
+    events: List[Dict],
+    stem_type: str,
+    drum_mapping,
+) -> List[Dict]:
+    """
+    Analyze classified events and return per-cluster metadata.
+
+    Examines which features best distinguish each cluster and provides
+    statistics for the UI to display meaningful cluster descriptions.
+
+    Args:
+        events: KEPT events that have already been classified (have
+            'classification' and 'note' fields set).
+        stem_type: Stem type for feature priority lookup.
+        drum_mapping: DrumMapping instance for note labels.
+
+    Returns:
+        List of cluster info dicts sorted by classification index:
+        [
+            {
+                'classification': 0,
+                'note': 38,
+                'note_label': 'Snare',
+                'count': 200,
+                'features': {
+                    'stereo_width': {'mean': 0.03, 'min': 0.01, 'max': 0.08},
+                    'pan_confidence': {'mean': -0.02, 'min': -0.1, 'max': 0.05},
+                    ...
+                },
+                'distinguishing_feature': 'stereo_width',
+                'distinguishing_label': 'Stereo Width',
+                'description': 'Narrow stereo (mono)',
+            },
+            ...
+        ]
+    """
+    if not events:
+        return []
+
+    # Group events by classification
+    clusters: Dict[int, List[Dict]] = {}
+    for event in events:
+        cls = event.get('classification', 0)
+        clusters.setdefault(cls, []).append(event)
+
+    features_to_check = _CLUSTER_FEATURES.get(stem_type, ['spectral_centroid_hz'])
+
+    # Compute per-cluster feature stats
+    cluster_infos = []
+    for cls_idx in sorted(clusters.keys()):
+        cluster_events = clusters[cls_idx]
+        note_num = cluster_events[0].get('note')
+        note_info = _NOTE_MAP.get(stem_type, {}).get(cls_idx)
+        note_label = note_info.replace('_', ' ').title() if note_info else f'Type {cls_idx}'
+
+        feature_stats = {}
+        for feat in features_to_check:
+            vals = [
+                e[feat] for e in cluster_events
+                if feat in e and e[feat] is not None
+            ]
+            if vals:
+                feature_stats[feat] = {
+                    'mean': round(float(np.mean(vals)), 4),
+                    'min': round(float(np.min(vals)), 4),
+                    'max': round(float(np.max(vals)), 4),
+                }
+
+        cluster_infos.append({
+            'classification': cls_idx,
+            'note': note_num,
+            'note_label': note_label,
+            'count': len(cluster_events),
+            'features': feature_stats,
+        })
+
+    # Find the feature that best distinguishes the clusters
+    _annotate_distinguishing_features(cluster_infos, features_to_check)
+
+    return cluster_infos
+
+
+def _annotate_distinguishing_features(
+    cluster_infos: List[Dict],
+    features: List[str],
+) -> None:
+    """
+    Annotate each cluster with the feature that most separates it from others.
+
+    Uses the ratio of between-cluster to within-cluster variance for each
+    feature. The feature with the highest ratio is the best discriminator.
+    Also generates a human-readable description per cluster.
+    """
+    if len(cluster_infos) <= 1:
+        for info in cluster_infos:
+            info['distinguishing_feature'] = features[0] if features else None
+            info['distinguishing_label'] = _FEATURE_LABELS.get(
+                features[0], features[0]) if features else None
+            info['description'] = f'{info["count"]} events'
+        return
+
+    # Find best discriminating feature across all clusters
+    best_feature = features[0]
+    best_separation = 0.0
+
+    for feat in features:
+        means = [
+            info['features'][feat]['mean']
+            for info in cluster_infos
+            if feat in info['features']
+        ]
+        if len(means) < 2:
+            continue
+
+        # Separation = range of means / average within-cluster range
+        mean_range = max(means) - min(means)
+        within_ranges = []
+        for info in cluster_infos:
+            if feat in info['features']:
+                s = info['features'][feat]
+                within_ranges.append(s['max'] - s['min'])
+        avg_within = np.mean(within_ranges) if within_ranges else 1e-9
+        separation = mean_range / (avg_within + 1e-9)
+
+        if separation > best_separation:
+            best_separation = separation
+            best_feature = feat
+
+    # Annotate each cluster
+    feat_label = _FEATURE_LABELS.get(best_feature, best_feature)
+    for info in cluster_infos:
+        info['distinguishing_feature'] = best_feature
+        info['distinguishing_label'] = feat_label
+
+        # Generate description based on relative position
+        if best_feature in info['features']:
+            mean_val = info['features'][best_feature]['mean']
+            all_means = [
+                ci['features'][best_feature]['mean']
+                for ci in cluster_infos
+                if best_feature in ci['features']
+            ]
+            all_means_sorted = sorted(all_means)
+            rank = all_means_sorted.index(mean_val)
+            total = len(all_means_sorted)
+
+            info['description'] = _describe_cluster(
+                best_feature, mean_val, rank, total,
+            )
+        else:
+            info['description'] = f'{info["count"]} events'
+
+
+def _describe_cluster(
+    feature: str,
+    mean_val: float,
+    rank: int,
+    total: int,
+) -> str:
+    """Generate a human-readable cluster description."""
+    if total <= 1:
+        return f'{_FEATURE_LABELS.get(feature, feature)}: {mean_val:.3f}'
+
+    position = rank / (total - 1)  # 0.0 = lowest, 1.0 = highest
+
+    descriptors = {
+        'stereo_width': {
+            0.0: 'Narrow (mono)',
+            0.5: 'Medium width',
+            1.0: 'Wide (stereo)',
+        },
+        'pan_confidence': {
+            0.0: 'Panned left',
+            0.5: 'Center',
+            1.0: 'Panned right',
+        },
+        'spectral_centroid_hz': {
+            0.0: 'Low pitch',
+            0.5: 'Mid pitch',
+            1.0: 'High pitch',
+        },
+        'geomean': {
+            0.0: 'Low energy',
+            0.5: 'Medium energy',
+            1.0: 'High energy',
+        },
+        'duration_sec': {
+            0.0: 'Short',
+            0.5: 'Medium length',
+            1.0: 'Long',
+        },
+    }
+
+    feat_descriptors = descriptors.get(feature, {
+        0.0: 'Low', 0.5: 'Medium', 1.0: 'High',
+    })
+
+    # Pick closest descriptor
+    if position <= 0.25:
+        desc = feat_descriptors[0.0]
+    elif position >= 0.75:
+        desc = feat_descriptors[1.0]
+    else:
+        desc = feat_descriptors[0.5]
+
+    return desc
+
+
+# ============================================================================
+# Main Entry Point
+# ============================================================================
+
+
+def classify_notes(
+    events: List[Dict],
+    stem_type: str,
+    drum_mapping,
+    config: Dict,
+) -> List[Dict]:
+    """
+    Classify and assign MIDI notes to KEPT events based on stored features.
+
+    This is the Pass 2 entry point. Runs the per-stem classifier, then
+    maps classification results to MIDI note numbers via DrumMapping.
+
+    Modifies events in place (adds 'note', 'hihat_state'/'classification' fields).
+
+    Args:
+        events: KEPT event dicts from a single stem, with stored spectral
+            features (spectral_centroid_hz, sustain_ms, energy bands).
+        stem_type: Stem type ('hihat', 'toms', 'cymbals', 'snare', 'kick').
+        drum_mapping: DrumMapping instance with note number attributes.
+        config: Full config dict.
+
+    Returns:
+        Same events with 'note' field set to the classified MIDI note.
+    """
+    if not events:
+        return events
+
+    # Kick has no sub-classification — always the same note
+    if stem_type == 'kick':
+        for event in events:
+            event['note'] = drum_mapping.kick
+        return events
+
+    # Run per-stem classifier
+    if stem_type == 'hihat':
+        classify_hihat_notes(events, config)
+    elif stem_type == 'toms':
+        classify_tom_notes(events, config)
+    elif stem_type == 'cymbals':
+        classify_cymbal_notes(events, config)
+    elif stem_type == 'snare':
+        classify_snare_notes(events, config)
+
+    # Map classification to MIDI note numbers
+    for event in events:
+        event['note'] = _map_note(event, stem_type, drum_mapping, config)
+
+    return events

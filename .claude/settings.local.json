@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(*)",
+      "Bash(source:*)",
+      "Bash(conda activate:*)",
+      "Bash(python -c:*)",
+      "mcp__context7__resolve-library-id",
+      "WebSearch",
+      "WebFetch(domain:mkdocstrings.github.io)"
+    ],
+    "bypassPermissions": true
+  }
+}

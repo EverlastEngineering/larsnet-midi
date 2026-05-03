@@ -12,7 +12,7 @@ Architecture: Imperative Shell (Algorithm Coordinators)
 Detection Output Contract:
 - This module CONSUMES SpectralOnsetData from analysis_core.py
 - Contract defined in midi_types.py (SpectralOnsetData TypedDict)
-- Uses: primary_energy, secondary_energy for hihat open/closed classification
+- Uses: body_energy, sizzle_energy for hihat open/closed classification
 
 Note: This module contains coordinators, not pure functions. Pure functions are in helpers.
 """
@@ -224,7 +224,7 @@ def detect_snare_pitch(
     """
     Detect the pitch of a snare hit using YIN or pYIN algorithm.
     
-    Used to distinguish between snare types: regular snare, rimshot, clap, clap+snare.
+    Used to distinguish between snare types: regular snare, rimshot, clap.
     Note: Later can be enhanced with stereo info and envelope profile.
     
     Args:
@@ -426,7 +426,7 @@ def detect_hihat_state(
     
     Detection Output Contract (Consumer):
         This function CONSUMES SpectralOnsetData from analysis_core.py.
-        Required fields: primary_energy (Body), secondary_energy (Sizzle)
+        Required fields: body_energy (Body), sizzle_energy (Sizzle)
         See midi_types.SpectralOnsetData for full contract.
     
     Args:
@@ -455,11 +455,11 @@ def detect_hihat_state(
         spectral_data is not None and len(spectral_data) == len(onset_times)):
         for i, sustain_ms in enumerate(sustain_durations):
             # Get spectral energies for this onset
-            primary_energy = spectral_data[i].get('primary_energy', 0)  # BodyE
-            secondary_energy = spectral_data[i].get('secondary_energy', 0)  # SizzleE
+            body_energy = spectral_data[i].get('body_energy', 0)
+            sizzle_energy = spectral_data[i].get('sizzle_energy', 0)
             
             # Calculate GeoMean (same as filtering uses)
-            geomean = np.sqrt(primary_energy * secondary_energy) if (primary_energy > 0 and secondary_energy > 0) else 0
+            geomean = np.sqrt(body_energy * sizzle_energy) if (body_energy > 0 and sizzle_energy > 0) else 0
             
             # Classify using learned thresholds:
             # Open = GeoMean >= 262 AND SustainMs >= 100

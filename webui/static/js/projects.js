@@ -134,6 +134,17 @@ async function selectProject(projectNumber) {
             operationsContainer.style.maxHeight = operationsContainer.scrollHeight + 'px';
         }
         
+        // Initialize waveform viewer (loads analysis data asynchronously)
+        if (typeof initWaveformViewer === 'function') {
+            initWaveformViewer(currentProject).then(() => {
+                // Expand analysis section if data was loaded
+                const analysisContainer = document.getElementById('analysis-container');
+                if (analysisContainer && !analysisContainer.style.maxHeight) {
+                    analysisContainer.style.maxHeight = analysisContainer.scrollHeight + 'px';
+                }
+            });
+        }
+        
         // Load active jobs for this project
         loadProjectJobs(projectNumber);
         

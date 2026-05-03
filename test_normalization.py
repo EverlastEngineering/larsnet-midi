@@ -37,8 +37,7 @@ else:
         onset_threshold=config['onset_detection']['threshold'],
         onset_delta=config['onset_detection']['delta'],
         onset_wait=config['onset_detection']['wait'],
-        hop_length=config['onset_detection']['hop_length'],
-        detect_hihat_open=True
+        hop_length=config['onset_detection']['hop_length']
     )
     
     print(f"\n✓ Detected {len(result['events'])} hihat events")

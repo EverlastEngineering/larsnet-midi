@@ -64,3 +64,8 @@ Miniforge3-*.sh
 Mambaforge-*.sh
 Miniconda-*.sh
 Anaconda-*.sh
+
+# MkDocs output (generated)
+site/
+.claude/settings.local.json
+.claude/settings.local.json

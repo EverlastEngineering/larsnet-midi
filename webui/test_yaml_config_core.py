@@ -256,6 +256,26 @@ class TestYAMLConfigEngine:
         success, error = config_engine.update_value(['nonexistent', 'key'], 42)
         assert success is False
         assert error != ""
+
+    def test_create_new_key_in_existing_section(self, config_engine):
+        """New keys can be created within existing dict sections."""
+        config_engine.load()
+
+        # 'kick' section exists, but 'cluster_note_map' does not
+        success, error = config_engine.update_value(
+            ['kick', 'cluster_note_map'], {0: 38, 1: 39}
+        )
+        assert success is True
+        assert error == ""
+        assert config_engine._data['kick']['cluster_note_map'] == {0: 38, 1: 39}
+
+    def test_create_new_key_rejected_at_top_level(self, config_engine):
+        """New top-level keys (path length 1) are still rejected."""
+        config_engine.load()
+
+        success, error = config_engine.update_value(['brand_new_section'], 'oops')
+        assert success is False
+        assert 'not found' in error.lower()
     
     def test_round_trip_save(self, config_engine, temp_yaml_file):
         """Test saving changes preserves formatting and comments"""

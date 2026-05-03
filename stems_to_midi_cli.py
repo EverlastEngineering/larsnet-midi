@@ -22,8 +22,9 @@ import sys
 
 # Import modules (thin orchestration layer)
 from stems_to_midi.config import DrumMapping
-from stems_to_midi.midi import create_midi_file, save_analysis_sidecar
+from stems_to_midi.midi import create_midi_file, save_analysis_sidecar, save_envelope_data, load_analysis_sidecar
 from stems_to_midi.processing_shell import process_stem_to_midi
+from stems_to_midi.rebuild_core import rebuild_events_from_analysis
 
 # Import project manager
 from project_manager import (
@@ -44,7 +45,6 @@ def stems_to_midi_for_project(
     min_velocity: int = 80,
     max_velocity: int = 110,
     tempo: float = None,
-    detect_hihat_open: bool = False,
     stems_to_process: List[str] = None,
     max_duration: float = None,
     learning_mode: bool = False
@@ -61,7 +61,6 @@ def stems_to_midi_for_project(
         min_velocity: Minimum MIDI velocity
         max_velocity: Maximum MIDI velocity
         tempo: Tempo in BPM (None = use config)
-        detect_hihat_open: Try to detect open hi-hat hits
         stems_to_process: List of stem types to process (default: all)
         max_duration: Maximum duration in seconds (for faster learning)
         learning_mode: Enable learning mode (export all detections)
@@ -117,7 +116,6 @@ def stems_to_midi_for_project(
         min_velocity=min_velocity,
         max_velocity=max_velocity,
         tempo=tempo,
-        detect_hihat_open=detect_hihat_open,
         stems_to_process=stems_to_process,
         max_duration=max_duration,
         learning_mode=learning_mode
@@ -150,7 +148,6 @@ def _process_stems_to_midi(
     min_velocity: int,
     max_velocity: int,
     tempo: float,
-    detect_hihat_open: bool,
     stems_to_process: List[str],
     max_duration: float,
     learning_mode: bool
@@ -159,6 +156,9 @@ def _process_stems_to_midi(
     Internal function to process stems to MIDI (extracted from original stems_to_midi).
     
     This handles the core conversion logic, called by stems_to_midi_for_project().
+    
+    Hihat open/closed classification is always run using config thresholds
+    (open_geomean_min, open_sustain_ms) - no separate toggle.
     """
     # Apply learning mode if enabled
     if learning_mode:
@@ -198,7 +198,6 @@ def _process_stems_to_midi(
     print(f"  Hop length: {hop_length}")
     print(f"  Velocity range: {min_velocity}-{max_velocity}")
     print(f"  Tempo: {tempo} BPM")
-    print(f"  Detect open hi-hat: {detect_hihat_open}")
     if max_duration is not None:
         print(f"  Max duration: {max_duration} seconds (fast learning mode)")
     print()
@@ -229,6 +228,8 @@ def _process_stems_to_midi(
         print(f"Progress: {song_start_progress}%")
         
         events_by_stem = {}
+        analysis_by_stem = {}
+        envelope_by_stem = {}
         
         # Process each stem type
         total_stems = len(stems_to_process)
@@ -241,12 +242,7 @@ def _process_stems_to_midi(
             
             stem_file = stem_files_dict[stem_type]
             
-            # For hihat, check config for detect_open setting (can be overridden by command-line flag)
-            hihat_detect = detect_hihat_open
-            if stem_type == 'hihat' and not detect_hihat_open:
-                # If not set via command-line, check config
-                hihat_detect = config.get('hihat', {}).get('detect_open', False)
-            
+            # Hihat open/closed classification always runs using config thresholds
             result = process_stem_to_midi(
                 stem_file,
                 stem_type,
@@ -258,26 +254,29 @@ def _process_stems_to_midi(
                 hop_length=hop_length,
                 min_velocity=min_velocity,
                 max_velocity=max_velocity,
-                detect_hihat_open=hihat_detect,
                 max_duration=max_duration
             )
             
             if result and result.get('events'):
                 events_by_stem[stem_type] = result['events']
-                # Store analysis data for sidecar v2
-                if 'analysis_by_stem' not in locals():
-                    analysis_by_stem = {}
+                # Store analysis data for sidecar v3 (configured + sensitive)
                 analysis_by_stem[stem_type] = {
                     'all_onset_data': result.get('all_onset_data', []),
+                    'sensitive_onset_data': result.get('sensitive_onset_data', []),
                     'spectral_config': result.get('spectral_config')
                 }
+                # Store envelope data for waveform visualization
+                if result.get('envelope_data'):
+                    envelope_by_stem[stem_type] = result['envelope_data']
             
             # Progress: after each stem (0-90% of total)
             processed_stems += 1
             stem_progress = int((song_idx - 1) / total_songs * 90 + (processed_stems / total_stems) * (90 / total_songs))
             print(f"Progress: {stem_progress}%")
         
-        # Create MIDI file
+        # Create MIDI file using rebuild logic (same as "Save & Reconvert")
+        # This ensures initial conversion uses the same filtering/classification
+        # as reconvert, producing consistent results.
         if events_by_stem:
             # Add suffix for learning mode
             if learning_mode:
@@ -285,20 +284,39 @@ def _process_stems_to_midi(
                 midi_path = midi_dir / f"{base_name}{suffix}.mid"
             else:
                 midi_path = midi_dir / f"{base_name}.mid"
-            
+
+            # Step 1: Save analysis sidecar FIRST (Detection Output Contract v3)
+            save_analysis_sidecar(
+                events_by_stem, midi_path, tempo=tempo,
+                analysis_by_stem=analysis_by_stem if analysis_by_stem else None,
+                config=config,
+            )
+
+            # Step 2: Load the analysis sidecar and rebuild MIDI from it
+            # This uses the same rebuild logic as "Save & Reconvert"
+            analysis_data = load_analysis_sidecar(midi_path)
+            if not analysis_data:
+                raise RuntimeError(f"Failed to save analysis sidecar for {midi_path}")
+
+            # Rebuild MIDI from analysis data (honors thresholds, applies all filters)
+            updated_analysis, rebuild_events = rebuild_events_from_analysis(
+                analysis_data=analysis_data,
+                overrides={},  # No manual overrides for initial conversion
+                config=config,
+            )
+
+            # Create MIDI from rebuilt events
             create_midi_file(
-                events_by_stem,
+                rebuild_events,
                 midi_path,
                 tempo=tempo,
                 track_name=f"Drums - {base_name}",
                 config=config
             )
             
-            # Save analysis sidecar with spectral data (Detection Output Contract v2)
-            if 'analysis_by_stem' in locals():
-                save_analysis_sidecar(events_by_stem, midi_path, tempo=tempo, analysis_by_stem=analysis_by_stem)
-            else:
-                save_analysis_sidecar(events_by_stem, midi_path, tempo=tempo)
+            # Save energy envelope data for waveform visualization
+            if envelope_by_stem:
+                save_envelope_data(envelope_by_stem, midi_path)
             
             # Progress: after MIDI creation (90-100% of total)
             midi_progress = int(90 + (song_idx / total_songs) * 10)
@@ -366,8 +384,6 @@ MIDI Note Mapping (General MIDI):
                         help="Maximum MIDI velocity (1-127, default: 127).")
     parser.add_argument('--tempo', type=float, default=None,
                         help="Tempo in BPM for MIDI timing (default: read from midiconfig.yaml).")
-    parser.add_argument('--detect-hihat-open', action='store_true',
-                        help="Enable open/closed hi-hat detection (disabled by default - most hits will be closed).")
     parser.add_argument('--stems', type=str, nargs='+',
                         choices=['kick', 'snare', 'toms', 'hihat', 'cymbals'],
                         help="Specific stems to process (default: all).")
@@ -433,7 +449,6 @@ MIDI Note Mapping (General MIDI):
         min_velocity=args.min_vel,
         max_velocity=args.max_vel,
         tempo=args.tempo,
-        detect_hihat_open=args.detect_hihat_open,
         stems_to_process=args.stems,
         max_duration=args.maxtime,
         learning_mode=args.learn

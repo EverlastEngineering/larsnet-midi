@@ -22,6 +22,9 @@ from .analysis_core import (
     classify_snare_pitch
 )
 
+# Import temporal filtering (post-spectral post-processing)
+from .filters.temporal_filter import filter_by_min_interval
+
 # Import detection functions
 from .detection_shell import (
     detect_onsets,
@@ -31,9 +34,11 @@ from .detection_shell import (
     detect_hihat_state
 )
 from .energy_detection_shell import detect_onsets_energy_based
+from .stereo_core import calculate_stereo_features
 
 # Import config structures
 from .config import DrumMapping
+from .note_classification_core import classify_notes
 
 __all__ = [
     'process_stem_to_midi'
@@ -399,7 +404,7 @@ def _detect_snare_pitches(
         config: Configuration dictionary
     
     Returns:
-        Array of snare classifications (0=snare, 1=rimshot, 2=clap, 3=clap+snare) or None
+        Array of snare classifications (0=snare, 1=rimshot, 2=clap) or None
     """
     if len(onset_times) == 0:
         return None
@@ -436,21 +441,20 @@ def _detect_snare_pitches(
     else:
         print("    Warning: No valid pitches detected, all will use default (snare) note")
     
-    # Classify into snare/rimshot/clap/clap+snare
+    # Classify into snare/rimshot/clap
     snare_classifications = classify_snare_pitch(detected_pitches)
     
     # Show classification summary
     snare_count = np.sum(snare_classifications == 0)
     rimshot_count = np.sum(snare_classifications == 1)
     clap_count = np.sum(snare_classifications == 2)
-    clap_snare_count = np.sum(snare_classifications == 3)
-    print(f"    Snare classification: {snare_count} snare, {rimshot_count} rimshot, {clap_count} clap, {clap_snare_count} clap+snare")
+    print(f"    Snare classification: {snare_count} snare, {rimshot_count} rimshot, {clap_count} clap")
     
     # Show detailed pitch table (if not too many)
     if len(onset_times) <= 20:
         print(f"\n      {'Time':>8s} {'Pitch(Hz)':>10s} {'Type':>12s}")
         for i, (time, pitch, classification) in enumerate(zip(onset_times, detected_pitches, snare_classifications)):
-            type_name = ['Snare', 'Rimshot', 'Clap', 'Clap+Snare'][classification]
+            type_name = ['Snare', 'Rimshot', 'Clap'][classification]
             pitch_str = f"{pitch:.1f}" if pitch > 0 else "N/A"
             print(f"      {time:8.3f} {pitch_str:>10s} {type_name:>12s}")
     
@@ -471,7 +475,8 @@ def _create_midi_events(
     drum_mapping: DrumMapping,
     config: Dict,
     sustain_durations: Optional[List[float]] = None,
-    spectral_data: Optional[List[Dict]] = None
+    spectral_data: Optional[List[Dict]] = None,
+    use_sustain_duration: bool = False
 ) -> List[Dict]:
     """
     Create MIDI events from onset data.
@@ -488,11 +493,12 @@ def _create_midi_events(
         hihat_states: List of hihat states (closed/open/handclap)
         tom_classifications: Tom classifications (low/mid/high)
         cymbal_classifications: Cymbal classifications (crash/ride/chinese)
-        snare_classifications: Snare classifications (snare/rimshot/clap/clap+snare)
+        snare_classifications: Snare classifications (snare/rimshot/clap)
         drum_mapping: MIDI note mapping
         config: Configuration dictionary
         sustain_durations: Optional list of sustain durations in milliseconds (for cymbals and hihat foot-close events)
         spectral_data: Optional list of spectral analysis dicts (Detection Output Contract)
+        use_sustain_duration: If True, use sustain_durations for note duration instead of time-to-next-hit
     
     Returns:
         List of MIDI event dictionaries with optional spectral fields
@@ -533,25 +539,23 @@ def _create_midi_events(
             else:  # ride or default
                 midi_note = drum_mapping.ride
         elif stem_type == 'snare' and snare_classifications is not None and i < len(snare_classifications):
-            # Use snare/rimshot/clap/clap+snare note based on pitch classification
+            # Use snare/rimshot/clap note based on pitch classification
             if snare_classifications[i] == 0:
                 midi_note = drum_mapping.snare
             elif snare_classifications[i] == 1:
                 midi_note = drum_mapping.snare_rimshot
-            elif snare_classifications[i] == 2:
+            else:  # clap
                 midi_note = drum_mapping.snare_clap
-            else:  # clap+snare
-                midi_note = drum_mapping.snare_clap_snare
         else:
             midi_note = note
         
-        # Duration: use sustain duration for cymbals, otherwise time until next hit
-        if stem_type == 'cymbals' and sustain_durations is not None and i < len(sustain_durations):
+        # Duration: use sustain duration when configured, otherwise time until next hit
+        if use_sustain_duration and sustain_durations is not None and i < len(sustain_durations):
             # Use actual sustain duration from envelope analysis (in milliseconds)
             duration = sustain_durations[i] / 1000.0  # Convert ms to seconds
-            # Apply a more generous max for cymbals
-            cymbal_max = config.get(stem_type, {}).get('max_note_duration', 2.0)
-            duration = min(duration, cymbal_max)
+            # Apply stem-specific max duration
+            stem_max = config.get(stem_type, {}).get('max_note_duration', 2.0)
+            duration = min(duration, stem_max)
         elif i < len(onset_times) - 1:
             # Standard duration: until next hit
             duration = onset_times[i + 1] - time
@@ -580,16 +584,22 @@ def _create_midi_events(
             # Common fields
             event['onset_strength'] = onset_info.get('strength')
             event['peak_amplitude'] = onset_info.get('amplitude')
-            event['geomean'] = onset_info.get('body_wire_geomean')
+            event['geomean'] = onset_info.get('geomean')
             event['total_energy'] = onset_info.get('total_energy')
             event['status'] = onset_info.get('status')
-            # Stem-specific energy bands (use generic names from contract)
-            event['primary_energy'] = onset_info.get('primary_energy')
-            event['secondary_energy'] = onset_info.get('secondary_energy')
-            if 'tertiary_energy' in onset_info:
-                event['tertiary_energy'] = onset_info.get('tertiary_energy')
+            # Domain-specific energy bands (body_energy, wire_energy, etc.)
+            geomean_bands = onset_info.get('geomean_bands', [])
+            event['geomean_bands'] = geomean_bands
+            for band_name in geomean_bands:
+                energy_key = f'{band_name}_energy'
+                if energy_key in onset_info:
+                    event[energy_key] = onset_info[energy_key]
             if 'sustain_ms' in onset_info:
                 event['sustain_ms'] = onset_info.get('sustain_ms')
+            if 'spectral_centroid_hz' in onset_info:
+                event['spectral_centroid_hz'] = onset_info['spectral_centroid_hz']
+            if 'pitch_hz' in onset_info:
+                event['pitch_hz'] = onset_info['pitch_hz']
         
         events.append(event)
         
@@ -616,6 +626,103 @@ def _create_midi_events(
     return events
 
 
+def _run_sensitive_detection(
+    audio: np.ndarray,
+    audio_mono: np.ndarray,
+    sr: int,
+    is_stereo: bool,
+    hop_length: int,
+    stem_type: str,
+    config: Dict,
+) -> list:
+    """
+    Run energy detection at maximum sensitivity to capture all possible events.
+
+    Uses threshold_db=1.0 and min_absolute_energy=0.0001 to detect even the
+    quietest transients. Then runs spectral analysis (with learning_mode=True)
+    so every onset has pre-computed spectral features. The WebUI can re-filter
+    client-side without a server round-trip.
+
+    Args:
+        audio: Original audio (stereo or mono)
+        audio_mono: Mono-mixed audio for spectral analysis
+        sr: Sample rate
+        is_stereo: Whether audio is stereo
+        hop_length: Hop length for energy calculation
+        stem_type: Stem type for spectral config
+        config: Full config dict
+
+    Returns:
+        List of onset dicts with spectral features (all marked KEPT via learning_mode).
+        Empty list if no onsets detected or detection not applicable.
+    """
+    from .analysis_core import calculate_event_durations
+
+    # Sensitive detection parameters — capture candidates above noise floor
+    # 10x above the lowest settings to avoid picking up pure noise
+    SENSITIVE_THRESHOLD_DB = 10.0
+    SENSITIVE_MIN_ABSOLUTE_ENERGY = 0.001
+
+    # Reuse per-stem params that aren't sensitivity-related
+    stem_cfg = config.get(stem_type, {})
+    min_peak_spacing_ms = stem_cfg.get('min_peak_spacing_ms', 100.0)
+    merge_window_ms = stem_cfg.get('merge_window_ms', 150.0)
+    energy_method = stem_cfg.get('energy_method', 'rms')
+    peak_hold_ms = stem_cfg.get('peak_hold_ms', 3.0)
+
+    sensitive_times, sensitive_strengths, _ = detect_onsets_energy_based(
+        audio if is_stereo else audio_mono,
+        sr,
+        threshold_db=SENSITIVE_THRESHOLD_DB,
+        min_peak_spacing_ms=min_peak_spacing_ms,
+        min_absolute_energy=SENSITIVE_MIN_ABSOLUTE_ENERGY,
+        merge_window_ms=merge_window_ms,
+        hop_length=hop_length,
+        method=energy_method,
+        peak_hold_ms=peak_hold_ms,
+    )
+
+    if len(sensitive_times) == 0:
+        return []
+
+    print(f"    Sensitive detection: {len(sensitive_times)} candidate onsets")
+
+    # Compute peak amplitudes for spectral analysis
+    sensitive_amplitudes = np.array([
+        calculate_peak_amplitude(audio_mono, int(t * sr), sr, window_ms=10.0)
+        for t in sensitive_times
+    ])
+
+    # Compute durations for Phase 2 metadata
+    sensitive_durations = calculate_event_durations(sensitive_times, audio_mono, sr)
+
+    # Run spectral analysis with learning_mode=True (keeps all, computes features)
+    filter_result = filter_onsets_by_spectral(
+        sensitive_times,
+        sensitive_strengths,
+        sensitive_amplitudes,
+        audio_mono,
+        sr,
+        stem_type,
+        config,
+        learning_mode=True,
+        durations=sensitive_durations,
+    )
+
+    sensitive_onset_data = filter_result.get('all_onset_data', [])
+
+    # Attach stereo features for non-kick stems
+    if is_stereo and stem_type != 'kick' and len(sensitive_onset_data) > 0:
+        sens_times = np.array([d['time'] for d in sensitive_onset_data])
+        stereo_feats = calculate_stereo_features(audio, sens_times, sr)
+        for onset_d, sf in zip(sensitive_onset_data, stereo_feats):
+            onset_d['pan_confidence'] = sf['pan_confidence']
+            onset_d['stereo_width'] = sf['stereo_width']
+
+    print(f"    Sensitive detection: {len(sensitive_onset_data)} onsets with spectral features")
+    return sensitive_onset_data
+
+
 def process_stem_to_midi(
     audio_path: Union[str, Path],
     stem_type: str,
@@ -627,7 +734,6 @@ def process_stem_to_midi(
     hop_length: int,
     min_velocity: int = 80,
     max_velocity: int = 110,
-    detect_hihat_open: bool = True,
     max_duration: Optional[float] = None
 ) -> List[Dict]:
     """
@@ -647,7 +753,6 @@ def process_stem_to_midi(
         onset_threshold: Threshold for onset detection (0-1)
         min_velocity: Minimum MIDI velocity
         max_velocity: Maximum MIDI velocity
-        detect_hihat_open: Try to detect open hi-hat
         max_duration: Maximum duration in seconds to analyze (None = all)
     
     Returns:
@@ -659,7 +764,10 @@ def process_stem_to_midi(
     # Step 1: Load and validate audio
     audio, sr = _load_and_validate_audio(audio_path, config, stem_type, max_duration)
     if audio is None:
-        return {'events': [], 'all_onset_data': [], 'spectral_config': None}
+        return {'events': [], 'all_onset_data': [], 'sensitive_onset_data': [], 'spectral_config': None, 'envelope_data': None}
+    
+    # Envelope data for waveform visualization (populated by energy-based detection)
+    envelope_data = None
     
     # Track if we're processing stereo (for pan metadata later)
     is_stereo = audio.ndim == 2
@@ -756,6 +864,16 @@ def process_stem_to_midi(
         pan_positions = extra_data.get('pan_positions')
         pan_classifications = extra_data.get('pan_classifications')
         
+        # Energy envelope for waveform visualization (persisted as .npz)
+        envelope_data = {
+            'times': extra_data.get('envelope_times'),
+            'left': extra_data.get('envelope_left'),
+            'right': extra_data.get('envelope_right'),
+            'sr': sr,
+            'hop_length': onset_params['hop_length'],
+            'method': energy_method,
+        }
+        
         # Summary of pan distribution
         if pan_classifications:
             left_count = pan_classifications.count('left')
@@ -770,16 +888,12 @@ def process_stem_to_midi(
     if learning_mode:
         print(f"    Learning mode: Ultra-sensitive detection (threshold={onset_params['threshold']})")
     else:
-        stem_config = config.get(stem_type, {})
-        if (stem_config.get('onset_threshold') is not None or 
-            stem_config.get('onset_delta') is not None or 
-            stem_config.get('onset_wait') is not None):
-            print(f"    {stem_type.capitalize()}-specific onset detection: threshold={onset_params['threshold']}, delta={onset_params['delta']}, wait={onset_params['wait']} (~{onset_params['wait']*11:.0f}ms min spacing)")
+        print(f"    Onset detection: threshold={onset_params['threshold']}, delta={onset_params['delta']}, wait={onset_params['wait']} (~{onset_params['wait']*11:.0f}ms min spacing)")
 
     print(f"    Found {len(onset_times)} hits (before filtering) -> MIDI note {getattr(drum_mapping, stem_type)}")
     
     if len(onset_times) == 0:
-        return {'events': [], 'all_onset_data': [], 'spectral_config': None}
+        return {'events': [], 'all_onset_data': [], 'sensitive_onset_data': [], 'spectral_config': None, 'envelope_data': envelope_data}
     
     # Step 3: Calculate event durations (NEW)
     from .analysis_core import calculate_event_durations
@@ -803,11 +917,13 @@ def process_stem_to_midi(
     
     # Initialize variables that may be used later (in case filtering is disabled)
     stem_geomeans = None
-    hihat_sustain_durations = None
-    hihat_spectral_data = None
-    cymbal_sustain_durations = None
+    sustain_durations = None
+    spectral_data = None
+    spectral_config = None
+    all_onset_data = []
+    filtered_onset_data = []
 
-    if stem_type in ['snare', 'kick', 'toms', 'hihat', 'cymbals'] and len(onset_times) > 0 and enable_spectral_filter:
+    if len(onset_times) > 0 and enable_spectral_filter:
         # Use functional core helper for filtering
         filter_result = filter_onsets_by_spectral(
             onset_times,
@@ -826,101 +942,135 @@ def process_stem_to_midi(
         onset_strengths = filter_result['filtered_strengths']
         peak_amplitudes = filter_result['filtered_amplitudes']
         stem_geomeans = filter_result['filtered_geomeans']
-        hihat_sustain_durations = filter_result['filtered_sustains'] if stem_type == 'hihat' else None
-        hihat_spectral_data = filter_result['filtered_spectral'] if stem_type == 'hihat' else None
-        cymbal_sustain_durations = filter_result['filtered_sustains'] if stem_type == 'cymbals' else None
-        all_onset_data = filter_result['all_onset_data']
         spectral_config = filter_result['spectral_config']
+        sustain_durations = filter_result['filtered_sustains'] if spectral_config.get('has_sustain_analysis') else None
+        spectral_data = filter_result['filtered_spectral'] if spectral_config.get('has_spectral_data') else None
+        all_onset_data = filter_result['all_onset_data']
         filtered_onset_data = filter_result.get('filtered_onset_data', [])
+
+        # Attach stereo features (pan_confidence, stereo_width) for non-kick stems
+        if is_stereo and stem_type != 'kick' and len(all_onset_data) > 0:
+            all_times = np.array([d['time'] for d in all_onset_data])
+            stereo_feats = calculate_stereo_features(stereo_audio, all_times, sr)
+            for onset_d, sf in zip(all_onset_data, stereo_feats):
+                onset_d['pan_confidence'] = sf['pan_confidence']
+                onset_d['stereo_width'] = sf['stereo_width']
+            # filtered_onset_data is a subset (copies) — patch by time lookup
+            time_to_stereo = {round(d['time'], 6): (d.get('pan_confidence', 0.0), d.get('stereo_width', 0.0))
+                              for d in all_onset_data}
+            for onset_d in filtered_onset_data:
+                key = round(onset_d['time'], 6)
+                if key in time_to_stereo:
+                    onset_d['pan_confidence'] = time_to_stereo[key][0]
+                    onset_d['stereo_width'] = time_to_stereo[key][1]
+
+        # Post-spectral temporal filter: filter events based on minimum time gap
+        # This catches bleed/double-triggers that got through spectral filtering
+        # Uses the same min_sustain_ms config but interprets as temporal gap (ms)
+        if spectral_config and spectral_config.get('min_sustain_ms') is not None and stem_type in ['hihat']:
+            min_interval_ms = spectral_config['min_sustain_ms']
+            if min_interval_ms > 0 and len(onset_times) > 0:
+                # Apply temporal filter to the filtered times
+                original_times = onset_times.copy() if hasattr(onset_times, 'copy') else np.array(onset_times)
+                filtered_times = filter_by_min_interval(
+                    event_times=onset_times,
+                    min_interval_ms=min_interval_ms
+                )
+                
+                # Update onset_times to temporally filtered results
+                onset_times = filtered_times
+                
+                # Also filter the corresponding arrays
+                if len(onset_times) > 0:
+                    # Create mask for which indices to keep
+                    onset_times_set = set(onset_times)
+                    keep_mask = np.array([t in onset_times_set for t in original_times])
+                    onset_strengths = onset_strengths[keep_mask]
+                    peak_amplitudes = peak_amplitudes[keep_mask]
+                    stem_geomeans = stem_geomeans[keep_mask]
+                    
+                    # Update all_onset_data status for filtered events
+                    kept_set = set(onset_times)
+                    for onset_d in all_onset_data:
+                        if onset_d['status'] == 'KEPT' and onset_d['time'] not in kept_set:
+                            onset_d['status'] = 'FILTERED'
 
         # Show ALL onset data and spectral chart if debug flags are enabled
         if show_all_onsets or show_spectral_data:
             geomean_threshold = spectral_config['geomean_threshold'] if spectral_config else None
-            energy_labels = spectral_config['energy_labels'] if spectral_config else {'primary': 'Primary', 'secondary': 'Secondary'}
-            stem_config = config.get(stem_type, {})
+            energy_labels = spectral_config['energy_labels'] if spectral_config else {}
+            geomean_bands = spectral_config['geomean_bands'] if spectral_config else []
+            freq_ranges = spectral_config.get('freq_ranges', {}) if spectral_config else {}
+            has_sustain = spectral_config.get('min_sustain_ms') is not None if spectral_config else False
+            show_badness = spectral_config.get('statistical_enabled', False) if spectral_config else False
+            display_hints = spectral_config.get('display_hints', []) if spectral_config else []
+            band_labels = [energy_labels.get(b, b.title()) for b in geomean_bands]
 
+            # Header block
             print("\n      ALL DETECTED ONSETS - SPECTRAL ANALYSIS:")
             if geomean_threshold is not None:
                 print(f"      Using GeoMean threshold: {geomean_threshold}")
             else:
                 print("      No threshold filtering (showing all detections)")
 
-            # Configure labels based on stem type
-            if stem_type == 'snare':
-                print("      Str=Onset Strength, Amp=Peak Amplitude, Primary=Body Energy (150-400Hz), Secondary=Wire Energy (2-8kHz)")
-            elif stem_type == 'kick':
-                print("      Str=Onset Strength, Amp=Peak Amplitude, Primary=Fundamental Energy (40-80Hz), Secondary=Body Energy (80-150Hz)")
-            elif stem_type == 'toms':
-                print("      Str=Onset Strength, Amp=Peak Amplitude, Primary=Fundamental Energy (60-150Hz), Secondary=Body Energy (150-400Hz)")
-            elif stem_type == 'hihat':
-                print("      Str=Onset Strength, Amp=Peak Amplitude, Primary=Body Energy (500-2kHz), Secondary=Sizzle Energy (6-12kHz), SustainMs=Sustain Duration")
-                min_sustain_ms = stem_config.get('min_sustain_ms', 25)
-                print(f"      Minimum sustain duration: {min_sustain_ms}ms (filters out handclap bleed)")
-                open_sustain_ms = stem_config.get('open_sustain_ms', 150)
-                print(f"      Open/Closed threshold: {open_sustain_ms}ms (>={open_sustain_ms}ms = open hihat)")
-            elif stem_type == 'cymbals':
-                print("      Str=Onset Strength, Amp=Peak Amplitude, Primary=Body/Wash Energy (1-4kHz), Secondary=Brilliance/Attack Energy (4-10kHz), SustainMs=Sustain Duration")
-                min_sustain_ms = stem_config.get('min_sustain_ms', 50)
-                print(f"      Minimum sustain duration: {min_sustain_ms}ms")
-
-            energy_label_1 = energy_labels['primary']
-            energy_label_2 = energy_labels['secondary']
-            energy_label_3 = energy_labels.get('tertiary')  # Only for kick
-            
-            # Display GeoMean formula (2-way or 3-way)
-            if energy_label_3:
-                print(f"      GeoMean=cbrt({energy_label_1}*{energy_label_2}*{energy_label_3}) - measures combined spectral energy")
-            else:
-                print(f"      GeoMean=sqrt({energy_label_1}*{energy_label_2}) - measures combined spectral energy")
-
-            # Check if statistical filtering is enabled for kicks
-            show_badness = stem_type == 'kick' and spectral_config.get('statistical_enabled', False)
-            
-            # Header row - different formats for different stem types
-            if stem_type in ['cymbals', 'hihat']:
-                print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'SustainMs':>10s} {'Status':>10s}")
-            elif stem_type == 'kick' and energy_label_3:
-                # Kick with 3 frequency ranges
-                if show_badness:
-                    print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {energy_label_3:>8s} {'Total':>8s} {'GeoMean':>8s} {'Badness':>8s} {'Status':>10s}")
+            # Column legend: band names with Hz ranges
+            col_parts = []
+            for band_name in geomean_bands:
+                label = energy_labels.get(band_name, band_name.title())
+                freq_range = freq_ranges.get(band_name)
+                if freq_range:
+                    lo, hi = freq_range
+                    lo_str = f"{lo/1000:.0f}k" if lo >= 1000 else f"{lo:.0f}"
+                    hi_str = f"{hi/1000:.0f}k" if hi >= 1000 else f"{hi:.0f}"
+                    col_parts.append(f"{label} ({lo_str}-{hi_str}Hz)")
                 else:
-                    print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {energy_label_3:>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
-            else:
-                print(f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {energy_label_1:>8s} {energy_label_2:>8s} {'Total':>8s} {'GeoMean':>8s} {'Status':>10s}")
+                    col_parts.append(label)
+            print(f"      Columns: Str=Onset Strength, Amp=Peak Amplitude, {', '.join(col_parts)}")
 
+            # Stem-specific context from spectral config (sustain thresholds, etc.)
+            for hint in display_hints:
+                print(f"      {hint}")
+
+            # GeoMean formula
+            func = 'cbrt' if len(geomean_bands) >= 3 else 'sqrt'
+            print(f"      GeoMean={func}({'*'.join(band_labels)}) - measures combined spectral energy")
+
+            # Table header
+            band_headers = ' '.join(f'{lbl:>8s}' for lbl in band_labels)
+            header = f"\n      {'Time':>8s} {'Str':>6s} {'Amp':>6s} {band_headers} {'Total':>8s} {'GeoMean':>8s}"
+            if has_sustain:
+                header += f" {'SustainMs':>10s}"
+            if show_badness:
+                header += f" {'Badness':>8s}"
+            header += f" {'Status':>10s}"
+            print(header)
+
+            # Table rows
             for idx, data in enumerate(all_onset_data):
                 is_real_hit = should_keep_onset(
-                    geomean=data['body_wire_geomean'],
+                    geomean=data['geomean'],
                     sustain_ms=data.get('sustain_ms'),
                     geomean_threshold=geomean_threshold,
                     min_sustain_ms=spectral_config.get('min_sustain_ms') if spectral_config else None,
-                    stem_type=stem_type
+                    filter_mode=spectral_config.get('filter_mode', 'geomean_only') if spectral_config else 'geomean_only'
                 )
                 status = 'KEPT' if is_real_hit else 'REJECTED'
                 
-                # Format output based on stem type
-                if stem_type in ['cymbals', 'hihat']:
-                    sustain_str = f"{data.get('sustain_ms', 0):10.1f}"
-                    print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
-                          f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {sustain_str} {status:>10s}")
-                elif stem_type == 'kick' and 'tertiary_energy' in data:
-                    # Kick with 3 frequency ranges
-                    if show_badness and 'badness_score' in data:
-                        badness_str = f"{data['badness_score']:8.3f}"
-                        print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} {data['tertiary_energy']:8.1f} "
-                              f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {badness_str} {status:>10s}")
-                    else:
-                        print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} {data['tertiary_energy']:8.1f} "
-                              f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")
-                else:
-                    print(f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {data['primary_energy']:8.1f} {data['secondary_energy']:8.1f} "
-                          f"{data['total_energy']:8.1f} {data['body_wire_geomean']:8.1f} {status:>10s}")
+                band_values = ' '.join(f"{data.get(f'{b}_energy', 0.0):8.1f}" for b in geomean_bands)
+                row = f"      {data['time']:8.3f} {data['strength']:6.3f} {data['amplitude']:6.3f} {band_values} "
+                row += f"{data['total_energy']:8.1f} {data['geomean']:8.1f}"
+                if has_sustain:
+                    row += f" {data.get('sustain_ms', 0):10.1f}"
+                if show_badness and 'badness_score' in data:
+                    row += f" {data['badness_score']:8.3f}"
+                row += f" {status:>10s}"
+                print(row)
 
             # Show summary statistics
             print("\n      FILTERING SUMMARY:")
             if geomean_threshold is not None:
-                kept_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] > geomean_threshold]
-                rejected_geomeans = [d['body_wire_geomean'] for d in all_onset_data if d['body_wire_geomean'] <= geomean_threshold]
+                kept_geomeans = [d['geomean'] for d in all_onset_data if d['geomean'] > geomean_threshold]
+                rejected_geomeans = [d['geomean'] for d in all_onset_data if d['geomean'] <= geomean_threshold]
                 print(f"        Pass 1 - GeoMean threshold: {geomean_threshold} (adjustable in midiconfig.yaml)")
                 print(f"        Total onsets detected: {len(all_onset_data)}")
                 print(f"        Pass 1 Kept (GeoMean > {geomean_threshold}): {len(kept_geomeans)}")
@@ -937,7 +1087,7 @@ def process_stem_to_midi(
                     
                     print("\n        Pass 2 - Statistical Outlier Detection:")
                     print(f"        Badness threshold: {badness_threshold} (adjustable in midiconfig.yaml)")
-                    print(f"        Median Primary/Secondary ratio: {stats_params['median_ratio']:.3f}")
+                    print(f"        Median band ratio: {stats_params['median_ratio']:.3f}")
                     print(f"        Median Total energy: {stats_params['median_total']:.1f}")
                     
                     # Count pass 2 results
@@ -954,7 +1104,7 @@ def process_stem_to_midi(
             else:
                 print("        No threshold filtering enabled")
                 print(f"        Total onsets detected: {len(all_onset_data)} (all kept)")
-                all_geomeans = [d['body_wire_geomean'] for d in all_onset_data]
+                all_geomeans = [d['geomean'] for d in all_onset_data]
                 if all_geomeans:
                     print(f"        GeoMean range: {min(all_geomeans):.1f} - {max(all_geomeans):.1f}")
 
@@ -1001,69 +1151,43 @@ def process_stem_to_midi(
             print(f"        Pass 2 Rejected (retriggering): {rejected_count}")
     
     if len(onset_times) == 0:
-        return {'events': [], 'all_onset_data': all_onset_data, 'spectral_config': spectral_config}
+        return {'events': [], 'all_onset_data': all_onset_data, 'sensitive_onset_data': [], 'spectral_config': spectral_config, 'envelope_data': envelope_data}
     
-    # Step 5: Get MIDI note number
+    # Step 5: Get MIDI note number (default for stem type)
     note = getattr(drum_mapping, stem_type)
     
-    # Step 6: Classify drum types (hihat open/closed/handclap)
-    if stem_type == 'hihat' and detect_hihat_open:
+    # Step 6: Classify hihat state (open/closed) from stored features
+    # Hihat uses detect_hihat_state which works from spectral data.
+    # Foot-close events are generated during MIDI creation based on hihat_state.
+    # Always run classification using config thresholds (open_geomean_min, open_sustain_ms)
+    if stem_type == 'hihat':
         hihat_config = config.get('hihat', {})
         open_sustain_threshold = hihat_config.get('open_sustain_ms', 150)
         hihat_states = detect_hihat_state(
             audio_mono, sr, onset_times,
-            sustain_durations=hihat_sustain_durations,
+            sustain_durations=sustain_durations,
             open_sustain_threshold_ms=open_sustain_threshold,
-            spectral_data=hihat_spectral_data,
+            spectral_data=spectral_data,
             config=config
         )
     else:
         hihat_states = ['closed'] * len(onset_times)
     
     # Step 7: Calculate normalized values for velocity
-    if stem_type in ['snare', 'kick', 'toms'] and stem_geomeans is not None and len(stem_geomeans) > 0:
-        # For spectrally-filtered stems, use geometric mean
+    # velocity_source capability flag determines which feature drives MIDI velocity
+    velocity_source = spectral_config.get('velocity_source', 'peak_amplitude') if spectral_config else 'peak_amplitude'
+    if velocity_source == 'geomean' and stem_geomeans is not None and len(stem_geomeans) > 0:
         normalized_values = normalize_values(stem_geomeans)
-    elif stem_type == 'hihat' and len(onset_strengths) > 0:
-        # For hihat, use onset strength (from detection) not peak amplitude
-        # peak_amplitude is measured 10ms after detection time, which can be:
-        # - Too early for loud hits (still in attack → reads as quiet)
-        # - Too late for quiet hits (past peak → reads as loud)
+    elif velocity_source == 'onset_strength' and len(onset_strengths) > 0:
         normalized_values = normalize_values(onset_strengths)
     elif len(peak_amplitudes) > 0:
-        # For other stems, use peak amplitude
         normalized_values = normalize_values(peak_amplitudes)
     else:
         normalized_values = np.array([])
     
-    # Step 8: Detect and classify tom pitches (if applicable)
-    tom_classifications = None
-    if stem_type == 'toms':
-        tom_classifications = _detect_tom_pitches(audio_mono, sr, onset_times, config)
-    
-    # Step 8b: Detect and classify cymbal pitches (if applicable)
-    cymbal_classifications = None
-    if stem_type == 'cymbals':
-        cymbal_classifications = _detect_cymbal_pitches(
-            audio_mono, sr, onset_times, config,
-            pan_positions=pan_positions,
-            spectral_data=filtered_onset_data if 'filtered_onset_data' in locals() else None
-        )
-    
-    # Step 8c: Detect and classify snare pitches (if applicable)
-    snare_classifications = None
-    if stem_type == 'snare':
-        snare_classifications = _detect_snare_pitches(audio_mono, sr, onset_times, config)
-    
-    # Step 9: Create MIDI events
-    # Pass sustain durations for cymbals (note duration) and hihats (foot-close timing)
-    if stem_type == 'cymbals':
-        sustain_durations_param = cymbal_sustain_durations
-    elif stem_type == 'hihat':
-        sustain_durations_param = hihat_sustain_durations
-    else:
-        sustain_durations_param = None
-    
+    # Step 8: Create MIDI events with default notes
+    # Hihat gets correct notes from hihat_states; other stems get default note
+    # (overridden by Pass 2 classification below)
     events = _create_midi_events(
         onset_times,
         normalized_values,
@@ -1072,20 +1196,44 @@ def process_stem_to_midi(
         min_velocity,
         max_velocity,
         hihat_states,
-        tom_classifications,
-        cymbal_classifications,
-        snare_classifications,
+        None,  # tom_classifications — handled by Pass 2
+        None,  # cymbal_classifications — handled by Pass 2
+        None,  # snare_classifications — handled by Pass 2
         drum_mapping,
         config,
-        sustain_durations=sustain_durations_param,
-        spectral_data=filtered_onset_data
+        sustain_durations=sustain_durations,
+        spectral_data=filtered_onset_data,
+        use_sustain_duration=spectral_config.get('use_sustain_duration', False) if spectral_config else False
     )
+    
+    # Step 9: Pass 2 — Classify notes from stored spectral features
+    # For toms/cymbals/snare: clusters on spectral_centroid_hz.
+    # For hihat: re-classifies from geomean + sustain (consistent with rebuild).
+    # Foot-close events (note 44) are excluded from classification.
+    foot_close_note = config.get('hihat', {}).get('midi_note_foot_close', 44)
+    real_events = [e for e in events if e.get('note') != foot_close_note]
+    classify_notes(real_events, stem_type, drum_mapping, config)
     
     print(f"    Created {len(events)} MIDI events from {len(onset_times)} onsets")
     
-    # Return dict with events and analysis data for sidecar v2
+    # Step 10: Run sensitive detection for interactive tuning (energy-based only)
+    sensitive_onset_data = []
+    if not use_librosa:
+        sensitive_onset_data = _run_sensitive_detection(
+            audio=audio,
+            audio_mono=audio_mono,
+            sr=sr,
+            is_stereo=is_stereo,
+            hop_length=onset_params['hop_length'],
+            stem_type=stem_type,
+            config=config,
+        )
+    
+    # Return dict with events and analysis data
     return {
         'events': events,
-        'all_onset_data': all_onset_data if 'all_onset_data' in locals() else [],
-        'spectral_config': spectral_config if 'spectral_config' in locals() else None
+        'all_onset_data': all_onset_data,
+        'sensitive_onset_data': sensitive_onset_data,
+        'spectral_config': spectral_config,
+        'envelope_data': envelope_data
     }

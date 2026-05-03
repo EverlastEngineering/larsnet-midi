@@ -199,7 +199,6 @@ class SettingsManager {
                 settings.min_velocity = this.settings['min-velocity'] || 40;
                 settings.max_velocity = this.settings['max-velocity'] || 127;
                 settings.tempo = this.settings['tempo'] || null;
-                settings.detect_hihat_open = this.settings['detect-hihat-open'] || false;
                 break;
                 
             case 'video':

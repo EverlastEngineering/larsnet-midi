@@ -72,8 +72,13 @@ def features_to_array(
             'spectral_flatness',
             'pitch',
             'timing_delta',
-            'primary_energy',
-            'secondary_energy',
+            # Domain-specific band energies (missing keys return 0.0)
+            'body_energy',
+            'wire_energy',
+            'fundamental_energy',
+            'attack_energy',
+            'sizzle_energy',
+            'brilliance_energy',
             'geomean',
             'total_energy',
             'sustain_ms'

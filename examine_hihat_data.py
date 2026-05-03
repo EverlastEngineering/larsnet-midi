@@ -24,13 +24,13 @@ print(f"\n=== First 20 Events ===")
 for i, evt in enumerate(events[:20]):
     time = evt.get('time', 0)
     status = evt.get('status', 'unknown')
-    primary = evt.get('primary_energy', 0)
-    secondary = evt.get('secondary_energy', 0)
-    geomean = (primary * secondary) ** 0.5 if primary > 0 and secondary > 0 else 0
+    body = evt.get('body_energy', 0)
+    sizzle = evt.get('sizzle_energy', 0)
+    geomean = (body * sizzle) ** 0.5 if body > 0 and sizzle > 0 else 0
     sustain = evt.get('sustain_ms', 0)
     velocity = evt.get('velocity', 0)
     note = evt.get('note', 0)
-    print(f"{i+1:3d}. t={time:7.3f}s  {status:8s}  note={note:2d}  vel={velocity:3d}  geomean={geomean:6.1f}  body={primary:.1f}  sizzle={secondary:.1f}  sustain={sustain:.1f}ms")
+    print(f"{i+1:3d}. t={time:7.3f}s  {status:8s}  note={note:2d}  vel={velocity:3d}  geomean={geomean:6.1f}  body={body:.1f}  sizzle={sizzle:.1f}  sustain={sustain:.1f}ms")
 
 # Count by status
 kept = [e for e in events if e.get('status') == 'KEPT']
@@ -59,13 +59,13 @@ if rejected:
     print(f"\n=== Sample of Rejected Events (first 15) ===")
     for i, evt in enumerate(rejected[:15]):
         time = evt.get('time', 0)
-        primary = evt.get('primary_energy', 0)
-        secondary = evt.get('secondary_energy', 0)
-        geomean = (primary * secondary) ** 0.5 if primary > 0 and secondary > 0 else 0
+        body = evt.get('body_energy', 0)
+        sizzle = evt.get('sizzle_energy', 0)
+        geomean = (body * sizzle) ** 0.5 if body > 0 and sizzle > 0 else 0
         sustain = evt.get('sustain_ms', 0)
-        print(f"{i+1:3d}. t={time:7.3f}s  geomean={geomean:6.1f}  body={primary:.1f}  sizzle={secondary:.1f}  sustain={sustain:.1f}ms")
+        print(f"{i+1:3d}. t={time:7.3f}s  geomean={geomean:6.1f}  body={body:.1f}  sizzle={sizzle:.1f}  sustain={sustain:.1f}ms")
     
-    rejected_geomeans = [(e.get('primary_energy', 0) * e.get('secondary_energy', 0)) ** 0.5 for e in rejected]
+    rejected_geomeans = [(e.get('body_energy', 0) * e.get('sizzle_energy', 0)) ** 0.5 for e in rejected]
     rejected_geomeans = [g for g in rejected_geomeans if g > 0]
     if rejected_geomeans:
         print(f"\nRejected geomean range: {min(rejected_geomeans):.1f} - {max(rejected_geomeans):.1f}")

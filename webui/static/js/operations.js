@@ -76,8 +76,7 @@ async function startMidi() {
             hop_length: null, // Not exposed in basic UI
             min_velocity: settings.min_velocity,
             max_velocity: settings.max_velocity,
-            tempo: settings.tempo,
-            detect_hihat_open: settings.detect_hihat_open
+            tempo: settings.tempo
         });
         
         showToast('MIDI conversion started', 'success');
@@ -171,11 +170,43 @@ function monitorJob(jobId, operationName) {
                 });
             }
         },
-        onComplete: (job) => {
+        onComplete: async (job) => {
             updateJobCard(job);
             addConsoleLog(`[${job.operation}] Completed successfully!`, 'success');
             showToast(`${capitalize(job.operation)} completed!`, 'success');
-            
+
+            // Refresh project data so new outputs (analysis, downloads) appear
+            if (typeof currentProject !== 'undefined' && currentProject) {
+                const projectNumber = currentProject.number;
+
+                // Fetch fresh project data to get updated has_analysis flag
+                const data = await api.getProject(projectNumber);
+                currentProject = data.project;
+                window.currentProject = currentProject;
+
+                // Update downloads and buttons
+                updateDownloads();
+                updateOperationButtons();
+
+                // For MIDI jobs, initialize waveform viewer with fresh data
+                if (job.operation === 'stems-to-midi' && typeof initWaveformViewer === 'function') {
+                    initWaveformViewer(currentProject).then(() => {
+                        // Expand analysis section after initialization
+                        const analysisContainer = document.getElementById('analysis-container');
+                        const analysisIcon = document.getElementById('analysis-toggle-icon');
+                        if (analysisContainer) {
+                            analysisContainer.style.maxHeight = analysisContainer.scrollHeight + 'px';
+                            if (analysisIcon) {
+                                analysisIcon.style.transform = 'rotate(0deg)';
+                            }
+                        }
+                    });
+                } else {
+                    // Re-select project normally for non-MIDI jobs
+                    selectProject(projectNumber);
+                }
+            }
+
             // Clean up
             activeStreams.delete(jobId);
         },

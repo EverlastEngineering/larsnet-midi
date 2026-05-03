@@ -167,16 +167,23 @@ class TestGetSpectralConfigForStem:
         result = get_spectral_config_for_stem('kick', config)
         
         assert 'freq_ranges' in result
-        assert 'primary' in result['freq_ranges']
-        assert 'secondary' in result['freq_ranges']
-        assert 'tertiary' in result['freq_ranges']
-        assert result['freq_ranges']['primary'] == (40, 80)
-        assert result['freq_ranges']['secondary'] == (80, 150)
-        assert result['freq_ranges']['tertiary'] == (2000, 6000)
+        assert 'fundamental' in result['freq_ranges']
+        assert 'body' in result['freq_ranges']
+        assert 'attack' in result['freq_ranges']
+        assert result['freq_ranges']['fundamental'] == (40, 80)
+        assert result['freq_ranges']['body'] == (80, 150)
+        assert result['freq_ranges']['attack'] == (2000, 6000)
         assert result['geomean_threshold'] == 150.0
-        assert result['energy_labels']['primary'] == 'Primary'
-        assert result['energy_labels']['secondary'] == 'Secondary'
-        assert result['energy_labels']['tertiary'] == 'Tertiary'
+        assert result['geomean_bands'] == ['fundamental', 'body', 'attack']
+        assert result['energy_labels']['fundamental'] == 'Fundamental'
+        assert result['energy_labels']['body'] == 'Body'
+        assert result['energy_labels']['attack'] == 'Attack'
+        assert result['display_hints'] == []
+        assert result['velocity_source'] == 'geomean'
+        assert result['has_sustain_analysis'] is False
+        assert result['use_sustain_duration'] is False
+        assert result['has_spectral_data'] is False
+        assert result['filter_mode'] == 'geomean_only'
     
     def test_snare_config(self):
         """Test snare configuration extraction."""
@@ -195,7 +202,17 @@ class TestGetSpectralConfigForStem:
         result = get_spectral_config_for_stem('snare', config)
         
         assert 'low' in result['freq_ranges']
-        assert result['energy_labels']['secondary'] == 'Secondary'
+        assert 'body' in result['freq_ranges']
+        assert 'wire' in result['freq_ranges']
+        assert result['geomean_bands'] == ['body', 'wire']
+        assert result['energy_labels']['body'] == 'Body'
+        assert result['energy_labels']['wire'] == 'Wire'
+        assert result['display_hints'] == []
+        assert result['velocity_source'] == 'geomean'
+        assert result['has_sustain_analysis'] is False
+        assert result['use_sustain_duration'] is False
+        assert result['has_spectral_data'] is False
+        assert result['filter_mode'] == 'geomean_only'
     
     def test_hihat_config(self):
         """Test hihat configuration extraction."""
@@ -212,8 +229,17 @@ class TestGetSpectralConfigForStem:
         
         result = get_spectral_config_for_stem('hihat', config)
         
-        assert result['energy_labels']['secondary'] == 'Secondary'
+        assert result['geomean_bands'] == ['body', 'sizzle']
+        assert result['energy_labels']['body'] == 'Body'
+        assert result['energy_labels']['sizzle'] == 'Sizzle'
         assert result['min_sustain_ms'] == 25
+        assert len(result['display_hints']) == 2
+        assert '25ms' in result['display_hints'][0]
+        assert result['velocity_source'] == 'onset_strength'
+        assert result['has_sustain_analysis'] is True
+        assert result['use_sustain_duration'] is False
+        assert result['has_spectral_data'] is True
+        assert result['filter_mode'] == 'geomean_only'
     
     def test_toms_config(self):
         """Test toms configuration extraction."""
@@ -229,11 +255,18 @@ class TestGetSpectralConfigForStem:
         
         result = get_spectral_config_for_stem('toms', config)
         
-        assert result['freq_ranges']['primary'] == (60, 120)
-        assert result['freq_ranges']['secondary'] == (120, 300)
-        assert result['energy_labels']['primary'] == 'Primary'
-        assert result['energy_labels']['secondary'] == 'Secondary'
+        assert result['freq_ranges']['fundamental'] == (60, 120)
+        assert result['freq_ranges']['body'] == (120, 300)
+        assert result['geomean_bands'] == ['fundamental', 'body']
+        assert result['energy_labels']['fundamental'] == 'Fundamental'
+        assert result['energy_labels']['body'] == 'Body'
         assert result['geomean_threshold'] == 100.0
+        assert result['display_hints'] == []
+        assert result['velocity_source'] == 'geomean'
+        assert result['has_sustain_analysis'] is False
+        assert result['use_sustain_duration'] is False
+        assert result['has_spectral_data'] is False
+        assert result['filter_mode'] == 'geomean_only'
     
     def test_cymbals_config(self):
         """Test cymbals configuration extraction."""
@@ -247,12 +280,20 @@ class TestGetSpectralConfigForStem:
         result = get_spectral_config_for_stem('cymbals', config)
         
         # Cymbals use hardcoded frequency ranges
-        assert result['freq_ranges']['primary'] == (1000, 4000)
-        assert result['freq_ranges']['secondary'] == (4000, 10000)
-        assert result['energy_labels']['primary'] == 'Primary'
-        assert result['energy_labels']['secondary'] == 'Secondary'
+        assert result['freq_ranges']['body'] == (1000, 4000)
+        assert result['freq_ranges']['brilliance'] == (4000, 10000)
+        assert result['geomean_bands'] == ['body', 'brilliance']
+        assert result['energy_labels']['body'] == 'Body'
+        assert result['energy_labels']['brilliance'] == 'Brilliance'
         assert result['geomean_threshold'] == 15.0
         assert result['min_sustain_ms'] == 150
+        assert len(result['display_hints']) == 1
+        assert '150ms' in result['display_hints'][0]
+        assert result['velocity_source'] == 'geomean'
+        assert result['has_sustain_analysis'] is True
+        assert result['use_sustain_duration'] is True
+        assert result['has_spectral_data'] is False
+        assert result['filter_mode'] == 'require_both'
     
     def test_unknown_stem(self):
         """Test handling of unknown stem type."""
@@ -294,7 +335,7 @@ class TestCalculateGeomean:
     
     def test_three_way_with_zero(self):
         """Test 3-way geomean with zero value - falls back to 2-way."""
-        # When tertiary_energy is 0, the function treats it as None
+        # When the third band energy is 0, the function treats it as None
         # and falls back to 2-way geomean: sqrt(100 * 200) = 141.42...
         result = calculate_geomean(100.0, 200.0, 0.0)
         expected = np.sqrt(100.0 * 200.0)
@@ -317,41 +358,41 @@ class TestShouldKeepOnset:
             sustain_ms=50.0,
             geomean_threshold=None,
             min_sustain_ms=None,
-            stem_type='kick'
+            filter_mode='geomean_only'
         )
         assert result is True
     
     def test_kick_geomean_pass(self):
-        """Test kick passes geomean threshold."""
+        """Test geomean_only mode passes geomean."""
         result = should_keep_onset(
             geomean=200.0,
             sustain_ms=None,
             geomean_threshold=150.0,
             min_sustain_ms=None,
-            stem_type='kick'
+            filter_mode='geomean_only'
         )
         assert result is True
     
     def test_kick_geomean_fail(self):
-        """Test kick fails geomean threshold."""
+        """Test geomean_only mode fails geomean."""
         result = should_keep_onset(
             geomean=100.0,
             sustain_ms=None,
             geomean_threshold=150.0,
             min_sustain_ms=None,
-            stem_type='kick'
+            filter_mode='geomean_only'
         )
         assert result is False
     
     def test_cymbal_both_required(self):
-        """Test cymbal requires both geomean AND sustain."""
+        """Test require_both mode requires both."""
         # Pass geomean but fail sustain
         result = should_keep_onset(
             geomean=20.0,
             sustain_ms=100.0,
             geomean_threshold=10.0,
             min_sustain_ms=150.0,
-            stem_type='cymbals'
+            filter_mode='require_both'
         )
         assert result is False
         
@@ -361,19 +402,19 @@ class TestShouldKeepOnset:
             sustain_ms=200.0,
             geomean_threshold=10.0,
             min_sustain_ms=150.0,
-            stem_type='cymbals'
+            filter_mode='require_both'
         )
         assert result is True
     
     def test_hihat_geomean_threshold(self):
-        """Test hihat uses geomean threshold (current implementation)."""
+        """Test geomean_only mode with sustain thresholds."""
         # Pass geomean threshold
         result = should_keep_onset(
             geomean=60.0,
             sustain_ms=50.0,
             geomean_threshold=50.0,
             min_sustain_ms=25.0,
-            stem_type='hihat'
+            filter_mode='geomean_only'
         )
         assert result is True
         
@@ -383,7 +424,7 @@ class TestShouldKeepOnset:
             sustain_ms=200.0,  # High sustain doesn't help
             geomean_threshold=50.0,
             min_sustain_ms=25.0,
-            stem_type='hihat'
+            filter_mode='geomean_only'
         )
         assert result is False
         
@@ -393,7 +434,7 @@ class TestShouldKeepOnset:
             sustain_ms=100.0,
             geomean_threshold=50.0,
             min_sustain_ms=25.0,
-            stem_type='hihat'
+            filter_mode='geomean_only'
         )
         assert result is False
         
@@ -403,18 +444,18 @@ class TestShouldKeepOnset:
             sustain_ms=10.0,
             geomean_threshold=50.0,
             min_sustain_ms=25.0,
-            stem_type='hihat'
+            filter_mode='geomean_only'
         )
         assert result is True
     
     def test_cymbal_only_sustain_threshold(self):
-        """Test cymbal with only sustain threshold set."""
+        """Test require_both mode with only sustain threshold."""
         result = should_keep_onset(
             geomean=20.0,
             sustain_ms=200.0,
             geomean_threshold=None,
             min_sustain_ms=150.0,
-            stem_type='cymbals'
+            filter_mode='require_both'
         )
         assert result is True
         
@@ -423,18 +464,18 @@ class TestShouldKeepOnset:
             sustain_ms=100.0,
             geomean_threshold=None,
             min_sustain_ms=150.0,
-            stem_type='cymbals'
+            filter_mode='require_both'
         )
         assert result is False
     
     def test_cymbal_only_geomean_threshold(self):
-        """Test cymbal with only geomean threshold set."""
+        """Test require_both mode with only geomean threshold."""
         result = should_keep_onset(
             geomean=20.0,
             sustain_ms=200.0,
             geomean_threshold=10.0,
             min_sustain_ms=None,
-            stem_type='cymbals'
+            filter_mode='require_both'
         )
         assert result is True
         
@@ -443,18 +484,18 @@ class TestShouldKeepOnset:
             sustain_ms=200.0,
             geomean_threshold=10.0,
             min_sustain_ms=None,
-            stem_type='cymbals'
+            filter_mode='require_both'
         )
         assert result is False
     
     def test_other_stem_with_threshold(self):
-        """Test other stems (snare, toms) use geomean only."""
+        """Test geomean_only mode applies geomean threshold."""
         result = should_keep_onset(
             geomean=200.0,
             sustain_ms=None,
             geomean_threshold=150.0,
             min_sustain_ms=None,
-            stem_type='snare'
+            filter_mode='geomean_only'
         )
         assert result is True
         
@@ -463,31 +504,31 @@ class TestShouldKeepOnset:
             sustain_ms=None,
             geomean_threshold=150.0,
             min_sustain_ms=None,
-            stem_type='toms'
+            filter_mode='geomean_only'
         )
         assert result is False
     
     def test_hihat_with_no_sustain_value(self):
-        """Test hihat when sustain_ms is None."""
+        """Test geomean_only mode when sustain_ms is None."""
         # Only geomean threshold set, sustain_ms is None
         result = should_keep_onset(
             geomean=60.0,
             sustain_ms=None,
             geomean_threshold=50.0,
             min_sustain_ms=25.0,
-            stem_type='hihat'
+            filter_mode='geomean_only'
         )
         assert result is True  # Passes geomean
     
     def test_other_stem_no_geomean_threshold(self):
-        """Test other stems with no geomean threshold (line 312)."""
+        """Test filter modes with no geomean threshold."""
         # No geomean threshold, should return True
         result = should_keep_onset(
             geomean=10.0,
             sustain_ms=None,
             geomean_threshold=None,
-            min_sustain_ms=50.0,  # This is set but ignored for non-hihat/cymbal
-            stem_type='snare'
+            min_sustain_ms=50.0,  # This is set but ignored for geomean_only
+            filter_mode='geomean_only'
         )
         assert result is True
         
@@ -496,7 +537,7 @@ class TestShouldKeepOnset:
             sustain_ms=None,
             geomean_threshold=None,
             min_sustain_ms=None,
-            stem_type='toms'
+            filter_mode='geomean_only'
         )
         assert result is True
         
@@ -505,7 +546,7 @@ class TestShouldKeepOnset:
             sustain_ms=None,
             geomean_threshold=50.0,
             min_sustain_ms=25.0,
-            stem_type='hihat'
+            filter_mode='geomean_only'
         )
         assert result is False  # Fails both
     
@@ -516,7 +557,7 @@ class TestShouldKeepOnset:
             sustain_ms=None,
             geomean_threshold=None,
             min_sustain_ms=None,
-            stem_type='snare'
+            filter_mode='geomean_only'
         )
         assert result is True
     
@@ -527,7 +568,7 @@ class TestShouldKeepOnset:
             sustain_ms=None,
             geomean_threshold=50.0,
             min_sustain_ms=None,
-            stem_type='hihat',
+            filter_mode='geomean_only',
             strength=0.5,
             min_strength_threshold=0.1
         )
@@ -540,7 +581,7 @@ class TestShouldKeepOnset:
             sustain_ms=None,
             geomean_threshold=50.0,
             min_sustain_ms=None,
-            stem_type='hihat',
+            filter_mode='geomean_only',
             strength=0.05,
             min_strength_threshold=0.1
         )
@@ -553,7 +594,7 @@ class TestShouldKeepOnset:
             sustain_ms=None,
             geomean_threshold=50.0,
             min_sustain_ms=None,
-            stem_type='kick',
+            filter_mode='geomean_only',
             strength=0.1,
             min_strength_threshold=0.1
         )
@@ -566,7 +607,7 @@ class TestShouldKeepOnset:
             sustain_ms=None,
             geomean_threshold=50.0,
             min_sustain_ms=None,
-            stem_type='snare',
+            filter_mode='geomean_only',
             strength=0.01,
             min_strength_threshold=None
         )
@@ -579,25 +620,25 @@ class TestShouldKeepOnset:
             sustain_ms=None,
             geomean_threshold=50.0,
             min_sustain_ms=None,
-            stem_type='kick',
+            filter_mode='geomean_only',
             strength=0.5,
             min_strength_threshold=0.1
         )
         assert result is False
     
     def test_strength_filter_all_stems(self):
-        """Test strength filter applies to all stem types."""
-        for stem_type in ['kick', 'snare', 'hihat', 'cymbals', 'toms']:
+        """Test strength filter applies to all filter modes."""
+        for filter_mode in ['geomean_only', 'require_both']:
             result = should_keep_onset(
                 geomean=100.0,
                 sustain_ms=100.0,
                 geomean_threshold=50.0,
                 min_sustain_ms=50.0,
-                stem_type=stem_type,
+                filter_mode=filter_mode,
                 strength=0.05,
                 min_strength_threshold=0.1
             )
-            assert result is False, f"Strength filter should reject for {stem_type}"
+            assert result is False, f"Strength filter should reject for {filter_mode}"
 
 
 class TestNormalizeValues:
@@ -1019,8 +1060,8 @@ class TestAnalyzeOnsetSpectral:
         result = analyze_onset_spectral(audio, onset_time=0.1, sr=sr, stem_type='kick', config=config)
         
         assert result is not None
-        assert 'primary_energy' in result
-        assert 'secondary_energy' in result
+        assert 'fundamental_energy' in result
+        assert 'body_energy' in result
         assert 'geomean' in result
         assert 'onset_sample' in result
         assert result['onset_sample'] == int(0.1 * sr)
@@ -1443,9 +1484,10 @@ class TestCalculateStatisticalParams:
         from stems_to_midi.analysis_core import calculate_statistical_params
         
         onset_data = [{
-            'primary_energy': 100.0,
-            'secondary_energy': 50.0,
-            'total_energy': 150.0
+            'fundamental_energy': 100.0,
+            'body_energy': 50.0,
+            'total_energy': 150.0,
+            'geomean_bands': ['fundamental', 'body']
         }]
         
         result = calculate_statistical_params(onset_data)
@@ -1460,9 +1502,9 @@ class TestCalculateStatisticalParams:
         from stems_to_midi.analysis_core import calculate_statistical_params
         
         onset_data = [
-            {'primary_energy': 100.0, 'secondary_energy': 50.0, 'total_energy': 150.0},
-            {'primary_energy': 120.0, 'secondary_energy': 60.0, 'total_energy': 180.0},
-            {'primary_energy': 80.0, 'secondary_energy': 40.0, 'total_energy': 120.0},
+            {'fundamental_energy': 100.0, 'body_energy': 50.0, 'total_energy': 150.0, 'geomean_bands': ['fundamental', 'body']},
+            {'fundamental_energy': 120.0, 'body_energy': 60.0, 'total_energy': 180.0, 'geomean_bands': ['fundamental', 'body']},
+            {'fundamental_energy': 80.0, 'body_energy': 40.0, 'total_energy': 120.0, 'geomean_bands': ['fundamental', 'body']},
         ]
         
         result = calculate_statistical_params(onset_data)
@@ -1473,12 +1515,12 @@ class TestCalculateStatisticalParams:
         assert result['ratio_spread'] < 1e-6  # Nearly zero (all ratios same)
         assert result['total_spread'] > 0  # Total energies vary
     
-    def test_zero_secondary_energy_handling(self):
-        """Zero secondary energy should be handled safely"""
+    def test_zero_band2_energy_handling(self):
+        """Zero second-band energy should be handled safely"""
         from stems_to_midi.analysis_core import calculate_statistical_params
         
         onset_data = [
-            {'primary_energy': 100.0, 'secondary_energy': 0.0, 'total_energy': 100.0},
+            {'fundamental_energy': 100.0, 'body_energy': 0.0, 'total_energy': 100.0, 'geomean_bands': ['fundamental', 'body']},
         ]
         
         result = calculate_statistical_params(onset_data)
@@ -1493,8 +1535,8 @@ class TestCalculateStatisticalParams:
         
         # All identical values
         onset_data = [
-            {'primary_energy': 100.0, 'secondary_energy': 50.0, 'total_energy': 150.0},
-            {'primary_energy': 100.0, 'secondary_energy': 50.0, 'total_energy': 150.0},
+            {'fundamental_energy': 100.0, 'body_energy': 50.0, 'total_energy': 150.0, 'geomean_bands': ['fundamental', 'body']},
+            {'fundamental_energy': 100.0, 'body_energy': 50.0, 'total_energy': 150.0, 'geomean_bands': ['fundamental', 'body']},
         ]
         
         result = calculate_statistical_params(onset_data)
@@ -1519,9 +1561,10 @@ class TestCalculateBadnessScore:
         }
         
         onset_data = {
-            'primary_energy': 100.0,
-            'secondary_energy': 50.0,  # Ratio = 2.0, matches median
-            'total_energy': 150.0  # Matches median
+            'fundamental_energy': 100.0,
+            'body_energy': 50.0,  # Ratio = 2.0, matches median
+            'total_energy': 150.0,  # Matches median
+            'geomean_bands': ['fundamental', 'body']
         }
         
         score = calculate_badness_score(onset_data, statistical_params)
@@ -1541,9 +1584,10 @@ class TestCalculateBadnessScore:
         }
         
         onset_data = {
-            'primary_energy': 50.0,
-            'secondary_energy': 100.0,  # Ratio = 0.5, much lower than median
-            'total_energy': 150.0
+            'fundamental_energy': 50.0,
+            'body_energy': 100.0,  # Ratio = 0.5, much lower than median
+            'total_energy': 150.0,
+            'geomean_bands': ['fundamental', 'body']
         }
         
         score = calculate_badness_score(onset_data, statistical_params)
@@ -1562,9 +1606,10 @@ class TestCalculateBadnessScore:
         }
         
         onset_data = {
-            'primary_energy': 200.0,
-            'secondary_energy': 100.0,  # Ratio = 2.0, matches median
-            'total_energy': 50.0  # Very different from median
+            'fundamental_energy': 200.0,
+            'body_energy': 100.0,  # Ratio = 2.0, matches median
+            'total_energy': 50.0,  # Very different from median
+            'geomean_bands': ['fundamental', 'body']
         }
         
         score = calculate_badness_score(onset_data, statistical_params)
@@ -1584,9 +1629,10 @@ class TestCalculateBadnessScore:
         
         # Extreme onset
         onset_data = {
-            'primary_energy': 1000.0,
-            'secondary_energy': 1.0,
-            'total_energy': 1.0
+            'fundamental_energy': 1000.0,
+            'body_energy': 1.0,
+            'total_energy': 1.0,
+            'geomean_bands': ['fundamental', 'body']
         }
         
         score = calculate_badness_score(onset_data, statistical_params)

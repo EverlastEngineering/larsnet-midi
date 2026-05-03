@@ -1,0 +1,1567 @@
+/**
+ * Waveform Viewer Component — Dual-Panel Layout
+ *
+ * Two vertically stacked canvas panels with synchronized zoom/pan:
+ *   Top panel:  Energy envelope (mirrored DAW-style L/R waveform)
+ *   Bottom panel: Event markers as amplitude bars (height = velocity)
+ *
+ * Features:
+ *   - 60dB dynamic range log scaling for envelope
+ *   - Bar-graph event markers (height proportional to velocity/amplitude)
+ *   - Synchronized zoom (mouse wheel) and pan (click-drag)
+ *   - Vertical crosshair cursor spanning both panels
+ *   - Legend and tuning indicator in dedicated bar (outside plot area)
+ *   - Hover tooltip on events
+ */
+
+// ─── Constants ───────────────────────────────────────────────────────────
+
+const WAVEFORM_COLORS = {
+    background: '#111827',
+    axisLine: '#374151',
+    axisText: '#9ca3af',
+    envelopeLeft: 'rgba(59, 130, 246, 0.8)',   // blue
+    envelopeRight: 'rgba(139, 92, 246, 0.6)',   // purple
+    envelopeFillLeft: 'rgba(59, 130, 246, 0.35)',
+    envelopeFillRight: 'rgba(139, 92, 246, 0.25)',
+    thresholdLine: 'rgba(251, 191, 36, 0.7)',   // amber dashed
+    markerKept: '#10b981',       // green
+    markerFiltered: '#ef4444',   // red
+    markerReverbCont: '#f59e0b', // orange/amber
+    markerSensitive: 'rgba(156, 163, 175, 0.3)',
+    markerUnknown: '#6b7280',    // gray
+    tooltipBg: 'rgba(17, 24, 39, 0.95)',
+    tooltipBorder: '#4b5563',
+    tooltipText: '#e5e7eb',
+    crosshair: 'rgba(255, 255, 255, 0.3)',
+    playbackLine: '#22d3ee',          // cyan playback position indicator
+};
+
+const STEM_COLORS = {
+    kick:    { accent: '#3b82f6', label: 'Kick' },
+    snare:   { accent: '#8b5cf6', label: 'Snare' },
+    hihat:   { accent: '#10b981', label: 'Hi-Hat' },
+    cymbals: { accent: '#f59e0b', label: 'Cymbals' },
+    toms:    { accent: '#ef4444', label: 'Toms' },
+};
+
+/**
+ * Classification colors for event types, indexed by classification (0-3).
+ * Standard across all stems for visual consistency.
+ *   0 = green, 1 = purple, 2 = cyan, 3 = yellow
+ * Red (#ef4444) = disabled/filtered (tuning only)
+ * Orange (#f59e0b) = reverb continuation (tuning only)
+ */
+const CLASSIFICATION_COLORS = [
+    '#10b981',   // 0 — green  (primary / default)
+    '#a855f7',   // 1 — purple
+    '#22d3ee',   // 2 — cyan
+    '#eab308',   // 3 — yellow
+];
+
+// Hihat open/closed classification colors
+const HIHAT_OPEN_COLOR = '#f97316';   // Orange - open hi-hat
+const HIHAT_CLOSED_COLOR = '#06b6d4';  // Cyan - closed hi-hat
+
+const STEM_ORDER = ['kick', 'snare', 'toms', 'hihat', 'cymbals'];
+
+// Padding for each canvas panel (in CSS pixels)
+const ENV_PAD = { top: 6, bottom: 6, left: 45, right: 12 };
+const EVT_PAD = { top: 6, bottom: 28, left: 45, right: 12 };
+
+// ─── State ───────────────────────────────────────────────────────────────
+
+let waveformAnalysisData = null;
+let waveformEnvelopeCache = {};
+let waveformActiveStem = null;
+let waveformHoverEvent = null;
+let waveformShowSensitive = false;
+let waveformTuningEvents = null;
+let waveformTuningActive = false;
+
+// Dual-canvas references
+let envelopeCanvas = null;
+let envelopeCtx = null;
+let eventsCanvas = null;
+let eventsCtx = null;
+
+// Zoom/pan state
+let waveformZoom = 1;        // 1 = full view, higher = zoomed in
+let waveformPanOffset = 0;   // 0..1, fraction of total time range scrolled
+let waveformIsDragging = false;
+let waveformDragStartX = 0;
+let waveformDragStartPan = 0;
+
+// Crosshair state
+let waveformMouseX = null;   // CSS-pixel X relative to canvas parent
+
+// Backward-compatible aliases (threshold-tuning.js references these)
+let waveformCanvas = null;
+let waveformCtx = null;
+
+// Audio playback state (Web Audio API)
+let audioCtx = null;
+let audioBufferCache = {};   // stemType -> AudioBuffer
+let audioSource = null;      // currently playing AudioBufferSourceNode
+let audioIsPlaying = false;
+let audioPlaybackTime = null; // time (in song seconds) where playback started
+let audioStartContextTime = null; // audioCtx.currentTime when playback started
+let playbackAnimFrameId = null;   // requestAnimationFrame ID for playback indicator
+
+// Event override state: { stemType: { "1.2345": "KEPT"|"FILTERED", ... } }
+let eventOverrides = {};
+let eventOverridesDirty = false;
+let eventOverridesSaveTimer = null;
+
+// ─── Loading Indicator ───────────────────────────────────────────────────
+
+function showWaveformLoading(text = 'Loading…', pct = 0) {
+    const overlay = document.getElementById('waveform-loading-overlay');
+    const bar = document.getElementById('waveform-loading-bar');
+    const label = document.getElementById('waveform-loading-text');
+    if (!overlay) return;
+    overlay.classList.remove('hidden');
+    overlay.style.display = 'flex';
+    if (bar) bar.style.width = Math.round(pct) + '%';
+    if (label) label.textContent = text;
+}
+
+function updateWaveformLoading(text, pct) {
+    const bar = document.getElementById('waveform-loading-bar');
+    const label = document.getElementById('waveform-loading-text');
+    if (bar) bar.style.width = Math.round(pct) + '%';
+    if (label) label.textContent = text;
+}
+
+function hideWaveformLoading() {
+    const overlay = document.getElementById('waveform-loading-overlay');
+    if (!overlay) return;
+    overlay.classList.add('hidden');
+    overlay.style.display = 'none';
+}
+
+// ─── Public API ──────────────────────────────────────────────────────────
+
+async function initWaveformViewer(project) {
+    const section = document.getElementById('analysis-section');
+    if (!section) return;
+
+    // Reset state
+    waveformAnalysisData = null;
+    waveformEnvelopeCache = {};
+    waveformActiveStem = null;
+    waveformHoverEvent = null;
+    waveformTuningEvents = null;
+    waveformTuningActive = false;
+    waveformZoom = 1;
+    waveformPanOffset = 0;
+    stopAudioPlayback();
+    audioBufferCache = {};
+    eventOverrides = {};
+    eventOverridesDirty = false;
+
+    if (!project.has_analysis) {
+        section.classList.add('hidden');
+        return;
+    }
+
+    section.classList.remove('hidden');
+    showWaveformLoading('Loading analysis data…', 10);
+
+    try {
+        waveformAnalysisData = await api.getProjectAnalysis(project.number);
+    } catch (err) {
+        console.error('Failed to load analysis data:', err);
+        hideWaveformLoading();
+        section.classList.add('hidden');
+        return;
+    }
+
+    if (!waveformAnalysisData || !waveformAnalysisData.stems) {
+        hideWaveformLoading();
+        section.classList.add('hidden');
+        return;
+    }
+
+    updateWaveformLoading('Loading overrides…', 40);
+    await loadEventOverrides();
+
+    updateWaveformLoading('Preparing stems…', 50);
+    const availableStems = Object.keys(waveformAnalysisData.stems);
+    renderStemTabs(availableStems);
+
+    // Set up dual canvases
+    envelopeCanvas = document.getElementById('envelope-canvas');
+    eventsCanvas = document.getElementById('events-canvas');
+    if (!envelopeCanvas || !eventsCanvas) return;
+    envelopeCtx = envelopeCanvas.getContext('2d');
+    eventsCtx = eventsCanvas.getContext('2d');
+
+    // Backward-compatible alias
+    waveformCanvas = eventsCanvas;
+    waveformCtx = eventsCtx;
+
+    // Mouse interaction — both canvases
+    setupCanvasInteraction(envelopeCanvas);
+    setupCanvasInteraction(eventsCanvas);
+
+    // Sensitive toggle
+    const sensitiveToggle = document.getElementById('waveform-sensitive-toggle');
+    if (sensitiveToggle) {
+        sensitiveToggle.checked = waveformShowSensitive;
+        sensitiveToggle.onchange = () => {
+            waveformShowSensitive = sensitiveToggle.checked;
+            drawWaveform();
+        };
+    }
+
+    // Tune button visibility
+    const tuneBtn = document.getElementById('tuning-toggle-btn');
+    if (tuneBtn) {
+        const hasAnySensitive = availableStems.some(s => {
+            const sd = waveformAnalysisData.stems[s];
+            return sd.events_sensitive && sd.events_sensitive.length > 0;
+        });
+        tuneBtn.classList.toggle('hidden', !hasAnySensitive);
+    }
+
+    // Close tuning panel on new project
+    const tuningPanel = document.getElementById('tuning-panel');
+    if (tuningPanel && !tuningPanel.classList.contains('hidden')) {
+        tuningPanelOpen = false;
+        tuningPanel.classList.add('hidden');
+        if (tuneBtn) tuneBtn.classList.remove('tuning-btn-active');
+    }
+
+    // Select first stem
+    const firstStem = STEM_ORDER.find(s => availableStems.includes(s)) || availableStems[0];
+    if (firstStem) selectStem(firstStem);
+}
+
+async function selectStem(stemType) {
+    if (!waveformAnalysisData || !waveformAnalysisData.stems[stemType]) return;
+
+    waveformActiveStem = stemType;
+    waveformHoverEvent = null;
+    waveformTuningEvents = null;
+    waveformTuningActive = false;
+    waveformZoom = 1;
+    waveformPanOffset = 0;
+
+    document.querySelectorAll('.waveform-stem-tab').forEach(tab => {
+        const isActive = tab.dataset.stem === stemType;
+        tab.classList.toggle('waveform-tab-active', isActive);
+        tab.classList.toggle('waveform-tab-inactive', !isActive);
+    });
+
+    const sensitiveContainer = document.getElementById('waveform-sensitive-container');
+    if (sensitiveContainer) {
+        const stemData = waveformAnalysisData.stems[stemType];
+        const hasSensitive = stemData.events_sensitive && stemData.events_sensitive.length > 0;
+        sensitiveContainer.classList.toggle('hidden', !hasSensitive);
+    }
+
+    // Load envelope data
+    if (!waveformEnvelopeCache[stemType]) {
+        showWaveformLoading('Loading waveform for ' + stemType + '…', 30);
+        try {
+            const envelope = await api.getProjectEnvelope(currentProject.number, stemType);
+            waveformEnvelopeCache[stemType] = envelope;
+            updateWaveformLoading('Rendering…', 90);
+        } catch {
+            waveformEnvelopeCache[stemType] = null;
+        }
+    }
+
+    hideWaveformLoading();
+    drawWaveform();
+
+    // Pre-fetch audio buffer in background for click-to-play
+    ensureAudioBuffer(stemType);
+
+    if (typeof onTuningStemChanged === 'function') {
+        onTuningStemChanged(stemType);
+    }
+}
+
+// ─── Tab Rendering ───────────────────────────────────────────────────────
+
+function renderStemTabs(availableStems) {
+    const container = document.getElementById('waveform-stem-tabs');
+    if (!container) return;
+
+    const ordered = STEM_ORDER.filter(s => availableStems.includes(s));
+    availableStems.forEach(s => { if (!ordered.includes(s)) ordered.push(s); });
+
+    container.innerHTML = ordered.map(stem => {
+        const info = STEM_COLORS[stem] || { accent: '#6b7280', label: stem };
+        return `<button class="waveform-stem-tab waveform-tab-inactive px-3 py-1.5 rounded text-xs font-medium transition-smooth"
+                        data-stem="${stem}"
+                        style="--tab-accent: ${info.accent}"
+                        onclick="selectStem('${stem}')">
+                    ${info.label}
+                </button>`;
+    }).join('');
+}
+
+// ─── Zoom / Pan Helpers ──────────────────────────────────────────────────
+
+/** Compute the visible time window based on zoom and pan. */
+function computeVisibleRange(tMinFull, tMaxFull) {
+    const fullSpan = tMaxFull - tMinFull;
+    const visibleSpan = fullSpan / waveformZoom;
+    const maxOffset = fullSpan - visibleSpan;
+    const offset = waveformPanOffset * maxOffset;
+    return { tMin: tMinFull + offset, tMax: tMinFull + offset + visibleSpan };
+}
+
+function clampPan() {
+    waveformPanOffset = Math.max(0, Math.min(1, waveformPanOffset));
+}
+
+// ─── Main Draw ───────────────────────────────────────────────────────────
+
+function drawWaveform() {
+    if (!envelopeCanvas || !eventsCanvas || !waveformActiveStem) return;
+
+    const stemData = waveformAnalysisData.stems[waveformActiveStem];
+    const configuredEvents = getEventsForStem(stemData);
+    const sensitiveEvents = getSensitiveEventsForStem(stemData);
+    const envelope = waveformEnvelopeCache[waveformActiveStem];
+
+    const displayEvents = (waveformTuningActive && waveformTuningEvents)
+        ? waveformTuningEvents
+        : configuredEvents;
+
+    // Full time range (for zoom reference)
+    const { tMin: tMinFull, tMax: tMaxFull } = computeTimeRange(configuredEvents, sensitiveEvents, envelope);
+    if (tMaxFull <= tMinFull) return;
+
+    // Visible time range (affected by zoom/pan)
+    const { tMin, tMax } = computeVisibleRange(tMinFull, tMaxFull);
+
+    // Draw envelope panel
+    drawEnvelopePanel(envelope, tMin, tMax, stemData, configuredEvents, sensitiveEvents);
+
+    // Draw events panel
+    drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, tMin, tMax, stemData);
+
+    // Update legend bar (HTML, outside canvas)
+    updateLegendBar(stemData, displayEvents);
+
+    // Draw crosshair on both panels
+    if (waveformMouseX != null) {
+        drawCrosshair(envelopeCtx, envelopeCanvas);
+        drawCrosshair(eventsCtx, eventsCanvas);
+    }
+
+    // Draw tooltip on events panel
+    if (waveformHoverEvent) {
+        const rect = eventsCanvas.parentElement.getBoundingClientRect();
+        drawTooltip(eventsCtx, waveformHoverEvent, rect.width, rect.height);
+    }
+}
+
+// ─── Envelope Panel ──────────────────────────────────────────────────────
+
+function drawEnvelopePanel(envelope, tMin, tMax, stemData, configuredEvents, sensitiveEvents) {
+    const canvas = envelopeCanvas;
+    const ctx = envelopeCtx;
+    const dpr = window.devicePixelRatio || 1;
+
+    const rect = canvas.parentElement.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    ctx.scale(dpr, dpr);
+
+    const W = rect.width;
+    const H = rect.height;
+    const PAD = ENV_PAD;
+    const plotW = W - PAD.left - PAD.right;
+    const plotH = H - PAD.top - PAD.bottom;
+
+    // Background
+    ctx.fillStyle = WAVEFORM_COLORS.background;
+    ctx.fillRect(0, 0, W, H);
+
+    const timeToX = t => PAD.left + ((t - tMin) / (tMax - tMin)) * plotW;
+
+    // Envelope
+    if (envelope && envelope.times) {
+        const envelopeMax = computeEnvelopeMax(envelope);
+        drawEnvelope(ctx, envelope, timeToX, PAD, plotH, envelopeMax);
+    }
+
+    // Threshold line (on geomean scale)
+    const geomeanMax = computeMaxGeomean(configuredEvents, sensitiveEvents);
+    const logic = stemData.logic || {};
+    const tuningGeomean = waveformTuningActive && tuningSliderValues?.[waveformActiveStem]?.geomean_threshold;
+    const thresholdVal = tuningGeomean != null ? tuningGeomean : logic.geomean_threshold;
+    if (thresholdVal != null && geomeanMax > 0) {
+        const geomeanToY = v => PAD.top + plotH - (v / (geomeanMax * 1.2 || 1)) * plotH;
+        drawThresholdLine(ctx, thresholdVal, geomeanToY, PAD, plotW);
+    }
+
+    // dB scale labels on left axis
+    drawEnvelopeAxis(ctx, PAD, plotH);
+}
+
+function drawEnvelopeAxis(ctx, PAD, plotH) {
+    ctx.fillStyle = WAVEFORM_COLORS.axisText;
+    ctx.font = '9px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+
+    const centerY = PAD.top + plotH / 2;
+
+    const labels = [0, -12, -24, -48];
+    for (const dB of labels) {
+        const frac = dB === 0 ? 1 : Math.max(0, 1 + dB / 60);
+        const yUp = centerY - frac * (plotH / 2);
+
+        if (dB === 0) {
+            ctx.fillText('0dB', PAD.left - 4, yUp + 3);
+        } else if (yUp >= PAD.top - 2) {
+            ctx.fillText(`${dB}`, PAD.left - 4, yUp + 3);
+        }
+    }
+
+    // Center line indicator
+    ctx.fillStyle = 'rgba(107, 114, 128, 0.5)';
+    ctx.fillText('—', PAD.left - 4, centerY + 3);
+}
+
+// ─── Events Panel ────────────────────────────────────────────────────────
+
+function drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, tMin, tMax, stemData) {
+    const canvas = eventsCanvas;
+    const ctx = eventsCtx;
+    const dpr = window.devicePixelRatio || 1;
+
+    const rect = canvas.parentElement.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    ctx.scale(dpr, dpr);
+
+    const W = rect.width;
+    const H = rect.height;
+    const PAD = EVT_PAD;
+    const plotW = W - PAD.left - PAD.right;
+    const plotH = H - PAD.top - PAD.bottom;
+
+    // Background
+    ctx.fillStyle = WAVEFORM_COLORS.background;
+    ctx.fillRect(0, 0, W, H);
+
+    const timeToX = t => PAD.left + ((t - tMin) / (tMax - tMin)) * plotW;
+
+    // Time axis (at bottom)
+    drawTimeAxis(ctx, W, H, PAD, plotW, plotH, tMin, tMax, timeToX);
+
+    // Velocity scale labels on left axis
+    drawVelocityAxis(ctx, PAD, plotW, plotH);
+
+    // Sensitive events (background layer, tuning mode only)
+    if (waveformTuningActive && waveformShowSensitive && sensitiveEvents.length > 0) {
+        drawEventBars(ctx, sensitiveEvents, timeToX, PAD, plotW, plotH, true);
+    }
+
+    // When tuning is closed, only draw KEPT events (hide red/orange).
+    // When tuning is open, draw all events (KEPT + FILTERED + REVERB_CONTINUATION).
+    const eventsToRender = waveformTuningActive
+        ? displayEvents
+        : displayEvents.filter(e => e.status === 'KEPT');
+    drawEventBars(ctx, eventsToRender, timeToX, PAD, plotW, plotH, false);
+}
+
+function drawVelocityAxis(ctx, PAD, plotW, plotH) {
+    ctx.fillStyle = WAVEFORM_COLORS.axisText;
+    ctx.font = '9px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+
+    const ticks = [127, 96, 64, 32];
+    for (const v of ticks) {
+        const y = PAD.top + plotH - (v / 127) * plotH;
+        ctx.fillText(v, PAD.left - 4, y + 3);
+
+        // Subtle grid line
+        ctx.strokeStyle = 'rgba(55, 65, 81, 0.4)';
+        ctx.lineWidth = 0.5;
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath();
+        ctx.moveTo(PAD.left, y);
+        ctx.lineTo(PAD.left + plotW, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+}
+
+/**
+ * Draw event markers as amplitude bars.
+ * Height is proportional to velocity (0-127). Color-coded by status.
+ */
+function drawEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer) {
+    const barWidth = isSensitiveLayer ? 1.5 : 3;
+
+    for (const event of events) {
+        if (event.time == null) continue;
+
+        const x = timeToX(event.time);
+        if (x < PAD.left - barWidth || x > PAD.left + plotW + barWidth) continue;
+
+        const color = isSensitiveLayer
+            ? WAVEFORM_COLORS.markerSensitive
+            : getMarkerColor(event.status, event.classification, event.hihat_state);
+
+        // Bar height from velocity (0-127)
+        // When velocity is missing (sensitive/tuning events), estimate from strength
+        // using the same formula as Python's estimate_velocity(strength, min_vel=40, max_vel=127)
+        let velocity;
+        if (event.velocity != null) {
+            velocity = event.velocity;
+        } else if (event.strength != null) {
+            velocity = Math.round(40 + event.strength * (127 - 40));
+            velocity = Math.max(1, Math.min(127, velocity));
+        } else {
+            velocity = 64;
+        }
+        const barH = Math.max(2, (velocity / 127) * plotH);
+        const barTop = PAD.top + plotH - barH;
+
+        ctx.globalAlpha = isSensitiveLayer ? 0.4 : 0.9;
+        ctx.fillStyle = color;
+        ctx.fillRect(x - barWidth / 2, barTop, barWidth, barH);
+
+        if (!isSensitiveLayer) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 0.5;
+            ctx.globalAlpha = 0.5;
+            ctx.strokeRect(x - barWidth / 2, barTop, barWidth, barH);
+
+            // Override indicator: small white diamond at top of bar
+            if (event._overridden) {
+                ctx.globalAlpha = 1.0;
+                ctx.fillStyle = '#ffffff';
+                const dSize = 3;
+                ctx.beginPath();
+                ctx.moveTo(x, barTop - dSize);
+                ctx.lineTo(x + dSize, barTop);
+                ctx.lineTo(x, barTop + dSize);
+                ctx.lineTo(x - dSize, barTop);
+                ctx.closePath();
+                ctx.fill();
+            }
+        }
+
+        ctx.globalAlpha = 1.0;
+    }
+}
+
+// ─── Data Helpers ────────────────────────────────────────────────────────
+
+function getEventsForStem(stemData) {
+    if (stemData.events_configured) return stemData.events_configured;
+    if (stemData.events) return stemData.events;
+    return [];
+}
+
+function getSensitiveEventsForStem(stemData) {
+    return stemData.events_sensitive || [];
+}
+
+function computeTimeRange(events, sensitiveEvents, envelope) {
+    let tMin = Infinity, tMax = -Infinity;
+
+    for (const e of events) {
+        if (e.time != null) { tMin = Math.min(tMin, e.time); tMax = Math.max(tMax, e.time); }
+    }
+    for (const e of sensitiveEvents) {
+        if (e.time != null) { tMin = Math.min(tMin, e.time); tMax = Math.max(tMax, e.time); }
+    }
+    if (envelope && envelope.times && envelope.times.length > 0) {
+        tMin = Math.min(tMin, envelope.times[0]);
+        tMax = Math.max(tMax, envelope.times[envelope.times.length - 1]);
+    }
+
+    const span = tMax - tMin || 1;
+    return { tMin: tMin - span * 0.02, tMax: tMax + span * 0.02 };
+}
+
+function computeEnvelopeMax(envelope) {
+    let maxVal = 0;
+    if (envelope) {
+        if (envelope.left) for (const v of envelope.left) maxVal = Math.max(maxVal, v);
+        if (envelope.right) for (const v of envelope.right) maxVal = Math.max(maxVal, v);
+    }
+    return maxVal;
+}
+
+function computeMaxGeomean(events, sensitiveEvents) {
+    let maxVal = 0;
+    for (const e of events) {
+        if (e.geomean != null) maxVal = Math.max(maxVal, e.geomean);
+    }
+    for (const e of sensitiveEvents) {
+        if (e.geomean != null) maxVal = Math.max(maxVal, e.geomean);
+    }
+    return maxVal;
+}
+
+// ─── Drawing Subroutines ─────────────────────────────────────────────────
+
+function drawTimeAxis(ctx, W, H, PAD, plotW, plotH, tMin, tMax, timeToX) {
+    ctx.strokeStyle = WAVEFORM_COLORS.axisLine;
+    ctx.lineWidth = 1;
+
+    // Bottom axis line
+    ctx.beginPath();
+    ctx.moveTo(PAD.left, PAD.top + plotH);
+    ctx.lineTo(PAD.left + plotW, PAD.top + plotH);
+    ctx.stroke();
+
+    // Time ticks
+    const duration = tMax - tMin;
+    const tickInterval = computeTickInterval(duration);
+    const firstTick = Math.ceil(tMin / tickInterval) * tickInterval;
+
+    ctx.fillStyle = WAVEFORM_COLORS.axisText;
+    ctx.font = '10px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+
+    for (let t = firstTick; t <= tMax; t += tickInterval) {
+        const x = timeToX(t);
+        if (x < PAD.left || x > PAD.left + plotW) continue;
+
+        ctx.beginPath();
+        ctx.moveTo(x, PAD.top + plotH);
+        ctx.lineTo(x, PAD.top + plotH + 4);
+        ctx.stroke();
+
+        ctx.fillText(formatTime(t), x, PAD.top + plotH + 16);
+
+        // Subtle vertical grid line
+        ctx.strokeStyle = 'rgba(55, 65, 81, 0.3)';
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(x, PAD.top);
+        ctx.lineTo(x, PAD.top + plotH);
+        ctx.stroke();
+
+        ctx.strokeStyle = WAVEFORM_COLORS.axisLine;
+        ctx.lineWidth = 1;
+    }
+}
+
+function computeTickInterval(duration) {
+    if (duration > 300) return 60;
+    if (duration > 120) return 30;
+    if (duration > 60) return 10;
+    if (duration > 30) return 5;
+    if (duration > 10) return 2;
+    if (duration > 4) return 1;
+    if (duration > 1) return 0.5;
+    return 0.25;
+}
+
+function formatTime(seconds) {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    if (m > 0) {
+        return `${m}:${String(Math.floor(s)).padStart(2, '0')}`;
+    }
+    if (seconds < 10 && seconds % 1 !== 0) {
+        return `${s.toFixed(1)}s`;
+    }
+    return `${Math.floor(s)}s`;
+}
+
+/**
+ * Draw energy envelope as a mirrored DAW-style waveform.
+ * Left channel extends upward from center, right channel extends downward.
+ */
+function drawEnvelope(ctx, envelope, timeToX, PAD, plotH, maxAmp) {
+    if (!envelope.times || envelope.times.length === 0) return;
+    if (maxAmp <= 0) return;
+
+    const times = envelope.times;
+    const centerY = PAD.top + plotH / 2;
+    const halfH = plotH / 2;
+
+    const plotW = timeToX(times[times.length - 1]) - timeToX(times[0]);
+    const step = Math.max(1, Math.floor(times.length / (Math.max(plotW, 1) * 2)));
+
+    const hasLeft = envelope.left && envelope.left.length > 0;
+    const hasRight = envelope.right && envelope.right.length > 0;
+
+    if (hasLeft) {
+        drawEnvelopeHalf(ctx, times, envelope.left, timeToX, centerY, -halfH, maxAmp, step,
+            WAVEFORM_COLORS.envelopeLeft, WAVEFORM_COLORS.envelopeFillLeft);
+    }
+    if (hasRight) {
+        drawEnvelopeHalf(ctx, times, envelope.right, timeToX, centerY, halfH, maxAmp, step,
+            WAVEFORM_COLORS.envelopeRight, WAVEFORM_COLORS.envelopeFillRight);
+    }
+    if (hasLeft && !hasRight) {
+        drawEnvelopeHalf(ctx, times, envelope.left, timeToX, centerY, halfH, maxAmp, step,
+            WAVEFORM_COLORS.envelopeRight, WAVEFORM_COLORS.envelopeFillRight);
+    }
+
+    // Center line
+    ctx.strokeStyle = 'rgba(107, 114, 128, 0.3)';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(PAD.left, centerY);
+    const endX = timeToX(times[times.length - 1]);
+    ctx.lineTo(endX, centerY);
+    ctx.stroke();
+}
+
+function drawEnvelopeHalf(ctx, times, values, timeToX, centerY, direction, maxAmp, step, strokeColor, fillColor) {
+    if (!values || values.length === 0) return;
+
+    const sign = direction < 0 ? -1 : 1;
+    const halfH = Math.abs(direction);
+
+    // 60dB dynamic range log scaling
+    const dynamicRange = 60;
+    const noiseFloor = maxAmp * Math.pow(10, -dynamicRange / 20);
+    const normalize = v => {
+        if (v <= noiseFloor) return 0;
+        const dB = 20 * Math.log10(v / maxAmp);
+        return Math.max(0, (1 + dB / dynamicRange)) * halfH;
+    };
+
+    // Filled area
+    ctx.beginPath();
+    ctx.moveTo(timeToX(times[0]), centerY);
+    for (let i = 0; i < times.length; i += step) {
+        let maxV = values[i];
+        for (let j = 1; j < step && i + j < times.length; j++) {
+            maxV = Math.max(maxV, values[i + j]);
+        }
+        ctx.lineTo(timeToX(times[i]), centerY + sign * normalize(maxV));
+    }
+    const lastI = times.length - 1;
+    ctx.lineTo(timeToX(times[lastI]), centerY + sign * normalize(values[lastI]));
+    ctx.lineTo(timeToX(times[lastI]), centerY);
+    ctx.closePath();
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+
+    // Stroke
+    ctx.beginPath();
+    for (let i = 0; i < times.length; i += step) {
+        let maxV = values[i];
+        for (let j = 1; j < step && i + j < times.length; j++) {
+            maxV = Math.max(maxV, values[i + j]);
+        }
+        const x = timeToX(times[i]);
+        const y = centerY + sign * normalize(maxV);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.lineTo(timeToX(times[lastI]), centerY + sign * normalize(values[lastI]));
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+}
+
+function drawThresholdLine(ctx, threshold, geomeanToY, PAD, plotW) {
+    const y = geomeanToY(threshold);
+    if (y < PAD.top - 5 || y > PAD.top + 500) return;
+
+    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = WAVEFORM_COLORS.thresholdLine;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(PAD.left, y);
+    ctx.lineTo(PAD.left + plotW, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Label in left axis margin (not overlapping data)
+    ctx.fillStyle = WAVEFORM_COLORS.thresholdLine;
+    ctx.font = '8px system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText('thr', PAD.left - 4, y + 3);
+}
+
+function getMarkerColor(status, classification, hihatState = null) {
+    switch (status) {
+        case 'KEPT':
+            // Check for hihat open/closed classification first
+            if (hihatState === 'open') {
+                return HIHAT_OPEN_COLOR;
+            }
+            if (hihatState === 'closed') {
+                return HIHAT_CLOSED_COLOR;
+            }
+            // Fall back to classification index colors
+            if (classification != null && CLASSIFICATION_COLORS[classification]) {
+                return CLASSIFICATION_COLORS[classification];
+            }
+            return WAVEFORM_COLORS.markerKept;
+        case 'FILTERED': return WAVEFORM_COLORS.markerFiltered;
+        case 'REVERB_CONTINUATION': return WAVEFORM_COLORS.markerReverbCont;
+        default: return WAVEFORM_COLORS.markerUnknown;
+    }
+}
+
+// ─── Legend Bar (HTML, outside canvas) ────────────────────────────────────
+
+function updateLegendBar(stemData, displayEvents) {
+    // Tuning indicator
+    const tuningLabel = document.getElementById('waveform-tuning-label');
+    if (tuningLabel) {
+        tuningLabel.classList.toggle('hidden', !waveformTuningActive);
+    }
+
+    // Legend items
+    const container = document.getElementById('waveform-legend-items');
+    if (!container) return;
+
+    const events = (waveformTuningActive && waveformTuningEvents)
+        ? waveformTuningEvents
+        : getEventsForStem(stemData);
+    const keptEvents = events.filter(e => e.status === 'KEPT');
+    const filteredCount = events.filter(e => e.status === 'FILTERED').length;
+    const reverbCount = events.filter(e => e.status === 'REVERB_CONTINUATION').length;
+    const sensitiveCount = (stemData.events_sensitive || []).length;
+
+    const items = [];
+
+    // Group KEPT events by classification index for color-coded legend
+    // For hihat stem, also group by hihat_state (open/closed)
+    const classGroups = {};
+    const hihatOpenGroups = { open: 0, closed: 0 };
+    const isHihat = waveformActiveStem === 'hihat';
+    
+    for (const e of keptEvents) {
+        // Check for hihat open/closed classification first
+        if (isHihat && e.hihat_state) {
+            hihatOpenGroups[e.hihat_state]++;
+        } else {
+            const cls = e.classification != null ? e.classification : 0;
+            if (!classGroups[cls]) classGroups[cls] = 0;
+            classGroups[cls]++;
+        }
+    }
+
+    // For hihat stem, show open/closed legend instead of classification colors
+    if (isHihat && (hihatOpenGroups.open > 0 || hihatOpenGroups.closed > 0)) {
+        if (hihatOpenGroups.open > 0) {
+            items.push({ color: HIHAT_OPEN_COLOR, label: `🔓 Open (${hihatOpenGroups.open})` });
+        }
+        if (hihatOpenGroups.closed > 0) {
+            items.push({ color: HIHAT_CLOSED_COLOR, label: `🔒 Closed (${hihatOpenGroups.closed})` });
+        }
+    } else {
+        const classKeys = Object.keys(classGroups).map(Number).sort();
+        if (classKeys.length <= 1) {
+            // Single classification (or no data) — show simple "Kept (N)"
+            if (keptEvents.length > 0) {
+                const cls = classKeys.length === 1 ? classKeys[0] : 0;
+                items.push({
+                    color: CLASSIFICATION_COLORS[cls] || WAVEFORM_COLORS.markerKept,
+                    label: `Kept (${keptEvents.length})`
+                });
+            }
+        } else {
+            // Multiple classifications — show each with its color
+            for (const cls of classKeys) {
+                const color = CLASSIFICATION_COLORS[cls] || WAVEFORM_COLORS.markerKept;
+                items.push({ color, label: `Type ${cls + 1} (${classGroups[cls]})` });
+            }
+        }
+    }
+
+    // Show filtered/reverb/sensitive counts only when tuning is active
+    if (waveformTuningActive) {
+        if (filteredCount > 0) items.push({ color: WAVEFORM_COLORS.markerFiltered, label: `Filtered (${filteredCount})` });
+        if (reverbCount > 0) items.push({ color: WAVEFORM_COLORS.markerReverbCont, label: `Reverb cont. (${reverbCount})` });
+    }
+    if (waveformTuningActive && waveformShowSensitive && sensitiveCount > 0) {
+        items.push({ color: '#9ca3af', label: `Sensitive (${sensitiveCount})` });
+    }
+
+    container.innerHTML = items.map(item =>
+        `<span class="flex items-center gap-1">
+            <span class="inline-block w-2 h-2 rounded-full" style="background:${item.color}"></span>
+            <span class="text-gray-300">${item.label}</span>
+        </span>`
+    ).join('');
+}
+
+// ─── Crosshair ───────────────────────────────────────────────────────────
+
+function drawCrosshair(ctx, canvas) {
+    if (waveformMouseX == null) return;
+
+    const rect = canvas.parentElement.getBoundingClientRect();
+    const H = rect.height;
+
+    ctx.save();
+    ctx.strokeStyle = WAVEFORM_COLORS.crosshair;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(waveformMouseX, 0);
+    ctx.lineTo(waveformMouseX, H);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+}
+
+/**
+ * Draw a solid playback position indicator line on a canvas.
+ * Visually distinct from the dotted crosshair: solid, bright cyan, with glow.
+ */
+function drawPlaybackIndicator(ctx, canvas, x) {
+    const rect = canvas.parentElement.getBoundingClientRect();
+    const H = rect.height;
+
+    ctx.save();
+    // Glow effect
+    ctx.shadowColor = WAVEFORM_COLORS.playbackLine;
+    ctx.shadowBlur = 6;
+    ctx.strokeStyle = WAVEFORM_COLORS.playbackLine;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, H);
+    ctx.stroke();
+    ctx.restore();
+}
+
+/**
+ * Get the current playback song time based on AudioContext timing.
+ */
+function getCurrentPlaybackTime() {
+    if (!audioIsPlaying || audioPlaybackTime == null || audioStartContextTime == null || !audioCtx) {
+        return null;
+    }
+    const elapsed = audioCtx.currentTime - audioStartContextTime;
+    return audioPlaybackTime + elapsed;
+}
+
+/**
+ * Animation loop that redraws the playback indicator at ~60fps.
+ */
+function animatePlaybackIndicator() {
+    if (!audioIsPlaying) {
+        playbackAnimFrameId = null;
+        drawWaveform(); // Final redraw to clear the indicator
+        return;
+    }
+
+    const currentTime = getCurrentPlaybackTime();
+    if (currentTime != null) {
+        const x = timeToCanvasX(currentTime);
+        // Redraw waveform (clears old indicator) then overlay the indicator
+        drawWaveform();
+        if (x != null) {
+            drawPlaybackIndicator(envelopeCtx, envelopeCanvas, x);
+            drawPlaybackIndicator(eventsCtx, eventsCanvas, x);
+        }
+    }
+
+    playbackAnimFrameId = requestAnimationFrame(animatePlaybackIndicator);
+}
+
+// ─── Tooltip ─────────────────────────────────────────────────────────────
+
+function drawTooltip(ctx, event, W, H) {
+    const lines = [];
+    lines.push(`Time: ${formatTime(event.time)}`);
+    lines.push(`Status: ${event.status}`);
+    if (event.velocity != null) lines.push(`Velocity: ${event.velocity}`);
+    if (event.note != null) {
+        lines.push(`Note: ${event.note}`);
+    }
+    if (event.classification != null) {
+        lines.push(`Type: ${event.classification + 1}`);
+    }
+    if (event.hihat_state != null) lines.push(`Hi-hat: ${event.hihat_state}`);
+    if (event.strength != null) lines.push(`Strength: ${event.strength}`);
+    if (event.geomean != null) lines.push(`Geomean: ${event.geomean}`);
+    if (event.amplitude != null) lines.push(`Amplitude: ${event.amplitude}`);
+    if (event.total_energy != null) lines.push(`Total energy: ${event.total_energy}`);
+    if (event.sustain_ms != null) lines.push(`Sustain: ${event.sustain_ms}ms`);
+    if (event.stereo_width != null) lines.push(`Stereo width: ${event.stereo_width.toFixed(3)}`);
+    if (event.pan_confidence != null) lines.push(`Pan: ${event.pan_confidence.toFixed(3)}`);
+
+    const lineH = 16;
+    const pad = 8;
+    const tooltipW = 180;
+    const tooltipH = lines.length * lineH + pad * 2;
+
+    let tx = event._mouseX + 12;
+    let ty = event._mouseY - tooltipH / 2;
+    if (tx + tooltipW > W) tx = event._mouseX - tooltipW - 12;
+    if (ty < 0) ty = 4;
+    if (ty + tooltipH > H) ty = H - tooltipH - 4;
+
+    ctx.fillStyle = WAVEFORM_COLORS.tooltipBg;
+    ctx.strokeStyle = WAVEFORM_COLORS.tooltipBorder;
+    ctx.lineWidth = 1;
+    roundRect(ctx, tx, ty, tooltipW, tooltipH, 4);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = WAVEFORM_COLORS.tooltipText;
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    lines.forEach((line, i) => {
+        ctx.fillText(line, tx + pad, ty + pad + (i + 1) * lineH - 3);
+    });
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.arcTo(x + w, y, x + w, y + r, r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+    ctx.lineTo(x + r, y + h);
+    ctx.arcTo(x, y + h, x, y + h - r, r);
+    ctx.lineTo(x, y + r);
+    ctx.arcTo(x, y, x + r, y, r);
+    ctx.closePath();
+}
+
+// ─── Mouse Interaction ───────────────────────────────────────────────────
+
+function setupCanvasInteraction(canvas) {
+    canvas.addEventListener('mousemove', onCanvasMouseMove);
+    canvas.addEventListener('mouseleave', onCanvasMouseLeave);
+    canvas.addEventListener('wheel', onCanvasWheel, { passive: false });
+    canvas.addEventListener('mousedown', onCanvasDragStart);
+}
+
+function onCanvasMouseMove(e) {
+    if (!waveformActiveStem || !waveformAnalysisData) return;
+
+    const canvasRect = e.target.parentElement.getBoundingClientRect();
+    const mouseX = e.clientX - canvasRect.left;
+    const mouseY = e.clientY - canvasRect.top;
+
+    // Crosshair X (same for both canvases since they share width)
+    waveformMouseX = mouseX;
+
+    // Handle drag (pan)
+    if (waveformIsDragging) {
+        const plotW = canvasRect.width - EVT_PAD.left - EVT_PAD.right;
+        const dx = (mouseX - waveformDragStartX) / plotW;
+        waveformPanOffset = waveformDragStartPan - dx;
+        clampPan();
+        drawWaveform();
+        return;
+    }
+
+    // Event hit testing (on events panel only)
+    const isEventsPanel = e.target === eventsCanvas;
+    if (isEventsPanel) {
+        const stemData = waveformAnalysisData.stems[waveformActiveStem];
+        const configuredEvents = getEventsForStem(stemData);
+        const sensitiveEvents = getSensitiveEventsForStem(stemData);
+        const envelope = waveformEnvelopeCache[waveformActiveStem];
+
+        const { tMin: tMinFull, tMax: tMaxFull } = computeTimeRange(configuredEvents, sensitiveEvents, envelope);
+        const { tMin, tMax } = computeVisibleRange(tMinFull, tMaxFull);
+
+        const PAD = EVT_PAD;
+        const plotW = canvasRect.width - PAD.left - PAD.right;
+        const xToTime = x => tMin + ((x - PAD.left) / plotW) * (tMax - tMin);
+        const mouseTime = xToTime(mouseX);
+        const hitRadius = (tMax - tMin) / plotW * 5;
+
+        const displayEvents = (waveformTuningActive && waveformTuningEvents)
+            ? waveformTuningEvents
+            : configuredEvents;
+        const allEvents = (!waveformTuningActive && waveformShowSensitive)
+            ? displayEvents.concat(sensitiveEvents)
+            : displayEvents;
+
+        let closest = null;
+        let closestDist = Infinity;
+        for (const evt of allEvents) {
+            if (evt.time == null) continue;
+            const dist = Math.abs(evt.time - mouseTime);
+            if (dist < hitRadius && dist < closestDist) {
+                closestDist = dist;
+                closest = evt;
+            }
+        }
+
+        if (closest) {
+            waveformHoverEvent = { ...closest, _mouseX: mouseX, _mouseY: mouseY };
+        } else {
+            waveformHoverEvent = null;
+        }
+    } else {
+        waveformHoverEvent = null;
+    }
+
+    // Set cursor
+    const cursorStyle = waveformIsDragging ? 'grabbing' : (waveformZoom > 1 ? 'grab' : 'crosshair');
+    if (envelopeCanvas) envelopeCanvas.style.cursor = cursorStyle;
+    if (eventsCanvas) eventsCanvas.style.cursor = waveformHoverEvent ? 'crosshair' : cursorStyle;
+
+    drawWaveform();
+}
+
+function onCanvasMouseLeave() {
+    waveformMouseX = null;
+    waveformHoverEvent = null;
+    if (envelopeCanvas) envelopeCanvas.style.cursor = 'default';
+    if (eventsCanvas) eventsCanvas.style.cursor = 'default';
+    drawWaveform();
+}
+
+function onCanvasWheel(e) {
+    e.preventDefault();
+    if (!waveformActiveStem) return;
+
+    const canvasRect = e.target.parentElement.getBoundingClientRect();
+    const mouseX = e.clientX - canvasRect.left;
+    const PAD = EVT_PAD;
+    const plotW = canvasRect.width - PAD.left - PAD.right;
+
+    // Mouse position as fraction of visible plot
+    const mouseFrac = Math.max(0, Math.min(1, (mouseX - PAD.left) / plotW));
+
+    const oldZoom = waveformZoom;
+    const zoomFactor = e.deltaY < 0 ? 1.25 : 1 / 1.25;
+    waveformZoom = Math.max(1, Math.min(100, waveformZoom * zoomFactor));
+
+    // Adjust pan so the time under the mouse stays in place
+    if (waveformZoom > 1) {
+        const oldVisibleFrac = 1 / oldZoom;
+        const newVisibleFrac = 1 / waveformZoom;
+        const maxOldStart = 1 - oldVisibleFrac;
+        const oldStart = maxOldStart > 0 ? waveformPanOffset * maxOldStart : 0;
+        const timeAtMouse = oldStart + mouseFrac * oldVisibleFrac;
+        const newStart = timeAtMouse - mouseFrac * newVisibleFrac;
+        const maxNewStart = 1 - newVisibleFrac;
+        waveformPanOffset = maxNewStart > 0 ? newStart / maxNewStart : 0;
+    } else {
+        waveformPanOffset = 0;
+    }
+
+    clampPan();
+    drawWaveform();
+}
+
+function onCanvasDragStart(e) {
+    const canvasRect = e.target.parentElement.getBoundingClientRect();
+    const mouseX = e.clientX - canvasRect.left;
+    const startX = mouseX;
+    let hasMoved = false;
+
+    // When zoomed in: distinguish between hold (audio playback) and drag (pan)
+    // Audio starts immediately on mousedown; if user drags, we stop audio and pan instead.
+    if (waveformZoom > 1) {
+        waveformIsDragging = false;
+        waveformDragStartX = mouseX;
+        waveformDragStartPan = waveformPanOffset;
+        let startedAudio = false;
+
+        // Check for event bar toggle first (instant, no hold needed)
+        const isEventsPanel = e.target === eventsCanvas;
+        if (isEventsPanel && waveformActiveStem) {
+            const hitEvent = hitTestEvent(mouseX);
+            if (hitEvent) {
+                toggleEventOverride(waveformActiveStem, hitEvent);
+                return;
+            }
+        }
+
+        // Start audio playback immediately on mousedown
+        if (waveformActiveStem) {
+            const clickTime = canvasXToTime(mouseX);
+            if (clickTime != null && clickTime >= 0) {
+                ensureAudioBuffer(waveformActiveStem).then(buffer => {
+                    if (hasMoved) return; // User started dragging before buffer loaded
+                    if (!buffer) return;
+                    startAudioPlayback(waveformActiveStem, clickTime);
+                    startedAudio = true;
+                });
+            }
+        }
+
+        const onMove = (me) => {
+            const rect = e.target.parentElement.getBoundingClientRect();
+            const mx = me.clientX - rect.left;
+            
+            // If moved more than 3 pixels, switch to drag mode
+            if (Math.abs(mx - startX) > 3) {
+                if (!hasMoved) {
+                    // First time crossing threshold: stop audio if it started
+                    hasMoved = true;
+                    if (startedAudio) {
+                        stopAudioPlayback();
+                        startedAudio = false;
+                    }
+                }
+                waveformIsDragging = true;
+                const plotW = rect.width - EVT_PAD.left - EVT_PAD.right;
+                const dx = (mx - waveformDragStartX) / plotW;
+                waveformPanOffset = waveformDragStartPan - dx;
+                clampPan();
+                waveformMouseX = me.clientX - rect.left;
+                drawWaveform();
+            }
+        };
+
+        const onUp = () => {
+            waveformIsDragging = false;
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            const cursorStyle = waveformZoom > 1 ? 'grab' : 'crosshair';
+            if (envelopeCanvas) envelopeCanvas.style.cursor = cursorStyle;
+            if (eventsCanvas) eventsCanvas.style.cursor = cursorStyle;
+
+            // Stop audio on mouse release
+            if (startedAudio) {
+                stopAudioPlayback();
+            }
+        };
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+
+        if (envelopeCanvas) envelopeCanvas.style.cursor = 'grabbing';
+        if (eventsCanvas) eventsCanvas.style.cursor = 'grabbing';
+        return;
+    }
+
+    // When not zoomed: check for event click (toggle) or audio playback
+    if (!waveformActiveStem) return;
+
+    // On events canvas: check if clicking on an event bar to toggle override
+    const isEventsPanel = e.target === eventsCanvas;
+    if (isEventsPanel) {
+        const hitEvent = hitTestEvent(mouseX);
+        if (hitEvent) {
+            toggleEventOverride(waveformActiveStem, hitEvent);
+            return;
+        }
+    }
+
+    // Click-and-hold on empty area: play audio from cursor position
+    const clickTime = canvasXToTime(mouseX);
+    if (clickTime == null || clickTime < 0) return;
+
+    console.log('Click-to-play at time:', clickTime.toFixed(2), 'seconds');
+    ensureAudioBuffer(waveformActiveStem).then(buffer => {
+        if (!buffer) {
+            console.warn('No audio buffer available for playback');
+            return;
+        }
+        startAudioPlayback(waveformActiveStem, clickTime);
+    });
+
+    const onUp = () => {
+        stopAudioPlayback();
+        document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mouseup', onUp);
+}
+
+// ─── Audio Playback (Click-and-Hold) ─────────────────────────────────────
+
+/**
+ * Fetch and decode stem audio into an AudioBuffer (cached per stem).
+ */
+async function ensureAudioBuffer(stemType) {
+    if (audioBufferCache[stemType]) {
+        console.log('Using cached audio buffer for', stemType);
+        return audioBufferCache[stemType];
+    }
+    
+    if (!currentProject) {
+        console.error('No currentProject available for audio buffer');
+        return null;
+    }
+    
+    if (!currentProject.files) {
+        console.error('No files in currentProject:', currentProject);
+        return null;
+    }
+
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        console.log('Created audio context, state:', audioCtx.state);
+    }
+
+    // Find the stem filename from project files (e.g. "SongName-kick.wav" or "SongName.kick.wav")
+    // Try stems folder first, then cleaned folder
+    const stemFiles = currentProject.files.stems || [];
+    const cleanedFiles = currentProject.files.cleaned || [];
+    console.log('Available stem files:', stemFiles);
+    console.log('Available cleaned files:', cleanedFiles);
+    
+    // Match both dash and dot patterns: "file-kick.wav" or "file.kick.wav"
+    let stemFile = stemFiles.find(f => f.includes(`-${stemType}.`) || f.includes(`.${stemType}.`));
+    let fileType = 'stems';
+    
+    if (!stemFile) {
+        stemFile = cleanedFiles.find(f => f.includes(`-${stemType}.`) || f.includes(`.${stemType}.`));
+        fileType = 'cleaned';
+    }
+    
+    if (!stemFile) {
+        console.error('No stem file found for type:', stemType, 'in stems or cleaned folders');
+        return null;
+    }
+    console.log('Found stem file:', stemFile, 'for type:', stemType, 'in', fileType, 'folder');
+
+    const url = `/api/projects/${currentProject.number}/download/${fileType}/${stemFile}`;
+    console.log('Loading audio buffer for', stemType, 'from', url);
+    try {
+        const response = await fetch(url);
+        if (!response.ok) {
+            console.warn('Audio fetch failed:', response.status, response.statusText);
+            return null;
+        }
+        const arrayBuf = await response.arrayBuffer();
+        console.log('Decoding audio buffer, size:', arrayBuf.byteLength, 'bytes');
+        const audioBuf = await audioCtx.decodeAudioData(arrayBuf);
+        audioBufferCache[stemType] = audioBuf;
+        console.log('Audio buffer ready, duration:', audioBuf.duration.toFixed(2), 'seconds');
+        return audioBuf;
+    } catch (err) {
+        console.error('Audio buffer load failed for', stemType, err);
+        return null;
+    }
+}
+
+/**
+ * Start audio playback from a given time (in seconds within the song).
+ */
+function startAudioPlayback(stemType, startTime) {
+    stopAudioPlayback();
+
+    const buffer = audioBufferCache[stemType];
+    if (!buffer || !audioCtx) return;
+
+    // Resume context if suspended (autoplay policy)
+    if (audioCtx.state === 'suspended') {
+        console.log('Resuming suspended audio context');
+        audioCtx.resume();
+    }
+
+    audioSource = audioCtx.createBufferSource();
+    audioSource.buffer = buffer;
+    audioSource.connect(audioCtx.destination);
+    audioSource.onended = () => {
+        // Auto-stop indicator when audio reaches end of buffer
+        audioIsPlaying = false;
+        audioPlaybackTime = null;
+        audioStartContextTime = null;
+    };
+
+    const offset = Math.max(0, Math.min(startTime, buffer.duration - 0.01));
+    console.log('Starting audio playback at offset:', offset.toFixed(2), 'seconds');
+    audioSource.start(0, offset);
+    audioIsPlaying = true;
+    audioPlaybackTime = startTime;
+    audioStartContextTime = audioCtx.currentTime;
+
+    // Start playback indicator animation
+    if (playbackAnimFrameId) cancelAnimationFrame(playbackAnimFrameId);
+    playbackAnimFrameId = requestAnimationFrame(animatePlaybackIndicator);
+}
+
+function stopAudioPlayback() {
+    if (audioSource) {
+        try { audioSource.stop(); } catch { /* already stopped */ }
+        audioSource.disconnect();
+        audioSource = null;
+    }
+    audioIsPlaying = false;
+    audioPlaybackTime = null;
+    audioStartContextTime = null;
+
+    // Stop playback indicator animation
+    if (playbackAnimFrameId) {
+        cancelAnimationFrame(playbackAnimFrameId);
+        playbackAnimFrameId = null;
+    }
+}
+
+/**
+ * Convert a canvas mouse X position to a song time (seconds).
+ */
+function canvasXToTime(mouseX) {
+    if (!waveformActiveStem || !waveformAnalysisData) return null;
+
+    const stemData = waveformAnalysisData.stems[waveformActiveStem];
+    const configuredEvents = getEventsForStem(stemData);
+    const sensitiveEvents = getSensitiveEventsForStem(stemData);
+    const envelope = waveformEnvelopeCache[waveformActiveStem];
+
+    const { tMin: tMinFull, tMax: tMaxFull } = computeTimeRange(configuredEvents, sensitiveEvents, envelope);
+    const { tMin, tMax } = computeVisibleRange(tMinFull, tMaxFull);
+
+    const PAD = EVT_PAD;
+    const plotW = (eventsCanvas ? eventsCanvas.parentElement.getBoundingClientRect().width : 800) - PAD.left - PAD.right;
+    return tMin + ((mouseX - PAD.left) / plotW) * (tMax - tMin);
+}
+
+/**
+ * Convert a song time (seconds) to a canvas X position (CSS pixels).
+ * Returns null if the time is outside the visible range.
+ */
+function timeToCanvasX(songTime) {
+    if (!waveformActiveStem || !waveformAnalysisData) return null;
+
+    const stemData = waveformAnalysisData.stems[waveformActiveStem];
+    const configuredEvents = getEventsForStem(stemData);
+    const sensitiveEvents = getSensitiveEventsForStem(stemData);
+    const envelope = waveformEnvelopeCache[waveformActiveStem];
+
+    const { tMin: tMinFull, tMax: tMaxFull } = computeTimeRange(configuredEvents, sensitiveEvents, envelope);
+    const { tMin, tMax } = computeVisibleRange(tMinFull, tMaxFull);
+
+    if (songTime < tMin || songTime > tMax) return null;
+
+    const PAD = EVT_PAD;
+    const plotW = (eventsCanvas ? eventsCanvas.parentElement.getBoundingClientRect().width : 800) - PAD.left - PAD.right;
+    return PAD.left + ((songTime - tMin) / (tMax - tMin)) * plotW;
+}
+
+// ─── Event Overrides (Click-to-Toggle) ───────────────────────────────────
+
+/**
+ * Load event overrides from server for the current project.
+ */
+async function loadEventOverrides() {
+    if (!currentProject) return;
+    try {
+        const data = await api.getEventOverrides(currentProject.number);
+        eventOverrides = data.overrides || {};
+    } catch {
+        eventOverrides = {};
+    }
+    applyOverridesToEvents();
+}
+
+/**
+ * Apply stored overrides to in-memory event data.
+ * Overrides are keyed by stem type and event time (4-decimal string).
+ */
+function applyOverridesToEvents() {
+    if (!waveformAnalysisData || !waveformAnalysisData.stems) return;
+
+    for (const [stemType, stemData] of Object.entries(waveformAnalysisData.stems)) {
+        const stemOverrides = eventOverrides[stemType];
+        if (!stemOverrides) continue;
+
+        const allEvents = [
+            ...(stemData.events_configured || []),
+            ...(stemData.events_sensitive || []),
+        ];
+        for (const event of allEvents) {
+            if (event.time == null) continue;
+            const key = event.time.toFixed(4);
+            if (stemOverrides[key]) {
+                event.status = stemOverrides[key];
+                event._overridden = true;
+            }
+        }
+    }
+}
+
+/**
+ * Toggle an event's kept/filtered status and schedule a save.
+ */
+function toggleEventOverride(stemType, event) {
+    if (!event || event.time == null) return;
+
+    const key = event.time.toFixed(4);
+    if (!eventOverrides[stemType]) eventOverrides[stemType] = {};
+
+    // Toggle status
+    const newStatus = event.status === 'KEPT' ? 'FILTERED' : 'KEPT';
+    event.status = newStatus;
+    event._overridden = true;
+    eventOverrides[stemType][key] = newStatus;
+
+    // Debounced save (500ms after last toggle)
+    eventOverridesDirty = true;
+    clearTimeout(eventOverridesSaveTimer);
+    eventOverridesSaveTimer = setTimeout(saveEventOverrides, 500);
+
+    drawWaveform();
+}
+
+/**
+ * Persist overrides to server.
+ */
+async function saveEventOverrides() {
+    if (!currentProject || !eventOverridesDirty) return;
+    try {
+        await api.saveEventOverrides(currentProject.number, eventOverrides);
+        eventOverridesDirty = false;
+    } catch (err) {
+        console.warn('Failed to save event overrides:', err);
+    }
+}
+
+/**
+ * Hit-test: find the event nearest to a canvas click, within a small radius.
+ */
+function hitTestEvent(mouseX) {
+    if (!waveformActiveStem || !waveformAnalysisData) return null;
+
+    const stemData = waveformAnalysisData.stems[waveformActiveStem];
+    const configuredEvents = getEventsForStem(stemData);
+    const sensitiveEvents = getSensitiveEventsForStem(stemData);
+    const envelope = waveformEnvelopeCache[waveformActiveStem];
+
+    const { tMin: tMinFull, tMax: tMaxFull } = computeTimeRange(configuredEvents, sensitiveEvents, envelope);
+    const { tMin, tMax } = computeVisibleRange(tMinFull, tMaxFull);
+
+    const PAD = EVT_PAD;
+    const rect = eventsCanvas ? eventsCanvas.parentElement.getBoundingClientRect() : null;
+    if (!rect) return null;
+    const plotW = rect.width - PAD.left - PAD.right;
+    const xToTime = x => tMin + ((x - PAD.left) / plotW) * (tMax - tMin);
+    const mouseTime = xToTime(mouseX);
+    const hitRadius = (tMax - tMin) / plotW * 6; // ~6px hit radius
+
+    const displayEvents = (waveformTuningActive && waveformTuningEvents)
+        ? waveformTuningEvents
+        : configuredEvents;
+
+    let closest = null;
+    let closestDist = Infinity;
+    for (const evt of displayEvents) {
+        if (evt.time == null) continue;
+        const dist = Math.abs(evt.time - mouseTime);
+        if (dist < hitRadius && dist < closestDist) {
+            closestDist = dist;
+            closest = evt;
+        }
+    }
+    return closest;
+}
+
+// ─── Resize Handler ──────────────────────────────────────────────────────
+
+let waveformResizeTimer = null;
+
+function onWaveformResize() {
+    clearTimeout(waveformResizeTimer);
+    waveformResizeTimer = setTimeout(() => {
+        if (waveformActiveStem) drawWaveform();
+    }, 100);
+}
+
+window.addEventListener('resize', onWaveformResize);

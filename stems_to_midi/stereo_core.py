@@ -29,6 +29,8 @@ except ImportError:
 __all__ = [
     'separate_channels',
     'calculate_pan_position',
+    'calculate_stereo_width',
+    'calculate_stereo_features',
     'classify_onset_by_pan',
     'detect_stereo_onsets',
     'detect_dual_channel_onsets',
@@ -146,6 +148,103 @@ def calculate_pan_position(
     pan = (right_rms - left_rms) / total_rms
     
     return float(pan)
+
+
+def calculate_stereo_width(
+    stereo_audio: np.ndarray,
+    onset_sample: int,
+    sr: int,
+    window_ms: float = 30.0
+) -> float:
+    """
+    Calculate stereo width at a specific onset time.
+
+    Measures the ratio of side (L-R) energy to total (mid + side) energy
+    in a short window after the onset.  A mono-panned sound (identical L
+    and R) produces width ≈ 0.  Uncorrelated L/R (e.g. wide reverb)
+    produces width ≈ 0.5.  Fully anti-phase L/R produces width ≈ 1.0.
+
+    Formula: RMS(L - R) / (RMS(L + R) + RMS(L - R))
+
+    Pure function — deterministic, no side effects.
+
+    Args:
+        stereo_audio: Stereo audio array with shape (samples, 2) or (2, samples).
+        onset_sample: Sample index of the onset.
+        sr: Sample rate in Hz.
+        window_ms: Analysis window duration in milliseconds (default 30 ms
+            to capture attack + early reflections).
+
+    Returns:
+        Stereo width from 0.0 (mono) to 1.0 (full side).
+        ~0.5 for uncorrelated channels.
+        Returns 0.0 when the window is silent or too short.
+    """
+    left, right = separate_channels(stereo_audio)
+
+    window_samples = int((window_ms / 1000.0) * sr)
+    start_sample = max(0, onset_sample)
+    end_sample = min(len(left), onset_sample + window_samples)
+
+    if start_sample >= end_sample:
+        return 0.0
+
+    left_window = left[start_sample:end_sample]
+    right_window = right[start_sample:end_sample]
+
+    mid = left_window + right_window
+    side = left_window - right_window
+
+    mid_rms = np.sqrt(np.mean(mid ** 2))
+    side_rms = np.sqrt(np.mean(side ** 2))
+
+    total = mid_rms + side_rms
+    if total < 1e-10:
+        return 0.0
+
+    # side / (side + mid): 0 = mono, 0.5 = uncorrelated, 1.0 = full side
+    return float(side_rms / total)
+
+
+def calculate_stereo_features(
+    stereo_audio: np.ndarray,
+    onset_times: np.ndarray,
+    sr: int,
+    pan_window_ms: float = 10.0,
+    width_window_ms: float = 30.0,
+) -> List[dict]:
+    """
+    Compute pan_confidence and stereo_width for an array of onset times.
+
+    Batch convenience wrapper around :func:`calculate_pan_position` and
+    :func:`calculate_stereo_width`.  Returns one dict per onset with keys
+    ``pan_confidence`` and ``stereo_width``.
+
+    Pure function — deterministic, no side effects.
+
+    Args:
+        stereo_audio: Stereo audio (2-channel).
+        onset_times: 1-D array of onset times in seconds.
+        sr: Sample rate in Hz.
+        pan_window_ms: Window for pan calculation (default 10 ms).
+        width_window_ms: Window for width calculation (default 30 ms).
+
+    Returns:
+        List of dicts ``[{'pan_confidence': float, 'stereo_width': float}, ...]``
+        aligned 1-to-1 with *onset_times*.  If *stereo_audio* is not stereo
+        (e.g. mono fallback), every entry is ``{'pan_confidence': 0.0, 'stereo_width': 0.0}``.
+    """
+    if stereo_audio.ndim != 2:
+        return [{'pan_confidence': 0.0, 'stereo_width': 0.0}
+                for _ in onset_times]
+
+    features: List[dict] = []
+    for t in onset_times:
+        sample = int(t * sr)
+        pan = calculate_pan_position(stereo_audio, sample, sr, window_ms=pan_window_ms)
+        width = calculate_stereo_width(stereo_audio, sample, sr, window_ms=width_window_ms)
+        features.append({'pan_confidence': pan, 'stereo_width': width})
+    return features
 
 
 def classify_onset_by_pan(

@@ -365,6 +365,7 @@ def stream_job_status(job_id):
                 # Create lightweight update (no full logs array)
                 update_data = {
                     'id': job.id,
+                    'operation': job.operation,
                     'status': job.status.value,
                     'status_detail': job.status_detail,
                     'progress': job.progress,
@@ -378,13 +379,13 @@ def stream_job_status(job_id):
                     ]
                 }
                 
-                if job.status.value in ('completed', 'failed', 'cancelled'):
+                if job.status.value in ('Completed', 'Failed', 'Cancelled'):
                     # Final event - include result/error
                     update_data['result'] = job.result
                     update_data['error'] = job.error
                     update_data['completed_at'] = job.completed_at.isoformat() if job.completed_at else None
-                    
-                    event_name = 'job_complete' if job.status.value == 'completed' else 'job_error'
+
+                    event_name = 'job_complete' if job.status.value == 'Completed' else 'job_error'
                     yield f'event: {event_name}\n'
                     yield f'data: {json.dumps(update_data)}\n\n'
                     break

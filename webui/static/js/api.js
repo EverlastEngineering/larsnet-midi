@@ -158,11 +158,36 @@ class LarsNetAPI {
     async getProjectConfig(projectNumber, configName) {
         return await this.get(`/projects/${projectNumber}/config/${configName}`);
     }
+
+    async updateConfig(projectId, configType, updates) {
+        return await this.post(`/config/${projectId}/${configType}`, { updates });
+    }
     
     async getProjectJobs(projectNumber) {
         return await this.get(`/projects/${projectNumber}/jobs`);
     }
     
+    async getProjectAnalysis(projectNumber) {
+        return await this.get(`/projects/${projectNumber}/analysis`);
+    }
+    
+    async getProjectEnvelope(projectNumber, stemType) {
+        return await this.get(`/projects/${projectNumber}/envelope/${stemType}`);
+    }
+
+    async getEventOverrides(projectNumber) {
+        return await this.get(`/projects/${projectNumber}/event-overrides`);
+    }
+
+    async saveEventOverrides(projectNumber, overrides) {
+        const response = await fetch(`${API_BASE}/projects/${projectNumber}/event-overrides`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ overrides })
+        });
+        return await response.json();
+    }
+
     async deleteProject(projectNumber) {
         try {
             const response = await fetch(`${API_BASE}/projects/${projectNumber}`, {
@@ -270,6 +295,21 @@ class LarsNetAPI {
         return await this.post('/stems-to-midi', {
             project_number: projectNumber,
             ...options
+        });
+    }
+
+    async rebuildMidi(projectNumber, options = {}) {
+        return await this.post('/rebuild-midi', {
+            project_number: projectNumber,
+            ...options
+        });
+    }
+
+    async reclassify(projectNumber, stemType, configOverrides = {}) {
+        return await this.post('/reclassify', {
+            project_number: projectNumber,
+            stem_type: stemType,
+            config_overrides: configOverrides
         });
     }
     

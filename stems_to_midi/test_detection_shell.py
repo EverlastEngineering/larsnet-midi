@@ -329,9 +329,9 @@ class TestDetectHihatState:
         onset_times = np.array([0.1, 0.3, 0.5])
         sustain_durations = [80.0, 200.0, 40.0]  # ms
         spectral_data = [
-            {'primary_energy': 10, 'secondary_energy': 50},  # Low energy = closed
-            {'primary_energy': 500, 'secondary_energy': 200},  # GeoMean=316, Sustain=200ms = OPEN (learned thresholds)
-            {'primary_energy': 30, 'secondary_energy': 40}  # Low energy = closed
+            {'body_energy': 10, 'sizzle_energy': 50},  # Low energy = closed
+            {'body_energy': 500, 'sizzle_energy': 200},  # GeoMean=316, Sustain=200ms = OPEN (learned thresholds)
+            {'body_energy': 30, 'sizzle_energy': 40}  # Low energy = closed
         ]
         
         states = detect_hihat_state(
@@ -397,7 +397,7 @@ class TestDetectHihatState:
         audio = np.random.randn(sr)
         onset_times = np.array([0.1])
         sustain_durations = [30.0]  # Would be handclap if detection enabled
-        spectral_data = [{'primary_energy': 30, 'secondary_energy': 150}]
+        spectral_data = [{'body_energy': 30, 'sizzle_energy': 150}]
         
         states = detect_hihat_state(
             audio, sr, onset_times,
@@ -447,7 +447,7 @@ class TestDetectHihatState:
         audio = np.random.randn(sr)
         onset_times = np.array([0.1])
         sustain_durations = [150.0]  # Exactly at threshold
-        spectral_data = [{'primary_energy': 10, 'secondary_energy': 50}]
+        spectral_data = [{'body_energy': 10, 'sizzle_energy': 50}]
         
         states = detect_hihat_state(
             audio, sr, onset_times,
@@ -472,10 +472,10 @@ class TestDetectHihatState:
         onset_times = np.array([0.1, 0.3, 0.5, 0.7])
         sustain_durations = [80.0, 200.0, 40.0, 120.0]
         spectral_data = [
-            {'primary_energy': 15, 'secondary_energy': 70},   # GeoMean=32 < 262 = closed
-            {'primary_energy': 500, 'secondary_energy': 200}, # GeoMean=316 >= 262, Sustain=200ms >= 100 = OPEN (learned)
-            {'primary_energy': 30, 'secondary_energy': 50},   # GeoMean=39 < 262 = closed
-            {'primary_energy': 10, 'secondary_energy': 60}    # GeoMean=24 < 262 = closed
+            {'body_energy': 15, 'sizzle_energy': 70},   # GeoMean=32 < 262 = closed
+            {'body_energy': 500, 'sizzle_energy': 200}, # GeoMean=316 >= 262, Sustain=200ms >= 100 = OPEN (learned)
+            {'body_energy': 30, 'sizzle_energy': 50},   # GeoMean=39 < 262 = closed
+            {'body_energy': 10, 'sizzle_energy': 60}    # GeoMean=24 < 262 = closed
         ]
         
         states = detect_hihat_state(

@@ -38,11 +38,11 @@ This document defines what data exists and how to preserve it.
 
 | Field | Hz Range | Description |
 |-------|----------|-------------|
-| `fund_energy` | 40-80 Hz | Fundamental thump |
+| `fundamental_energy` | 40-80 Hz | Fundamental thump |
 | `body_energy` | 80-150 Hz | Body resonance |
 | `attack_energy` | 150-400 Hz | Beater attack |
 
-**GeoMean Formula:** `cbrt(fund_energy * body_energy * attack_energy)`  
+**GeoMean Formula:** `cbrt(fundamental_energy * body_energy * attack_energy)`  
 **Default Threshold:** 70.0
 
 ### Hi-Hat
@@ -62,23 +62,30 @@ This document defines what data exists and how to preserve it.
 | Field | Hz Range | Description |
 |-------|----------|-------------|
 | `body_energy` | 1-4 kHz | Metal body |
-| `brill_energy` | 4-10 kHz | Brilliance |
+| `brilliance_energy` | 4-10 kHz | Brilliance |
 | `sustain_ms` | - | Decay duration |
 
-**GeoMean Formula:** `sqrt(body_energy * brill_energy)`  
+**GeoMean Formula:** `sqrt(body_energy * brilliance_energy)`  
 **Default Threshold:** 30.0
 
 ### Toms
 
 | Field | Hz Range | Description |
 |-------|----------|-------------|
-| `fund_energy` | 60-150 Hz | Fundamental pitch |
+| `fundamental_energy` | 60-150 Hz | Fundamental pitch |
 | `body_energy` | 150-400 Hz | Body resonance |
-| `detected_pitch_hz` | - | Pitch detection result |
-| `tom_class` | - | "Low", "Mid", or "High" |
+| `pitch_hz` | 40-500 Hz | Fundamental pitch (YIN algorithm) |
+| `spectral_centroid_hz` | - | Brightness/timbre (used as fallback) |
 
-**GeoMean Formula:** `sqrt(fund_energy * body_energy)`  
+**GeoMean Formula:** `sqrt(fundamental_energy * body_energy)`  
 **Default Threshold:** 80.0
+
+**Pitch Detection:** Toms use librosa's YIN algorithm for pitch detection, which is optimized for short, decaying percussive sounds. The algorithm:
+1. Searches for the peak amplitude within 10ms after the detected onset
+2. Uses autocorrelation-based YIN to find fundamental frequency
+3. Falls back to autocorrelation if YIN fails
+
+The `pitch_hz` field is used by default for tom clustering (low/mid/high), as true pitch provides better separation than spectral centroid (brightness).
 
 ## Extended Output Format
 

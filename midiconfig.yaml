@@ -44,7 +44,7 @@ energy_detection:
   merge_window_ms: 150.0        # energy: L/R merge window for stereo
   use_stereo: true              # energy: detect in stereo and calculate pan
   onset_merge_window_ms: 100    # energy: merge nearby onsets within this window
-  energy_method: 'rms'          # energy: envelope method ('rms', 'spectral', 'peak_hold')
+  energy_method: 'peak_hold'    # energy: envelope method ('rms', 'spectral', 'peak_hold')
   peak_hold_ms: 3.0             # energy: peak-hold smoothing window (2-5ms typical, DAW waveform)
 
 # === SPECTRAL FILTERING ===
@@ -54,7 +54,7 @@ filtering:
   min_sustain_ms: null  # per-stem: minimum sustain duration
   expected_clusters: null  # per-stem: expected number of sound types
   enable_spectral_filter: true  # per-stem: enable/disable spectral filtering
-  reverb_continuation_attack_threshold: 0.2  # attack_sharpness threshold: real hits >= 0.2, reverb tails < 0.2
+  reverb_continuation_attack_threshold: 0.4  # attack_sharpness threshold: real hits >= 0.4, reverb/echo < 0.4
 
 # === PER-STEM OVERRIDES ===
 # Energy-based params: threshold_db, min_peak_spacing_ms, min_absolute_energy, merge_window_ms, energy_method, peak_hold_ms
@@ -74,19 +74,18 @@ kick:
   # Detection method selection (NEW: energy-based is default)
   # use_librosa_detection: false  # Set to true for A/B testing with old method
   
-  # Energy-based detection parameters (NEW DEFAULT - needs testing/calibration)
+  # Energy-based detection parameters
   threshold_db: 12.0              # Lower for kicks (sharp, obvious transients)
   min_peak_spacing_ms: 50.0       # Kicks can be faster than cymbals (double-kick)
   min_absolute_energy: 0.02       # Higher noise floor (kicks are loud)
   merge_window_ms: 100.0          # L/R merge window
+  energy_method: 'peak_hold'      # Envelope calculation method
+  peak_hold_ms: 3.0               # Peak-hold smoothing window
   
   # Onset detection (LEGACY - only used if use_librosa_detection: true)
-  onset_threshold: 0.1      # Use global setting (0.01) - kicks are loud and easy to detect
-  onset_delta: 0.1          # Use global setting (0.005)
-  onset_wait: 2             # Use global setting (1 frame ~11ms)
-  timing_offset: -0.014      # Timing offset in seconds (compensates for backtracking being too early)
-                            # Positive values shift MIDI events later
-                            # Typical range: 0.020-0.050 seconds (20-50ms)
+  onset_threshold: 0.1      # Kicks are loud and easy to detect
+  onset_delta: 0.1          # Global setting
+  onset_wait: 2             # ~22ms minimum spacing
   
   # TWO-PASS FILTERING SYSTEM for kick drums
   # Pass 1: Spectral filtering (GeoMean threshold)
@@ -96,10 +95,9 @@ kick:
   # Real kick has energy in fundamental (40-80Hz), body (80-250Hz), and attack (1.5-5kHz)
   # Artifacts (snare bleed, clicks) have low energy in one or more ranges
   
-  geomean_threshold: 70.0   # Geometric mean of fundamental+body+attack energy (3-way: cube root)
-                              # Real kicks: 100-400, Artifacts: 10-80
-                              # Set to 70 to be conservative
-                              # Increase to 100-150 for stricter filtering
+  geomean_threshold: 800.0  # Geometric mean of fundamental+body+attack energy (3-way: cube root)
+                              # Real kicks: 500-2000, Artifacts: 50-400
+                              # High threshold filters out most bleed and artifacts
   
   # Spectral ranges for analysis (Hz)
   fundamental_freq_min: 40   # Start of fundamental range (deep bass)
@@ -124,9 +122,8 @@ snare:
   midi_note: 38               # D1 - Acoustic Snare (default)
   midi_note_rimshot: 37       # C#1 - Side Stick (Rimshot)
   midi_note_clap: 39          # D#1 - Hand Clap
-  midi_note_clap_snare: 40    # E1 - Electric Snare (Clap+Snare layered)
   
-  # Pitch detection for classification (snare/rimshot/clap/clap+snare)
+  # Pitch detection for classification (snare/rimshot/clap)
   enable_pitch_detection: false  # Enable pitch-based classification (experimental)
   pitch_method: 'yin'            # Pitch detection method: 'yin' or 'pyin'
   min_pitch_hz: 100.0            # Minimum expected pitch (Hz)
@@ -137,22 +134,22 @@ snare:
   
   # Clustering configuration
   onset_merge_window_ms: 100  # Merge L/R onsets within this window (ms)
-  expected_clusters: 1        # Expected number of distinct snare sounds (usually 1, or 2 with side-stick)
+  expected_clusters: 2        # Expected number of distinct snare sounds (2=snare+clap, 1=all snare)
   
   # Detection method selection (NEW: energy-based is default)
   # use_librosa_detection: false  # Set to true for A/B testing with old method
   
-  # Energy-based detection parameters (NEW DEFAULT - needs testing/calibration)
-  threshold_db: 14.0              # Medium threshold for snare transients
+  # Energy-based detection parameters
+  threshold_db: 10.0              # Lower threshold catches ghost notes
   min_peak_spacing_ms: 80.0       # Snare rolls can be fast
   min_absolute_energy: 0.015      # Medium noise floor
   merge_window_ms: 150.0          # L/R merge window
+  energy_method: 'peak_hold'      # Envelope calculation method
+  peak_hold_ms: 3.0               # Peak-hold smoothing window
   
   # Onset detection (LEGACY - only used if use_librosa_detection: true)
-  onset_threshold: 0.2          # Use global setting (0.01) - snares are loud and transient
-  onset_delta: null             # Use global setting (0.005)
-  onset_wait: 2                 # Use global setting (1 frame ~11ms)
-  timing_offset: -0.007         # Timing offset in seconds (0 = no offset)
+  onset_threshold: 0.2          # Snares are loud and transient
+  onset_wait: 2                 # ~22ms minimum spacing
   
   # Spectral filtering uses FFT analysis to distinguish real snare hits from artifacts
   # Real snare has energy in both body (150-400Hz) and wires (2-8kHz)
@@ -182,24 +179,18 @@ toms:
   
   # Clustering configuration
   onset_merge_window_ms: 100  # Merge L/R onsets within this window (ms)
-  expected_clusters: null     # null = disabled (toms use pitch-based classification)
+  expected_clusters: 3        # Expected number of distinct tom sounds (3=high/mid/low)
   
   # Detection method selection (NEW: energy-based is default)
   # use_librosa_detection: false  # Set to true for A/B testing with old method
   
-  # Energy-based detection parameters (NEW DEFAULT - needs testing/calibration)
-  threshold_db: 13.0              # Medium-low threshold for toms
+  # Energy-based detection parameters
+  threshold_db: 6.0               # Lower threshold catches softer hits
   min_peak_spacing_ms: 90.0       # Medium spacing for tom fills
   min_absolute_energy: 0.015      # Medium noise floor
   merge_window_ms: 150.0          # L/R merge window
-  energy_method: 'peak_hold'      # Envelope calculation method: 'rms', 'spectral', or 'peak_hold' (DAW-style)
-  peak_hold_ms: 3.0               # Peak-hold smoothing window (2-5ms typical, DAW waveform display)
-  
-  # Onset detection (LEGACY - only used if use_librosa_detection: true)
-  onset_threshold: null      # Use global setting (0.01) - toms are loud and transient
-  onset_delta: null          # Use global setting (0.005)
-  onset_wait: null           # Use global setting (1 frame ~11ms)
-  timing_offset: 0.0         # Timing offset in seconds (0 = no offset)
+  energy_method: 'peak_hold'      # Envelope calculation method
+  peak_hold_ms: 3.0               # Peak-hold smoothing window
   
   # Pitch detection for automatic low/mid/high classification
   enable_pitch_detection: true   # Detect pitch and assign to low/mid/high tom notes
@@ -230,49 +221,45 @@ hihat:
   use_stereo: true  # Hi-hat may be off-center, use stereo for better detection
   
   # Amplitude normalization (helps with quiet hihat recordings)
-  normalize_amplitude: true   # Override global setting - hihats benefit most from normalization
+  normalize_amplitude: true        # Override global setting - hihats benefit most from normalization
+  normalize_stereo_balance: true   # Equalize L/R channels
   
   # Clustering configuration
-  onset_merge_window_ms: 100  # Merge L/R onsets within this window (ms)
+  onset_merge_window_ms: 20   # Merge onsets within this window (faster patterns)
   expected_clusters: 2        # Expected number of distinct hihat sounds (open + closed)
   
   # Foot close generation
-  generate_foot_close: true  # Generate foot-close events at end of open hihat sustain
+  generate_foot_close: false  # Generate foot-close events at end of open hihat sustain
   
-  # Detection method selection (NEW: energy-based is default)
-  # use_librosa_detection: false  # Set to true for A/B testing with old method
-  
-  # Energy-based detection parameters (NEW DEFAULT - needs testing/calibration)
-  threshold_db: 16.0              # Higher threshold (avoid ghost notes and stick noise)
-  min_peak_spacing_ms: 60.0       # Hi-hats can be VERY fast (16th notes)
-  min_absolute_energy: 0.008      # Lower noise floor (hi-hats are quieter than cymbals)
-  merge_window_ms: 150.0          # L/R merge window
-  energy_method: 'peak_hold'      # Envelope calculation method: 'rms', 'spectral', or 'peak_hold' (DAW-style)
-  peak_hold_ms: 3.0               # Peak-hold smoothing window (2-5ms typical, DAW waveform display)
+  # Energy-based detection parameters (calibrated for sensitive detection)
+  threshold_db: 6.0               # Lower threshold to catch quiet hits
+  min_peak_spacing_ms: 20.0       # Hi-hats can be VERY fast (16th notes, 32nd notes)
+  min_absolute_energy: 0.008      # Lower noise floor (hi-hats are quieter)
+  merge_window_ms: 40.0           # Tighter L/R merge window for fast patterns
+  enable_amplitude_refinement: false  # Hihat has clean transients, doesn't need two-pass
+  energy_method: 'peak_hold'      # Envelope calculation method
+  peak_hold_ms: 3.0               # Peak-hold smoothing window
   
   # Onset detection (LEGACY - only used if use_librosa_detection: true)
-  # Hi-hats can have very fast repeated hits, similar to cymbals but shorter sustain
-  # These values were optimized through Bayesian analysis and testing
-  onset_threshold: 0.01     # Very sensitive to catch quiet closed hits after open hits (default: 0.3)
-  onset_delta: 0.005        # Low threshold for peak picking (default: 0.01)
-  onset_wait: 3             # ~33ms min spacing (allows fast 16th notes, default: 5)
-  timing_offset: -0.017     # Timing offset in seconds (0 = no offset)
+  # Very sensitive settings optimized through testing
+  onset_threshold: 0.003    # Very sensitive to catch quiet hits
+  onset_delta: 0.005        # Low threshold for peak picking
+  onset_wait: 3             # ~33ms min spacing (allows fast 16th notes)
   
-  # Open/Closed detection
-  detect_open: true          # Enable open vs closed hi-hat detection
+  # Open/Closed hi-hat classification - always enabled using threshold parameters below
   decay_threshold: 0.65      # Threshold for open detection (higher = fewer open detections)
-  open_sustain_ms: 100       # Open hi-hat sustain threshold (ms): >=100ms = open (LEARNED: Bayesian optimization)
-  open_geomean_min: 262.0    # Open hi-hat GeoMean threshold: >=262 = open (LEARNED: 100% accuracy on test set)
+  open_sustain_ms: 100       # Open hi-hat sustain threshold (ms): >=100ms = open
+  open_geomean_min: 262.0    # Open hi-hat GeoMean threshold: >=262 = open
   min_sustain_ms: 25         # Minimum sustain for artifact filtering (handclaps ~20ms, real hihats >25ms)
   
   # Classification logic: Open = (GeoMean >= open_geomean_min) AND (SustainMs >= open_sustain_ms)
   # Closed = everything else that passes geomean_threshold
   
-  # Spectral filtering (LEARNED: optimized through testing to eliminate false positives)
-  min_strength_threshold: 0.1  # Minimum onset strength (0-1). LEARNED: Filters weak false positives (<0.04) while keeping real hits (>0.1)
-  geomean_threshold: 20.0      # Geometric mean of body (500-2kHz) + sizzle (6-12kHz) energy
-                                # Real hi-hats: 100-400, Artifacts: 10-50
-                                # LEARNED: 20.0 catches most real hits while rejecting artifacts
+  # Spectral filtering
+  min_strength_threshold: 0.02  # Minimum onset strength - keep quiet hits
+  geomean_threshold: 8.0       # Geometric mean of body (500-2kHz) + sizzle (6-12kHz) energy
+                                # Real hi-hats: 15-400, Artifacts: 1-10
+                                # Lower threshold keeps more quiet hits
   
   # Spectral ranges for analysis (Hz)
   body_freq_min: 500         # Start of body/attack range (hi-hats are bright)
@@ -294,23 +281,18 @@ cymbals:
   onset_merge_window_ms: 100  # Merge L/R onsets within this window (ms)
   expected_clusters: 2        # Expected number of distinct cymbals (e.g., 2=left crash + right crash)
   
-  # Detection method selection (NEW: energy-based is default)
-  # use_librosa_detection: false  # Set to true for A/B testing with old method
-  
-  # Energy-based detection parameters (VALIDATED on Thunderstruck)
-  # Result: 72 events detected at attack start vs 238 with librosa (3.2x cleaner)
-  threshold_db: 15.0              # Prominence threshold (calibrated)
+  # Energy-based detection parameters (validated - cleaner than librosa)
+  threshold_db: 15.0              # Prominence threshold
   min_peak_spacing_ms: 100.0      # Minimum spacing between peaks
   min_absolute_energy: 0.01       # Noise floor threshold
   merge_window_ms: 150.0          # L/R merge window
+  energy_method: 'peak_hold'      # Envelope calculation method
+  peak_hold_ms: 3.0               # Peak-hold smoothing window
   
   # Onset detection (LEGACY - only used if use_librosa_detection: true)
-  # Strategy: Low sensitivity to detect only strong initial hits, then use spectral
-  # decay analysis to filter retriggering artifacts
-  onset_threshold: 0.35      # High threshold - only detect strong crashes (reduced false positives)
+  onset_threshold: 0.35      # High threshold - only detect strong crashes
   onset_delta: 0.1           # Higher delta for stricter peak picking
-  onset_wait: 10             # 10 frames = ~115ms min spacing (allows rapid crashes)
-  timing_offset: 0.0         # Timing offset in seconds (0 = no offset)
+  onset_wait: 10             # 10 frames = ~115ms min spacing
   
   # Sustain analysis and decay pattern detection
   sustain_analysis_window_sec: 2.0  # Window size for measuring cymbal sustain duration (seconds)
@@ -340,23 +322,6 @@ cymbals:
   max_note_duration: 2.0     # Maximum MIDI note duration in seconds
                               # Uses actual sustain duration from envelope analysis
                               # Allows long cymbal crashes to ring out naturally
-
-# Clustering Configuration (for adaptive threshold discovery)
-clustering:
-  method: 'dbscan'           # Clustering algorithm: 'dbscan' (density-based) or 'kmeans' (centroid-based)
-  features:                  # Features to include in clustering (order matters for weighting)
-    - 'pan_confidence'       # Primary: (R-L)/(R+L) strength differential between channels
-    - 'spectral_centroid'    # Secondary: Brightness/timbre of onset
-    - 'pitch'                # Secondary: Detected fundamental frequency
-    - 'timing_delta'         # Secondary: Time since previous onset
-
-# Threshold Optimization (iterative adjustment to match expected cluster count)
-threshold_optimization:
-  enabled: false             # Enable adaptive threshold discovery (opt-in)
-  max_iterations: 20         # Maximum optimization iterations before giving up
-  tolerance: 0               # Stop when cluster_count within ±N of expected (0 = exact match)
-  initial_threshold_step: 0.05  # Initial step size for threshold adjustments
-  convergence_patience: 3    # Stop if no improvement for N iterations
 
 # Clustering Configuration (for adaptive threshold discovery)
 clustering:
