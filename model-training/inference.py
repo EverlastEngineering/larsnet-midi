@@ -346,9 +346,24 @@ def run_inference(
         if class_notes:
             print(f"    {INDEX_TO_NAME[class_idx]:10s}: {len(class_notes):3d} notes")
     
+    # Extract tempo from ground truth MIDI if available
+    output_bpm = 120.0  # default
+    if compare_path:
+        try:
+            from midi_shell import load_midi_file
+            gt_midi = load_midi_file(compare_path)
+            for track in gt_midi.tracks:
+                for msg in track:
+                    if msg.type == 'set_tempo':
+                        output_bpm = 60_000_000 / msg.tempo  # microseconds -> BPM
+                        break
+                break
+        except Exception:
+            pass  # use default
+    
     # Write MIDI file
-    print(f"\nWriting MIDI: {output_path}")
-    write_midi(notes, output_path)
+    print(f"\nWriting MIDI: {output_path} (tempo: {output_bpm:.1f} BPM)")
+    write_midi(notes, output_path, bpm=output_bpm)
     
     # Compare if ground truth provided
     if compare_path:
