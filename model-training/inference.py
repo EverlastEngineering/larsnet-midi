@@ -1,0 +1,386 @@
+"""
+Inference Post-Processor - Step 7 of Deep Learning Roadmap
+
+Converts neural heatmap output back into a standard MIDI file.
+
+Usage:
+    # Basic usage with default threshold 0.8
+    python inference.py dl-1.wav --output output.mid
+    
+    # With different threshold
+    python inference.py dl-1.wav --output output.mid --threshold 0.5
+    
+    # Load from saved checkpoint
+    python inference.py dl-1.wav --output output.mid --checkpoint models/smoke_test.ckpt
+    
+    # Compare output to ground truth
+    python inference.py dl-1.wav --output output.mid --compare dl-1.mid
+"""
+
+import sys
+sys.path.insert(0, '/Users/jasoncopp/Source/GitHub/larsnet')
+
+import argparse
+import torch
+import numpy as np
+from scipy.signal import find_peaks
+from pathlib import Path
+
+from feature_extractor import get_input_tensor
+from model import DrumTranscriber
+
+
+# ============================================================================
+# Drum Class Mapping (from roadmap)
+# ============================================================================
+INDEX_TO_MIDI = {
+    0: 36,   # Kick
+    1: 38,   # Snare/Clap
+    2: 42,   # HH Closed
+    3: 46,   # HH Open
+    4: 48,   # Tom High
+    5: 45,   # Tom Mid
+    6: 41,   # Tom Low
+    7: 49,   # Crash
+    8: 51,   # Ride
+    9: 52,   # China
+    10: 55,  # Splash
+}
+
+INDEX_TO_NAME = {
+    0: 'Kick', 1: 'Snare', 2: 'HHC', 3: 'HHO',
+    4: 'TomHigh', 5: 'TomMid', 6: 'TomLow',
+    7: 'Crash', 8: 'Ride', 9: 'China', 10: 'Splash'
+}
+
+# Global config for inference
+HOP_LENGTH = 512
+SAMPLE_RATE = 44100
+SECONDS_PER_FRAME = HOP_LENGTH / SAMPLE_RATE
+
+
+# ============================================================================
+# Peak Detection with Onset Snapping
+# ============================================================================
+
+def find_peaks_with_onset_snap(probabilities: np.ndarray, threshold: float, min_distance: int = 5):
+    """
+    Find peaks in a probability curve and snap to steepest onset point.
+    
+    Args:
+        probabilities: 1D array of probabilities [Time]
+        threshold: Minimum probability to consider
+        min_distance: Minimum frames between peaks
+    
+    Returns:
+        List of (peak_frame, peak_value) tuples snapped to steepest onset
+    """
+    # Find raw peaks above threshold
+    peaks, properties = find_peaks(probabilities, height=threshold, distance=min_distance)
+    
+    if len(peaks) == 0:
+        return []
+    
+    results = []
+    for peak_idx in peaks:
+        # Find the steepest onset (max positive gradient) before the peak
+        # Look back up to 5 frames for the steepest climb
+        onset_start = max(0, peak_idx - 5)
+        
+        if onset_start == peak_idx:
+            # No lookback available, use peak itself
+            results.append((peak_idx, probabilities[peak_idx]))
+            continue
+        
+        # Compute gradient in the window before peak
+        gradient = np.gradient(probabilities[onset_start:peak_idx + 1])
+        # Steepest point is where gradient is maximum
+        steepest_local = onset_start + np.argmax(gradient)
+        
+        results.append((steepest_local, probabilities[steepest_local]))
+    
+    return results
+
+
+def heatmap_to_notes(prediction: torch.Tensor, threshold: float = 0.8) -> list:
+    """
+    Convert neural heatmap to MIDI note events.
+    
+    Args:
+        prediction: Tensor of shape [Batch, Time, 11] — probabilities per class
+        threshold: Minimum probability to trigger a note
+    
+    Returns:
+        List of (time_seconds, midi_note, velocity) tuples
+    """
+    # Move to CPU and convert to numpy
+    if prediction.is_cuda:
+        prediction = prediction.cpu()
+    pred_np = prediction.detach().cpu().numpy()
+    
+    # Use first batch item if batched
+    if pred_np.ndim == 3:
+        pred_np = pred_np[0]  # [Time, 11]
+    
+    time_steps = pred_np.shape[0]
+    notes = []
+    
+    for class_idx in range(11):
+        probs = pred_np[:, class_idx]
+        midi_note = INDEX_TO_MIDI[class_idx]
+        
+        # Find peaks with onset snapping
+        peaks = find_peaks_with_onset_snap(probs, threshold, min_distance=5)
+        
+        for frame, prob in peaks:
+            time_seconds = frame * SECONDS_PER_FRAME
+            # Velocity derived from probability strength (0-127)
+            velocity = int(min(127, prob * 127))
+            notes.append((time_seconds, midi_note, velocity))
+    
+    # Sort by time
+    notes.sort(key=lambda x: x[0])
+    return notes
+
+
+# ============================================================================
+# MIDI Writing
+# ============================================================================
+
+def seconds_to_beats(time_sec: float, tempo: float) -> float:
+    """Convert seconds to beats based on tempo."""
+    return time_sec * (tempo / 60.0)
+
+
+def write_midi(notes: list, output_path: str, bpm: float = 120.0):
+    """
+    Write notes to a MIDI file using midiutil (same as stems_to_midi/midi.py).
+    
+    Args:
+        notes: List of (time_seconds, midi_note, velocity)
+        output_path: Path to write .mid file
+        bpm: Tempo in beats per minute (default 120)
+    """
+    from midiutil import MIDIFile
+    
+    midi = MIDIFile(1)
+    track = 0
+    channel = 9  # Drums channel
+    
+    midi.addTrackName(track, 0, "Drums")
+    midi.addTempo(track, 0, bpm)
+    
+    # Add anchor note at time 0 (D#0 = note 27) to ensure proper timing offset
+    midi.addText(track, 0.0, "START")
+    midi.addNote(track, 9, 27, 0.0, 0.01, 1)  # Very short, very quiet
+    
+    # Sort notes by time
+    notes.sort(key=lambda x: x[0])
+    
+    # Add each note
+    for time_sec, midi_note, velocity in notes:
+        time_beats = seconds_to_beats(time_sec, bpm)
+        midi.addNote(track, channel, midi_note, time_beats, 0.08, velocity)
+    
+    with open(output_path, 'wb') as f:
+        midi.writeFile(f)
+
+
+# ============================================================================
+# Comparison Metrics
+# ============================================================================
+
+def compare_midi(generated_notes: list, ground_truth_path: str, time_tolerance: float = 0.05) -> dict:
+    """
+    Compare generated notes against ground truth MIDI.
+    
+    Args:
+        generated_notes: List of (time_seconds, midi_note, velocity)
+        ground_truth_path: Path to ground truth .mid file
+        time_tolerance: Seconds to consider as matching (default 50ms)
+    
+    Returns:
+        Dict with precision, recall, F1, and match details
+    """
+    from midi_shell import load_midi_file
+    from midi_core import extract_midi_notes_from_tracks, build_tempo_map_from_tracks
+    
+    # Load ground truth
+    midi_file = load_midi_file(ground_truth_path)
+    tempo_map = build_tempo_map_from_tracks(midi_file.tracks, midi_file.ticks_per_beat)
+    gt_notes, _ = extract_midi_notes_from_tracks(
+        midi_file.tracks, midi_file.ticks_per_beat, tempo_map
+    )
+    
+    # Build set of (time, pitch) tuples for comparison
+    gt_set = set()
+    for note in gt_notes:
+        # Round time to tolerance
+        t = round(note.time / time_tolerance) * time_tolerance
+        gt_set.add((t, note.midi_note))
+    
+    gen_set = set()
+    for time_sec, midi_note, _ in generated_notes:
+        t = round(time_sec / time_tolerance) * time_tolerance
+        gen_set.add((t, midi_note))
+    
+    # Calculate metrics
+    true_positives = len(gt_set & gen_set)
+    false_positives = len(gen_set - gt_set)
+    false_negatives = len(gt_set - gen_set)
+    
+    precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
+    recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+    
+    return {
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'true_positives': true_positives,
+        'false_positives': false_positives,
+        'false_negatives': false_negatives,
+        'generated_count': len(gen_set),
+        'ground_truth_count': len(gt_set)
+    }
+
+
+# ============================================================================
+# Main Inference
+# ============================================================================
+
+def run_inference(
+    audio_path: str,
+    output_path: str = None,
+    checkpoint_path: str = None,
+    threshold: float = 0.8,
+    device: str = None,
+    compare_path: str = None
+):
+    """
+    Run inference on audio and optionally compare to ground truth.
+    
+    Args:
+        audio_path: Path to input .wav file
+        output_path: Path to write output .mid (auto-generated if None)
+        checkpoint_path: Path to model checkpoint (trains new if None)
+        threshold: Probability threshold for peak detection
+        device: 'cpu', 'cuda', 'mps', or None for auto-detect
+        compare_path: Path to ground truth MIDI for comparison
+    
+    Returns:
+        List of (time_seconds, midi_note, velocity) tuples
+    """
+    # Device selection
+    if device is None:
+        if torch.cuda.is_available():
+            device = 'cuda'
+        elif torch.backends.mps.is_available():
+            device = 'mps'
+        else:
+            device = 'cpu'
+    print(f"Using device: {device}")
+    
+    # Auto-generate output path if not provided
+    if output_path is None:
+        audio_name = Path(audio_path).stem
+        output_path = f"{Path(audio_path).parent}/{audio_name}_predicted.mid"
+    
+    output_path = Path(output_path)
+    
+    # Get base name, strip any existing threshold suffix
+    import re
+    base = output_path.stem
+    base_clean = re.sub(r'_t[0-9.]+$', '', base)  # Remove _t0.8 if present
+    
+    # Find next version number (versions are shared across thresholds)
+    ext = output_path.suffix
+    parent = output_path.parent
+    counter = 1
+    
+    # Keep incrementing until no files exist with this version number (any threshold)
+    while True:
+        import glob
+        # Check if this version exists with ANY threshold
+        pattern = f"{base_clean}_v{counter}_t*"
+        existing = glob.glob(str(parent / pattern))
+        # Also check without threshold suffix (legacy files like dl-1_predicted_v1.mid)
+        if existing or (parent / f"{base_clean}_v{counter}{ext}").exists():
+            counter += 1
+        else:
+            break
+    
+    output_path = parent / f"{base_clean}_v{counter}_t{threshold}{ext}"
+    
+    print(f"Loading audio: {audio_path}")
+    spec = get_input_tensor(audio_path)
+    spec = spec.unsqueeze(0).to(device)  # [1, 3, 128, Time]
+    print(f"  Input shape: {spec.shape}")
+    
+    # Load or train model
+    model = DrumTranscriber().to(device)
+    
+    if checkpoint_path:
+        print(f"Loading checkpoint: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+    else:
+        print("No checkpoint provided — this will produce random output!")
+        print("Run smoke_test.py first to train and save a model.")
+    
+    # Run inference
+    print(f"\nRunning inference with threshold={threshold}...")
+    model.eval()
+    with torch.no_grad():
+        prediction = model(spec)  # [1, Time, 11]
+    
+    print(f"  Prediction shape: {prediction.shape}")
+    
+    # Convert to MIDI notes
+    notes = heatmap_to_notes(prediction, threshold=threshold)
+    print(f"  Detected {len(notes)} note events")
+    
+    # Show breakdown by class
+    for class_idx in range(11):
+        class_notes = [n for n in notes if n[1] == INDEX_TO_MIDI[class_idx]]
+        if class_notes:
+            print(f"    {INDEX_TO_NAME[class_idx]:10s}: {len(class_notes):3d} notes")
+    
+    # Write MIDI file
+    print(f"\nWriting MIDI: {output_path}")
+    write_midi(notes, output_path)
+    
+    # Compare if ground truth provided
+    if compare_path:
+        print(f"\nComparing to ground truth: {compare_path}")
+        metrics = compare_midi(notes, compare_path)
+        print(f"  Precision: {metrics['precision']:.3f}")
+        print(f"  Recall:    {metrics['recall']:.3f}")
+        print(f"  F1:        {metrics['f1']:.3f}")
+        print(f"  TP: {metrics['true_positives']}, FP: {metrics['false_positives']}, FN: {metrics['false_negatives']}")
+        print(f"  Generated: {metrics['generated_count']}, Ground truth: {metrics['ground_truth_count']}")
+    
+    return notes
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='DrumToMIDI Inference Post-Processor')
+    parser.add_argument('audio', help='Input audio file (.wav)')
+    parser.add_argument('--output', '-o', help='Output MIDI file path')
+    parser.add_argument('--checkpoint', '-c', help='Model checkpoint path')
+    parser.add_argument('--threshold', '-t', type=float, default=0.8,
+                        help='Detection threshold (0.0-1.0), default 0.8')
+    parser.add_argument('--device', '-d', choices=['cpu', 'cuda', 'mps'],
+                        help='Device to use (auto-detect if not specified)')
+    parser.add_argument('--compare', help='Ground truth MIDI to compare against')
+    
+    args = parser.parse_args()
+    
+    run_inference(
+        audio_path=args.audio,
+        output_path=args.output,
+        checkpoint_path=args.checkpoint,
+        threshold=args.threshold,
+        device=args.device,
+        compare_path=args.compare
+    )

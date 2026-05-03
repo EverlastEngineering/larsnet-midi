@@ -114,9 +114,16 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200):
         model = DrumTranscriber().to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
         criterion = nn.BCELoss()
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', factor=0.1, patience=10
+        )
         print("    Model initialized successfully")
     except Exception as e:
         return f"FAILURE: Model initialization failed: {e}"
+    
+    # Save directory
+    models_dir = Path(__file__).parent / "models"
+    models_dir.mkdir(exist_ok=True)
     
     # =====================================================================
     # STEP 5: Training loop
@@ -162,6 +169,9 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200):
             remaining = (epochs - epoch - 1) / rate if rate > 0 else 0
             print(f"    Epoch {epoch:3d}/{epochs} | Loss: {avg_loss:.6f} | {ms_per_epoch:.0f}ms/ep | ETA: {remaining:.0f}s | {step_count} steps     ", flush=True)
             last_print = now
+            
+            # Step the scheduler (ReduceLROnPlateau)
+            scheduler.step(avg_loss)
     except Exception as e:
         import traceback
         print(f"\n    ERROR during training: {e}")
@@ -170,6 +180,16 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200):
     
     total_time = time.time() - epoch_start
     print(f"\n    Training completed: {total_time:.1f}s total, {total_time/epochs*1000:.1f}ms/epoch")
+    
+    # Save model checkpoint
+    checkpoint_path = models_dir / "smoke_test.ckpt"
+    torch.save({
+        'epoch': epochs,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'loss': avg_loss,
+    }, checkpoint_path)
+    print(f"    Model saved to: {checkpoint_path}")
     
     # =====================================================================
     # STEP 6: Final verification
