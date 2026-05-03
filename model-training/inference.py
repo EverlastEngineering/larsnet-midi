@@ -269,19 +269,31 @@ def compare_midi(generated_notes: list, ground_truth_path: str, time_tolerance: 
     
     gt_set = set()
     for start, end, pitch in gt_grouped:
-        t = round(start / time_tolerance) * time_tolerance
+        t = start  # Use actual time, no quantization
         canonical = pitch_aliases.get(pitch, pitch)
         gt_set.add((t, canonical))
     
     gen_set = set()
     for start, end, pitch in gen_grouped:
-        t = round(start / time_tolerance) * time_tolerance
+        t = start  # Use actual time, no quantization
         gen_set.add((t, pitch))  # gen is already canonical from INDEX_TO_MIDI
     
-    # Calculate metrics
-    true_positives = len(gt_set & gen_set)
-    false_positives = len(gen_set - gt_set)
-    false_negatives = len(gt_set - gen_set)
+    # Calculate metrics with tolerance-based matching
+    # For each generated note, find if any GT note is within tolerance
+    matched_gt = set()
+    matched_gen = set()
+    
+    for gi, (g_start, g_end, g_pitch) in enumerate(gen_grouped):
+        for gi2, (gt_start, gt_end, gt_pitch) in enumerate(gt_grouped):
+            time_diff = abs(g_start - gt_start)
+            if time_diff <= time_tolerance and g_pitch == gt_pitch:
+                matched_gen.add(gi)
+                matched_gt.add(gi2)
+                break
+    
+    true_positives = len(matched_gt)
+    false_positives = len(gen_grouped) - len(matched_gen)
+    false_negatives = len(gt_grouped) - len(matched_gt)
     
     precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
     recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
@@ -295,14 +307,15 @@ def compare_midi(generated_notes: list, ground_truth_path: str, time_tolerance: 
         50: 'TomHigh', 47: 'TomMid', 43: 'TomLow', 58: 'TomLow', 52: 'Crash2', 53: 'Ride', 59: 'Ride', 55: 'Crash1',
     }
     tp_details = []
-    for key in sorted(gt_set & gen_set):
-        t, pitch = key
-        name = note_names.get(pitch, f'Note({pitch})')
-        gt_time = next((g[0] for g in gt_grouped if g[0] == t and g[2] == pitch), t)
-        gen_time = next((g[0] for g in gen_grouped if g[0] == t and g[2] == pitch), t)
-        offset = gt_time - gen_time
-        if len(tp_details) < 10:
-            tp_details.append({'name': name, 'pitch': pitch, 'gt': gt_time, 'gen': gen_time, 'offset': offset})
+    for gi, (g_start, g_end, g_pitch) in enumerate(gen_grouped):
+        if gi in matched_gen:
+            for gi2, (gt_start, gt_end, gt_pitch) in enumerate(gt_grouped):
+                if gi2 in matched_gt and abs(g_start - gt_start) <= time_tolerance and g_pitch == gt_pitch:
+                    name = note_names.get(g_pitch, f'Note({g_pitch})')
+                    offset = gt_start - g_start
+                    if len(tp_details) < 10:
+                        tp_details.append({'name': name, 'pitch': g_pitch, 'gt': gt_start, 'gen': g_start, 'offset': offset})
+                    break
     
     # Per-note breakdown by class name
     gt_by_class = Counter()
@@ -327,8 +340,8 @@ def compare_midi(generated_notes: list, ground_truth_path: str, time_tolerance: 
         'true_positives': true_positives,
         'false_positives': false_positives,
         'false_negatives': false_negatives,
-        'generated_count': len(gen_set),
-        'ground_truth_count': len(gt_set),
+        'generated_count': len(gen_grouped),
+        'ground_truth_count': len(gt_grouped),
         'note_breakdown': breakdown,
         'tp_details': tp_details
     }

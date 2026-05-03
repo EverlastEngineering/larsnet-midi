@@ -74,7 +74,7 @@ def midi_to_frame_array(
             
             # Causal Smear: Probability is 1.0 at impact, then decays
             # This allows the model to be 'close' and still receive partial credit
-            if hit_frame < total_frames:
+            if 0 <= hit_frame < total_frames:
                 labels[idx, hit_frame] = 1.0       # Precision Hit
                 if hit_frame + 1 < total_frames:
                     labels[idx, hit_frame + 1] = 0.8

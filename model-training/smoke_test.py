@@ -183,8 +183,8 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200):
     
     # Save model checkpoint
     # checkpoint_path = models_dir / "dl-1.ckpt"
-    # checkpoint_path = models_dir / "39_rock-indie_63_beat_4-4_10.ckpt"
-    checkpoint_path = models_dir / "31_hiphop_92_beat_4-4_53.ckpt"
+    checkpoint_path = models_dir / "39_rock-indie_63_beat_4-4_10.ckpt"
+    # checkpoint_path = models_dir / "31_hiphop_92_beat_4-4_53.ckpt"
     torch.save({
         'epoch': epochs,
         'model_state_dict': model.state_dict(),
@@ -213,10 +213,10 @@ if __name__ == "__main__":
     base = "/Users/jasoncopp/Source/GitHub/larsnet/model-training"
     # audio_path = f"{base}/dl-1.wav"
     # midi_path = f"{base}/dl-1.mid"
-    audio_path = f"{base}/31_hiphop_92_beat_4-4_53.wav"
-    midi_path = f"{base}/31_hiphop_92_beat_4-4_53.mid"
-    # audio_path = f"{base}/39_rock-indie_63_beat_4-4_10.wav"
-    # midi_path = f"{base}/39_rock-indie_63_beat_4-4_10.mid"
+    # audio_path = f"{base}/31_hiphop_92_beat_4-4_53.wav"
+    # midi_path = f"{base}/31_hiphop_92_beat_4-4_53.mid"
+    audio_path = f"{base}/39_rock-indie_63_beat_4-4_10.wav"
+    midi_path = f"{base}/39_rock-indie_63_beat_4-4_10.mid"
     
     print(f"Audio: {audio_path}")
     print(f"MIDI:  {midi_path}")
