@@ -263,14 +263,20 @@ def compare_midi(generated_notes: list, ground_truth_path: str, time_tolerance: 
     
     gen_grouped = group_notes(generated_notes, time_tolerance)
     
-    # Build sets for comparison using start times
+    # Build sets for comparison using grouped data
+    # Map pitches to canonical values for fair comparison
+    pitch_aliases = {22: 42, 44: 42, 26: 46, 55: 49, 35: 36}  # Roland -> canonical
+    
     gt_set = set()
     for start, end, pitch in gt_grouped:
-        gt_set.add((round(start / time_tolerance) * time_tolerance, pitch))
+        t = round(start / time_tolerance) * time_tolerance
+        canonical = pitch_aliases.get(pitch, pitch)
+        gt_set.add((t, canonical))
     
     gen_set = set()
     for start, end, pitch in gen_grouped:
-        gen_set.add((round(start / time_tolerance) * time_tolerance, pitch))
+        t = round(start / time_tolerance) * time_tolerance
+        gen_set.add((t, pitch))  # gen is already canonical from INDEX_TO_MIDI
     
     # Calculate metrics
     true_positives = len(gt_set & gen_set)
