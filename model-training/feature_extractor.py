@@ -1,12 +1,8 @@
 """
-Feature Extractor - 3-Channel Mel-Spectrogram Generator
+Feature Extractor - Mono Mel-Spectrogram Generator
 
-Transforms raw 1D audio into a 2D feature set with 3 channels:
-- Left spectrogram
-- Right spectrogram  
-- Stereo Width (L-R)
-
-Dimensions: [3, 128, Time_Steps]
+Transforms raw 1D audio into a mono mel-spectrogram for simplicity.
+Dimensions: [1, 128, Time_Steps]
 """
 
 import torch
@@ -16,20 +12,26 @@ import torchaudio.transforms as T
 
 def get_input_tensor(audio_path: str, sample_rate: int = 44100) -> torch.Tensor:
     """
-    Converts a stereo wav file into a 3-channel Mel-Spectrogram.
+    Converts audio to mono mel-spectrogram.
     
     Args:
-        audio_path: Path to stereo WAV file
+        audio_path: Path to audio file
         sample_rate: Audio sample rate (default 44100)
     
     Returns:
-        Tensor of shape [3, 128, Time_Steps]
-        Channel 0: Left mel-spec (dB)
-        Channel 1: Right mel-spec (dB)
-        Channel 2: Stereo width (L-R) mel-spec (dB)
+        Tensor of shape [1, 128, Time_Steps]
     """
     # Load audio: waveform shape is [channels, samples]
     waveform, sr = torchaudio.load(audio_path)
+    
+    # Handle mono by duplicating to stereo
+    if waveform.shape[0] == 1:
+        waveform = waveform.repeat(2, 1)  # [2, samples]
+    
+    # Normalize audio to max amplitude 1.0
+    max_val = torch.max(torch.abs(waveform))
+    if max_val > 0:
+        waveform = waveform / max_val
     
     # Resample if needed
     if sr != sample_rate:
@@ -46,17 +48,11 @@ def get_input_tensor(audio_path: str, sample_rate: int = 44100) -> torch.Tensor:
     # Convert to decibels for neural network stability
     amplitude_to_db = T.AmplitudeToDB()
     
-    # Extract Left and Right channels
-    spec_l = amplitude_to_db(mel_transform(waveform[0:1]))  # [1, 128, Time]
-    spec_r = amplitude_to_db(mel_transform(waveform[1:2]))  # [1, 128, Time]
+    # Mix stereo to mono
+    mono = waveform.mean(dim=0, keepdim=True)  # [1, samples]
+    spec = amplitude_to_db(mel_transform(mono))  # [1, 128, Time]
     
-    # Feature 3: Stereo Width (The "Clap vs Snare" engine)
-    # Calculated as the energy of the 'Side' signal (L-R)
-    side = waveform[0:1] - waveform[1:2]
-    spec_width = amplitude_to_db(mel_transform(side))  # [1, 128, Time]
-    
-    # Stack into a single 3D tensor: [Channels, Freq, Time]
-    return torch.cat([spec_l, spec_r, spec_width], dim=0)
+    return spec
 
 
 if __name__ == "__main__":

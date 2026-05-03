@@ -26,7 +26,7 @@ class DrumTranscriber(nn.Module):
         
         # THE EYES: Conv block extracts frequency-domain features (transients)
         self.conv = nn.Sequential(
-            nn.Conv2d(3, 32, 3, padding=1),
+            nn.Conv2d(1, 32, 3, padding=1),
             nn.ReLU(),
             nn.MaxPool2d((2, 1)),  # Reduce frequency height, preserve time resolution
             nn.Conv2d(32, 64, 3, padding=1),
@@ -39,8 +39,8 @@ class DrumTranscriber(nn.Module):
         # Input size (2048) comes from 64 filters * (128 / 2 / 2) freq bins
         self.rnn = nn.GRU(2048, 128, batch_first=True, bidirectional=True)
         
-        # THE DECISION: Linear layer maps 256 GRU features to 11 probability bits
-        self.fc = nn.Linear(256, 11)
+        # THE DECISION: Linear layer maps 256 GRU features to 10 probability bits
+        self.fc = nn.Linear(256, 10)
         
     def forward(self, x):
         """
@@ -52,8 +52,8 @@ class DrumTranscriber(nn.Module):
                Freq should be 128 (mel bins)
         
         Returns:
-            Output tensor of shape [Batch, Time, 11]
-            Each of the 11 values is a probability 0.0-1.0
+            Output tensor of shape [Batch, Time, 10]
+            Each of the 10 values is a probability 0.0-1.0
         """
         # Conv block: [B, 3, 128, T] -> [B, 64, 32, T]
         x = self.conv(x)

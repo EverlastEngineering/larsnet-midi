@@ -58,7 +58,7 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200):
     try:
         input_tensor = get_input_tensor(audio_path)
         print(f"    Input shape: {input_tensor.shape}")
-        assert input_tensor.shape[0] == 3, "Should have 3 channels"
+        assert input_tensor.shape[0] == 1, "Should have 1 channel"
         assert input_tensor.shape[1] == 128, "Should have 128 mel bins"
     except Exception as e:
         return f"FAILURE: Audio loading failed: {e}"
@@ -66,7 +66,7 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200):
     
     # Add batch dimension: [3, 128, T] -> [1, 3, 128, T]
     input_tensor = input_tensor.unsqueeze(0).to(device)
-    
+        
     # =====================================================================
     # STEP 2: Load and verify MIDI
     # =====================================================================
@@ -102,7 +102,7 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200):
         # Reshape target for loss: [11, T] -> [1, T, 11]
         target_tensor = target_tensor.unsqueeze(0).permute(0, 2, 1).to(device)
         print(f"    Target shape: {target_tensor.shape}")
-        assert target_tensor.shape == (1, total_frames, 11), "Target shape mismatch"
+        assert target_tensor.shape == (1, total_frames, 10), "Target shape mismatch"
     except Exception as e:
         return f"FAILURE: Label encoding failed: {e}"
     
@@ -182,7 +182,9 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200):
     print(f"\n    Training completed: {total_time:.1f}s total, {total_time/epochs*1000:.1f}ms/epoch")
     
     # Save model checkpoint
-    checkpoint_path = models_dir / "smoke_test.ckpt"
+    # checkpoint_path = models_dir / "dl-1.ckpt"
+    # checkpoint_path = models_dir / "39_rock-indie_63_beat_4-4_10.ckpt"
+    checkpoint_path = models_dir / "31_hiphop_92_beat_4-4_53.ckpt"
     torch.save({
         'epoch': epochs,
         'model_state_dict': model.state_dict(),
@@ -209,8 +211,12 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200):
 
 if __name__ == "__main__":
     base = "/Users/jasoncopp/Source/GitHub/larsnet/model-training"
-    audio_path = f"{base}/dl-1.wav"
-    midi_path = f"{base}/dl-1.mid"
+    # audio_path = f"{base}/dl-1.wav"
+    # midi_path = f"{base}/dl-1.mid"
+    audio_path = f"{base}/31_hiphop_92_beat_4-4_53.wav"
+    midi_path = f"{base}/31_hiphop_92_beat_4-4_53.mid"
+    # audio_path = f"{base}/39_rock-indie_63_beat_4-4_10.wav"
+    # midi_path = f"{base}/39_rock-indie_63_beat_4-4_10.mid"
     
     print(f"Audio: {audio_path}")
     print(f"MIDI:  {midi_path}")

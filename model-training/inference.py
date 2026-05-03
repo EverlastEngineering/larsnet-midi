@@ -107,7 +107,7 @@ def heatmap_to_notes(prediction: torch.Tensor, threshold: float = 0.8) -> list:
     Convert neural heatmap to MIDI note events.
     
     Args:
-        prediction: Tensor of shape [Batch, Time, 11] — probabilities per class
+        prediction: Tensor of shape [Batch, Time, 10] — probabilities per class
         threshold: Minimum probability to trigger a note
     
     Returns:
@@ -120,12 +120,12 @@ def heatmap_to_notes(prediction: torch.Tensor, threshold: float = 0.8) -> list:
     
     # Use first batch item if batched
     if pred_np.ndim == 3:
-        pred_np = pred_np[0]  # [Time, 11]
+        pred_np = pred_np[0]  # [Time, 10]
     
     time_steps = pred_np.shape[0]
     notes = []
     
-    for class_idx in range(11):
+    for class_idx in range(10):
         probs = pred_np[:, class_idx]
         midi_note = INDEX_TO_MIDI[class_idx]
         
@@ -314,7 +314,7 @@ def run_inference(
     
     print(f"Loading audio: {audio_path}")
     spec = get_input_tensor(audio_path)
-    spec = spec.unsqueeze(0).to(device)  # [1, 3, 128, Time]
+    spec = spec.unsqueeze(0).to(device)  # [1, 1, 128, Time]
     print(f"  Input shape: {spec.shape}")
     
     # Load or train model
@@ -332,7 +332,7 @@ def run_inference(
     print(f"\nRunning inference with threshold={threshold}...")
     model.eval()
     with torch.no_grad():
-        prediction = model(spec)  # [1, Time, 11]
+        prediction = model(spec)  # [1, Time, 10]
     
     print(f"  Prediction shape: {prediction.shape}")
     
@@ -341,7 +341,7 @@ def run_inference(
     print(f"  Detected {len(notes)} note events")
     
     # Show breakdown by class
-    for class_idx in range(11):
+    for class_idx in range(10):
         class_notes = [n for n in notes if n[1] == INDEX_TO_MIDI[class_idx]]
         if class_notes:
             print(f"    {INDEX_TO_NAME[class_idx]:10s}: {len(class_notes):3d} notes")
