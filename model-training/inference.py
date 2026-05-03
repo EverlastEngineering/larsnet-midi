@@ -190,9 +190,49 @@ def write_midi(notes: list, output_path: str, bpm: float = 120.0):
 # Comparison Metrics
 # ============================================================================
 
+def group_notes(raw_notes: list, time_tolerance: float = 0.05) -> list:
+    """
+    Convert raw MIDI note events into grouped note on/off events.
+    Multiple strikes of the same pitch within time_tolerance are merged.
+    
+    Args:
+        raw_notes: List of (time_seconds, midi_note, velocity) tuples
+        time_tolerance: Seconds to consider as same region
+    
+    Returns:
+        List of (start_time, end_time, midi_note) tuples
+    """
+    if not raw_notes:
+        return []
+    
+    # Sort by time then pitch
+    sorted_notes = sorted(raw_notes, key=lambda x: (x[0], x[1]))
+    
+    groups = []
+    current_group = None
+    
+    for time_sec, midi_note, velocity in sorted_notes:
+        if current_group is None:
+            current_group = [time_sec, time_sec, midi_note]
+        elif (midi_note == current_group[2] and 
+              time_sec - current_group[1] <= time_tolerance):
+            # Extend the group
+            current_group[1] = time_sec
+        else:
+            # Save current and start new group
+            groups.append(tuple(current_group))
+            current_group = [time_sec, time_sec, midi_note]
+    
+    if current_group:
+        groups.append(tuple(current_group))
+    
+    return groups
+
+
 def compare_midi(generated_notes: list, ground_truth_path: str, time_tolerance: float = 0.05) -> dict:
     """
     Compare generated notes against ground truth MIDI.
+    Both sides are grouped before comparison for fair comparison.
     
     Args:
         generated_notes: List of (time_seconds, midi_note, velocity)
@@ -205,24 +245,32 @@ def compare_midi(generated_notes: list, ground_truth_path: str, time_tolerance: 
     from midi_shell import load_midi_file
     from midi_core import extract_midi_notes_from_tracks, build_tempo_map_from_tracks
     
-    # Load ground truth
+    # Load ground truth and convert to (time, pitch) format
     midi_file = load_midi_file(ground_truth_path)
     tempo_map = build_tempo_map_from_tracks(midi_file.tracks, midi_file.ticks_per_beat)
     gt_notes, _ = extract_midi_notes_from_tracks(
         midi_file.tracks, midi_file.ticks_per_beat, tempo_map
     )
     
-    # Build set of (time, pitch) tuples for comparison
+    # Debug: show raw pitch counts in GT
+    from collections import Counter
+    raw_pitch_counts = Counter(n.midi_note for n in gt_notes)
+    print(f"\n  [DEBUG] Raw GT pitch counts: {dict(sorted(raw_pitch_counts.items()))}")
+    
+    # Convert raw MIDI to grouped format (start_time, pitch)
+    gt_raw = [(n.time, n.midi_note) for n in gt_notes]
+    gt_grouped = group_notes([(t, p, 100) for t, p in gt_raw], time_tolerance)
+    
+    gen_grouped = group_notes(generated_notes, time_tolerance)
+    
+    # Build sets for comparison using start times
     gt_set = set()
-    for note in gt_notes:
-        # Round time to tolerance
-        t = round(note.time / time_tolerance) * time_tolerance
-        gt_set.add((t, note.midi_note))
+    for start, end, pitch in gt_grouped:
+        gt_set.add((round(start / time_tolerance) * time_tolerance, pitch))
     
     gen_set = set()
-    for time_sec, midi_note, _ in generated_notes:
-        t = round(time_sec / time_tolerance) * time_tolerance
-        gen_set.add((t, midi_note))
+    for start, end, pitch in gen_grouped:
+        gen_set.add((round(start / time_tolerance) * time_tolerance, pitch))
     
     # Calculate metrics
     true_positives = len(gt_set & gen_set)
@@ -233,6 +281,39 @@ def compare_midi(generated_notes: list, ground_truth_path: str, time_tolerance: 
     recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
     
+    # Track true positives with offsets for diagnosis
+    note_names = {
+        36: 'Kick', 38: 'Snare', 42: 'HHC', 46: 'HHO', 48: 'TomHigh', 45: 'TomMid', 41: 'TomLow', 49: 'Crash1', 57: 'Crash2', 51: 'Ride',
+        # Roland aliases
+        22: 'HHC', 44: 'HHC', 26: 'HHO', 35: 'Kick', 40: 'Snare', 37: 'Snare', 39: 'Snare',
+        50: 'TomHigh', 47: 'TomMid', 43: 'TomLow', 58: 'TomLow', 52: 'Crash2', 53: 'Ride', 59: 'Ride', 55: 'Crash1',
+    }
+    tp_details = []
+    for key in sorted(gt_set & gen_set):
+        t, pitch = key
+        name = note_names.get(pitch, f'Note({pitch})')
+        gt_time = next((g[0] for g in gt_grouped if g[0] == t and g[2] == pitch), t)
+        gen_time = next((g[0] for g in gen_grouped if g[0] == t and g[2] == pitch), t)
+        offset = gt_time - gen_time
+        if len(tp_details) < 10:
+            tp_details.append({'name': name, 'pitch': pitch, 'gt': gt_time, 'gen': gen_time, 'offset': offset})
+    
+    # Per-note breakdown by class name
+    gt_by_class = Counter()
+    for start, end, pitch in gt_grouped:
+        name = note_names.get(pitch, f'Note({pitch})')
+        gt_by_class[name] += 1
+    
+    gen_by_class = Counter()
+    for start, end, pitch in gen_grouped:
+        name = note_names.get(pitch, f'Note({pitch})')
+        gen_by_class[name] += 1
+    
+    all_classes = sorted(set(gt_by_class.keys()) | set(gen_by_class.keys()))
+    breakdown = {}
+    for name in all_classes:
+        breakdown[name] = {'gt': gt_by_class.get(name, 0), 'gen': gen_by_class.get(name, 0)}
+    
     return {
         'precision': precision,
         'recall': recall,
@@ -241,7 +322,9 @@ def compare_midi(generated_notes: list, ground_truth_path: str, time_tolerance: 
         'false_positives': false_positives,
         'false_negatives': false_negatives,
         'generated_count': len(gen_set),
-        'ground_truth_count': len(gt_set)
+        'ground_truth_count': len(gt_set),
+        'note_breakdown': breakdown,
+        'tp_details': tp_details
     }
 
 
@@ -336,15 +419,27 @@ def run_inference(
     
     print(f"  Prediction shape: {prediction.shape}")
     
+    # Debug: show per-class prediction stats
+    pred_np = prediction[0].cpu().numpy()
+    print(f"  Per-class prediction stats (max/mean):")
+    for i in range(10):
+        vals = pred_np[:, i]
+        print(f"    {INDEX_TO_NAME[i]:<10}: max={vals.max():.4f}, mean={vals.mean():.4f}")
+    
     # Convert to MIDI notes
     notes = heatmap_to_notes(prediction, threshold=threshold)
     print(f"  Detected {len(notes)} note events")
     
-    # Show breakdown by class
+    # Show per-class breakdown (debug info)
+    print(f"\n  Per-class note counts:")
+    print(f"  {'Class':<10} {'MIDI':>5} {'Count':>6}")
+    print(f"  {'-'*22}")
     for class_idx in range(10):
         class_notes = [n for n in notes if n[1] == INDEX_TO_MIDI[class_idx]]
         if class_notes:
-            print(f"    {INDEX_TO_NAME[class_idx]:10s}: {len(class_notes):3d} notes")
+            print(f"  {INDEX_TO_NAME[class_idx]:<10} {INDEX_TO_MIDI[class_idx]:>5} {len(class_notes):>6}")
+        else:
+            print(f"  {INDEX_TO_NAME[class_idx]:<10} {INDEX_TO_MIDI[class_idx]:>5} {'0':>6} (none detected)")
     
     # Extract tempo from ground truth MIDI if available
     output_bpm = 120.0  # default
@@ -374,6 +469,17 @@ def run_inference(
         print(f"  F1:        {metrics['f1']:.3f}")
         print(f"  TP: {metrics['true_positives']}, FP: {metrics['false_positives']}, FN: {metrics['false_negatives']}")
         print(f"  Generated: {metrics['generated_count']}, Ground truth: {metrics['ground_truth_count']}")
+        print(f"\n  Per-note breakdown:")
+        print(f"  {'Note':<10} {'GT':>6} {'Gen':>6} {'Diff':>6}")
+        print(f"  {'-'*30}")
+        for name, data in sorted(metrics['note_breakdown'].items()):
+            diff = data['gen'] - data['gt']
+            sign = '+' if diff > 0 else ''
+            print(f"  {name:<10} {data['gt']:>6} {data['gen']:>6} {sign}{diff:>5}")
+        if metrics.get('tp_details'):
+            print(f"\n  First 10 True Positives (GT time, Gen time, offset):")
+            for tp in metrics['tp_details'][:10]:
+                print(f"    {tp['name']:<10} GT {tp['gt']:.4f}s, Gen {tp['gen']:.4f}s, Offset: {tp['offset']:+.4f}s")
     
     return notes
 
