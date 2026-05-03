@@ -31,6 +31,10 @@ def get_input_tensor(audio_path: str, sample_rate: int = 44100) -> torch.Tensor:
     # Load audio: waveform shape is [channels, samples]
     waveform, sr = torchaudio.load(audio_path)
     
+    # Handle mono audio: duplicate to stereo [2, samples]
+    if waveform.shape[0] == 1:
+        waveform = torch.cat([waveform, waveform], dim=0)  # [2, samples]
+    
     # Resample if needed
     if sr != sample_rate:
         waveform = torchaudio.functional.resample(waveform, sr, sample_rate)

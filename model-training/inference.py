@@ -32,25 +32,24 @@ from model import DrumTranscriber
 
 # ============================================================================
 # Drum Class Mapping (from roadmap)
-# ============================================================================
+# 10 classes (Kick, Snare, HHC, HHO, TomHigh, TomMid, TomLow, Crash1, Crash2, Ride)
 INDEX_TO_MIDI = {
     0: 36,   # Kick
-    1: 38,   # Snare/Clap
+    1: 38,   # Snare
     2: 42,   # HH Closed
     3: 46,   # HH Open
     4: 48,   # Tom High
     5: 45,   # Tom Mid
     6: 41,   # Tom Low
-    7: 49,   # Crash
-    8: 51,   # Ride
-    9: 52,   # China
-    10: 55,  # Splash
+    7: 49,   # Crash 1
+    8: 57,   # Crash 2
+    9: 51,   # Ride
 }
 
 INDEX_TO_NAME = {
     0: 'Kick', 1: 'Snare', 2: 'HHC', 3: 'HHO',
     4: 'TomHigh', 5: 'TomMid', 6: 'TomLow',
-    7: 'Crash', 8: 'Ride', 9: 'China', 10: 'Splash'
+    7: 'Crash1', 8: 'Crash2', 9: 'Ride'
 }
 
 # Global config for inference
@@ -133,7 +132,9 @@ def heatmap_to_notes(prediction: torch.Tensor, threshold: float = 0.8) -> list:
         peaks = find_peaks_with_onset_snap(probs, threshold, min_distance=5)
         
         for frame, prob in peaks:
-            time_seconds = frame * SECONDS_PER_FRAME
+            # Center alignment fix: MelSpectrogram uses center=True, so frame i
+            # represents time i*hop_length + n_fft/2. Add 1 frame offset to align with labels.
+            time_seconds = (frame + 1) * SECONDS_PER_FRAME
             # Velocity derived from probability strength (0-127)
             velocity = int(min(127, prob * 127))
             notes.append((time_seconds, midi_note, velocity))
@@ -213,6 +214,8 @@ def compare_midi(generated_notes: list, ground_truth_path: str, time_tolerance: 
     )
     
     # Build set of (time, pitch) tuples for comparison
+    note_names = {36: 'Kick', 38: 'Snare', 42: 'HHC', 46: 'HHO', 48: 'TomHigh', 45: 'TomMid', 41: 'TomLow', 49: 'Crash1', 57: 'Crash2', 51: 'Ride'}
+    
     gt_set = set()
     for note in gt_notes:
         # Round time to tolerance
@@ -229,9 +232,42 @@ def compare_midi(generated_notes: list, ground_truth_path: str, time_tolerance: 
     false_positives = len(gen_set - gt_set)
     false_negatives = len(gt_set - gen_set)
     
+    # Track true positives with offsets for diagnosis
+    tp_details = []
+    for key in sorted(gt_set & gen_set):
+        t, pitch = key
+        name = note_names.get(pitch, f'Note({pitch})')
+        # Find actual times for GT and generated
+        gt_time = next((n.time for n in gt_notes if round(n.time / time_tolerance) * time_tolerance == t and n.midi_note == pitch), t)
+        gen_time = next((g[0] for g in generated_notes if round(g[0] / time_tolerance) * time_tolerance == t and g[1] == pitch), t)
+        offset = gt_time - gen_time
+        if len(tp_details) < 10:
+            tp_details.append({'name': name, 'pitch': pitch, 'gt': gt_time, 'gen': gen_time, 'offset': offset})
+    
     precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
     recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+    
+    # Per-note breakdown by pitch
+    from collections import Counter
+    gt_by_pitch = Counter((round(n.time / time_tolerance) * time_tolerance, n.midi_note) for n in gt_notes)
+    gen_by_pitch = Counter((round(t / time_tolerance) * time_tolerance, m) for t, m, _ in generated_notes)
+    
+    all_pitches = sorted(set(gt_by_pitch.keys()) | set(gen_by_pitch.keys()))
+    note_names = {36: 'Kick', 38: 'Snare', 42: 'HHC', 46: 'HHO', 48: 'TomHigh', 45: 'TomMid', 41: 'TomLow', 49: 'Crash1', 57: 'Crash2', 51: 'Ride'}
+    
+    breakdown = {}
+    for key in all_pitches:
+        time_sec, pitch = key
+        name = note_names.get(pitch, f'Note({pitch})')
+        gt_count = gt_by_pitch.get(key, 0)
+        gen_count = gen_by_pitch.get(key, 0)
+        if gt_count > 0 or gen_count > 0:
+            if name not in breakdown:
+                breakdown[name] = {'gt': 0, 'gen': 0, 'items': []}
+            breakdown[name]['gt'] += gt_count
+            breakdown[name]['gen'] += gen_count
+            breakdown[name]['items'].append({'time': round(time_sec, 3), 'pitch': pitch, 'gt': gt_count, 'gen': gen_count})
     
     return {
         'precision': precision,
@@ -241,7 +277,9 @@ def compare_midi(generated_notes: list, ground_truth_path: str, time_tolerance: 
         'false_positives': false_positives,
         'false_negatives': false_negatives,
         'generated_count': len(gen_set),
-        'ground_truth_count': len(gt_set)
+        'ground_truth_count': len(gt_set),
+        'note_breakdown': breakdown,
+        'tp_details': tp_details
     }
 
 
@@ -359,6 +397,17 @@ def run_inference(
         print(f"  F1:        {metrics['f1']:.3f}")
         print(f"  TP: {metrics['true_positives']}, FP: {metrics['false_positives']}, FN: {metrics['false_negatives']}")
         print(f"  Generated: {metrics['generated_count']}, Ground truth: {metrics['ground_truth_count']}")
+        print(f"\n  Per-note breakdown:")
+        print(f"  {'Note':<10} {'GT':>6} {'Gen':>6} {'Diff':>6}")
+        print(f"  {'-'*30}")
+        for name, data in sorted(metrics['note_breakdown'].items()):
+            diff = data['gen'] - data['gt']
+            sign = '+' if diff > 0 else ''
+            print(f"  {name:<10} {data['gt']:>6} {data['gen']:>6} {sign}{diff:>5}")
+        if metrics.get('tp_details'):
+            print(f"\n  First 10 True Positives (GT time, Gen time, offset):")
+            for tp in metrics['tp_details'][:10]:
+                print(f"    {tp['name']:<10} GT {tp['gt']:.4f}s, Gen {tp['gen']:.4f}s, Offset: {tp['offset']:+.4f}s")
     
     return notes
 

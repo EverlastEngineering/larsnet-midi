@@ -1,42 +1,42 @@
 """
-Label Encoder - MIDI to 11-Channel Heatmap
+Label Encoder - MIDI to 10-Channel Heatmap
 
-Maps MIDI notes to an 11-channel binary heatmap with causal smearing.
+Maps MIDI notes to a 10-channel binary heatmap with causal smearing.
+Cymbal hits are split into separate classes (Crash1, Crash2, Ride).
+
 Forward-only smearing ensures model can't "predict the future".
-
-Label mapping:
-  0: Kick (35, 36)
-  1: Snare/Clap (38, 40, 37, 39)
-  2: HH Closed (42, 44)
-  3: HH Open (46)
-  4: Tom High (48, 50)
-  5: Tom Mid (45, 47)
-  6: Tom Low (41, 43)
-  7: Crash (49, 57)
-  8: Ride (51, 53)
-  9: China (52)
-  10: Splash (55)
 """
 
 import torch
 from typing import List, Union
 
-# Mapping from roadmap (pitch -> channel index)
+# Mapping from pitch -> channel index (10 classes, grouped by instrument type)
+# Cymbal hits split: Crash1/Crash2 are separate, Ride stays combined
 MAPPING = {
-    36: 0, 35: 0,   # Kick
-    38: 1, 40: 1, 37: 1, 39: 1,  # Snare/Clap
-    42: 2, 44: 2,   # HH Closed
-    46: 3,          # HH Open
-    48: 4, 50: 4,   # Tom High
-    45: 5, 47: 5,   # Tom Mid
-    41: 6, 43: 6,   # Tom Low
-    49: 7, 57: 7,   # Crash
-    51: 8, 53: 8,   # Ride
-    52: 9,          # China
-    55: 10,         # Splash
+    # Kick
+    36: 0, 35: 0,
+    # Snare
+    38: 1, 40: 1, 37: 1, 39: 1,
+    # HH Closed
+    42: 2, 44: 2, 22: 2,
+    # HH Open
+    46: 3, 26: 3,
+    # Tom High
+    48: 4, 50: 4,
+    # Tom Mid
+    45: 5, 47: 5,
+    # Tom Low
+    41: 6, 43: 6, 58: 6,
+    # Crash 1
+    49: 7, 55: 7,
+    # Crash 2
+    57: 8, 52: 8,
+    # Ride
+    51: 9, 53: 9, 59: 9,
 }
 
-LABEL_NAMES = ['Kick', 'Snare', 'HHC', 'HHO', 'TH', 'TM', 'TL', 'Cr', 'Ri', 'Ch', 'Sp']
+# 10 classes: 0-9
+LABEL_NAMES = ['Kick', 'Snare', 'HHC', 'HHO', 'TomHigh', 'TomMid', 'TomLow', 'Crash1', 'Crash2', 'Ride']
 
 
 class NoteAdapter:
@@ -54,7 +54,7 @@ def midi_to_frame_array(
     sr: int = 44100
 ) -> torch.Tensor:
     """
-    Maps MIDI notes to an [11, Frames] binary heatmap with causal smearing.
+    Maps MIDI notes to an [10, Frames] binary heatmap with causal smearing.
     
     Args:
         midi_notes: List of note objects with .pitch and .start_time attributes
@@ -63,9 +63,9 @@ def midi_to_frame_array(
         sr: Sample rate (default 44100)
     
     Returns:
-        Tensor of shape [11, total_frames] with causal smeared labels
+        Tensor of shape [10, total_frames] with causal smeared labels
     """
-    labels = torch.zeros((11, total_frames))
+    labels = torch.zeros((len(LABEL_NAMES), total_frames))
     seconds_per_frame = hop_length / sr
     
     for note in midi_notes:
