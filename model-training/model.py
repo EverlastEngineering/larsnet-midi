@@ -39,7 +39,7 @@ class DrumTranscriber(nn.Module):
         # Input size (2048) comes from 64 filters * (128 / 2 / 2) freq bins
         self.rnn = nn.GRU(2048, 128, batch_first=True, bidirectional=True)
         
-        # 10-class output (with separate Crash1, Crash2)
+        # Linear layer maps 256 GRU features to 10 drum class probabilities.
         self.fc = nn.Linear(256, 10)
         
     def forward(self, x):
@@ -82,6 +82,6 @@ if __name__ == "__main__":
     print(f"Output shape: {output.shape}")
     print(f"Expected:     [1, 100, 10]")
     
-    # Verify shape
+    # Verify shapes
     assert output.shape == (1, 100, 10), f"Shape mismatch: {output.shape}"
     print("Model forward pass: OK")

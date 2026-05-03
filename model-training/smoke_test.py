@@ -56,7 +56,7 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200):
     print("\n[1] Loading audio...")
     step_start = time.time()
     try:
-        input_tensor = get_input_tensor(audio_path)
+        input_tensor = get_input_tensor(audio_path, hop_length=hop_length)
         print(f"    Input shape: {input_tensor.shape}")
         assert input_tensor.shape[0] == 3, "Should have 3 channels"
         assert input_tensor.shape[1] == 128, "Should have 128 mel bins"
@@ -97,12 +97,12 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200):
     print("\n[3] Creating labels...")
     try:
         total_frames = input_tensor.shape[3]  # Time dimension
-        target_tensor = midi_to_frame_array(notes, total_frames, 512, 44100)
+        target = midi_to_frame_array(notes, total_frames, hop_length, 44100)
         
-        # Reshape target for loss: [11, T] -> [1, T, 11]
-        target_tensor = target_tensor.unsqueeze(0).permute(0, 2, 1).to(device)
-        print(f"    Target shape: {target_tensor.shape}")
-        assert target_tensor.shape == (1, total_frames, 10), "Target shape mismatch"
+        # Reshape for loss: [C, T] -> [1, T, C]
+        target = target.unsqueeze(0).permute(0, 2, 1).to(device)
+        print(f"    Target shape: {target.shape}")
+        assert target.shape == (1, total_frames, 10), "Target shape mismatch"
     except Exception as e:
         return f"FAILURE: Label encoding failed: {e}"
     
@@ -112,7 +112,7 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200):
     print("\n[4] Initializing model...")
     try:
         model = DrumTranscriber().to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
         criterion = nn.BCELoss()
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode='min', factor=0.1, patience=10
@@ -149,11 +149,12 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200):
                 
                 # Extract chunk from input/target
                 input_chunk = input_tensor[:, :, :, chunk_start:chunk_end]
-                target_chunk = target_tensor[:, chunk_start:chunk_end, :]
+                target_chunk = target[:, chunk_start:chunk_end, :]
                 
                 optimizer.zero_grad()
                 output = model(input_chunk)
                 loss = criterion(output, target_chunk)
+                
                 loss.backward()
                 optimizer.step()
                 
@@ -183,7 +184,7 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200):
     print(f"\n    Training completed: {total_time:.1f}s total, {total_time/epochs*1000:.1f}ms/epoch")
     
     # Save model checkpoint
-    checkpoint_path = models_dir / "31_hiphop_92_beat_4-4_53.ckpt"
+    checkpoint_path = models_dir / "smoke_test.ckpt"
     torch.save({
         'epoch': epochs,
         'model_state_dict': model.state_dict(),
@@ -213,11 +214,14 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description='Smoke test for drum transcription')
     parser.add_argument('--epochs', '-e', type=int, default=1, help='Number of epochs (default: 1)')
+    parser.add_argument('--hop', type=int, default=512, help='Hop length for spectrogram (default: 512)')
     args = parser.parse_args()
     
+    hop_length = args.hop
+    
     base = "/Users/jasoncopp/Source/GitHub/larsnet/model-training"
-    audio_path = f"{base}/31_hiphop_92_beat_4-4_53.wav"
-    midi_path = f"{base}/31_hiphop_92_beat_4-4_53.midi"
+    audio_path = f"{base}/dl-1.wav"
+    midi_path = f"{base}/dl-1.mid"
     
     print(f"Audio: {audio_path}")
     print(f"MIDI:  {midi_path}")

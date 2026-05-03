@@ -14,13 +14,14 @@ import torchaudio
 import torchaudio.transforms as T
 
 
-def get_input_tensor(audio_path: str, sample_rate: int = 44100) -> torch.Tensor:
+def get_input_tensor(audio_path: str, sample_rate: int = 44100, hop_length: int = 512) -> torch.Tensor:
     """
     Converts a stereo wav file into a 3-channel Mel-Spectrogram.
     
     Args:
         audio_path: Path to stereo WAV file
         sample_rate: Audio sample rate (default 44100)
+        hop_length: FFT hop length for spectrogram (default 512)
     
     Returns:
         Tensor of shape [3, 128, Time_Steps]
@@ -44,7 +45,7 @@ def get_input_tensor(audio_path: str, sample_rate: int = 44100) -> torch.Tensor:
         sample_rate=sample_rate,
         n_mels=128,
         n_fft=2048,
-        hop_length=512
+        hop_length=hop_length
     )
     
     # Convert to decibels for neural network stability

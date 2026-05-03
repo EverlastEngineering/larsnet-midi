@@ -52,11 +52,6 @@ INDEX_TO_NAME = {
     7: 'Crash1', 8: 'Crash2', 9: 'Ride'
 }
 
-# Global config for inference
-HOP_LENGTH = 512
-SAMPLE_RATE = 44100
-SECONDS_PER_FRAME = HOP_LENGTH / SAMPLE_RATE
-
 
 # ============================================================================
 # Peak Detection with Onset Snapping
@@ -101,17 +96,21 @@ def find_peaks_with_onset_snap(probabilities: np.ndarray, threshold: float, min_
     return results
 
 
-def heatmap_to_notes(prediction: torch.Tensor, threshold: float = 0.8) -> list:
+def heatmap_to_notes(prediction: torch.Tensor, threshold: float = 0.8, hop_length: int = 512, sample_rate: int = 44100) -> list:
     """
     Convert neural heatmap to MIDI note events.
     
     Args:
         prediction: Tensor of shape [Batch, Time, 11] — probabilities per class
         threshold: Minimum probability to trigger a note
+        hop_length: FFT hop length (default 512)
+        sample_rate: Audio sample rate (default 44100)
     
     Returns:
         List of (time_seconds, midi_note, velocity) tuples
     """
+    seconds_per_frame = hop_length / sample_rate
+    
     # Move to CPU and convert to numpy
     if prediction.is_cuda:
         prediction = prediction.cpu()
@@ -124,7 +123,7 @@ def heatmap_to_notes(prediction: torch.Tensor, threshold: float = 0.8) -> list:
     time_steps = pred_np.shape[0]
     notes = []
     
-    for class_idx in range(11):
+    for class_idx in range(10):  # 10 classes
         probs = pred_np[:, class_idx]
         midi_note = INDEX_TO_MIDI[class_idx]
         
@@ -134,7 +133,7 @@ def heatmap_to_notes(prediction: torch.Tensor, threshold: float = 0.8) -> list:
         for frame, prob in peaks:
             # Center alignment fix: MelSpectrogram uses center=True, so frame i
             # represents time i*hop_length + n_fft/2. Add 1 frame offset to align with labels.
-            time_seconds = (frame + 1) * SECONDS_PER_FRAME
+            time_seconds = (frame + 1) * seconds_per_frame
             # Velocity derived from probability strength (0-127)
             velocity = int(min(127, prob * 127))
             notes.append((time_seconds, midi_note, velocity))
@@ -293,7 +292,8 @@ def run_inference(
     checkpoint_path: str = None,
     threshold: float = 0.8,
     device: str = None,
-    compare_path: str = None
+    compare_path: str = None,
+    hop_length: int = 512
 ):
     """
     Run inference on audio and optionally compare to ground truth.
@@ -351,7 +351,7 @@ def run_inference(
     output_path = parent / f"{base_clean}_v{counter}_t{threshold}{ext}"
     
     print(f"Loading audio: {audio_path}")
-    spec = get_input_tensor(audio_path)
+    spec = get_input_tensor(audio_path, hop_length=hop_length)
     spec = spec.unsqueeze(0).to(device)  # [1, 3, 128, Time]
     print(f"  Input shape: {spec.shape}")
     
@@ -370,16 +370,16 @@ def run_inference(
     print(f"\nRunning inference with threshold={threshold}...")
     model.eval()
     with torch.no_grad():
-        prediction = model(spec)  # [1, Time, 11]
+        prediction = model(spec)  # [1, Time, 10]
     
     print(f"  Prediction shape: {prediction.shape}")
     
     # Convert to MIDI notes
-    notes = heatmap_to_notes(prediction, threshold=threshold)
+    notes = heatmap_to_notes(prediction, threshold=threshold, hop_length=hop_length)
     print(f"  Detected {len(notes)} note events")
     
     # Show breakdown by class
-    for class_idx in range(11):
+    for class_idx in range(10):
         class_notes = [n for n in notes if n[1] == INDEX_TO_MIDI[class_idx]]
         if class_notes:
             print(f"    {INDEX_TO_NAME[class_idx]:10s}: {len(class_notes):3d} notes")
@@ -422,6 +422,7 @@ if __name__ == "__main__":
     parser.add_argument('--device', '-d', choices=['cpu', 'cuda', 'mps'],
                         help='Device to use (auto-detect if not specified)')
     parser.add_argument('--compare', help='Ground truth MIDI to compare against')
+    parser.add_argument('--hop', type=int, default=512, help='Hop length (default: 512)')
     
     args = parser.parse_args()
     
@@ -431,5 +432,6 @@ if __name__ == "__main__":
         checkpoint_path=args.checkpoint,
         threshold=args.threshold,
         device=args.device,
-        compare_path=args.compare
+        compare_path=args.compare,
+        hop_length=args.hop
     )
