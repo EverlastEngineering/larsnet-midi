@@ -1,0 +1,15 @@
+# model-training/config.yaml
+# Default hyperparameters for training and inference.
+# Edit these values to change defaults across all scripts.
+
+# Training defaults
+training:
+  epochs: 200
+  learning_rate: 0.001
+  chunk_frames: 2000
+  scheduler_patience: 10
+  scheduler_factor: 0.1
+
+# Inference defaults
+inference:
+  threshold: 0.8

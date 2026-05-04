@@ -66,7 +66,7 @@ class DrumTranscriber(nn.Module):
         x, _ = self.rnn(x)
         
         # Return probability (0.0 - 1.0) for every frame
-        return torch.sigmoid(self.fc(x))
+        return self.fc(x) # Raw logits, NO sigmoid here
 
 
 if __name__ == "__main__":

@@ -18,12 +18,12 @@ Label mapping:
 """
 
 import torch
-from typing import List, Union
+from typing import List
 
 # Mapping from Roland TD-17 (pitch -> channel index)
 MAPPING = {
     36: 0, 35: 0,   # Kick
-    38: 1, 40: 1, 37: 1, 39: 1,  # Snare
+    38: 1, 40: 1, 37: 1, 39: 1,  # Snare / Clap
     42: 2, 44: 2, 22: 2,  # HH Closed
     46: 3, 26: 3,          # HH Open
     48: 4, 50: 4,   # Tom High
@@ -88,7 +88,8 @@ def midi_to_frame_array(
 
 if __name__ == "__main__":
     import sys
-    sys.path.insert(0, '/Users/jasoncopp/Source/GitHub/larsnet')
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent))
     from midi_shell import parse_midi_file
     
     if len(sys.argv) < 2:
