@@ -86,6 +86,92 @@ def midi_to_frame_array(
     return labels
 
 
+# 24 unique Roland TD-17 pitches
+ROLAND_PITCHES = [22, 26, 35, 36, 37, 38, 39, 40, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 55, 57, 58, 59]
+ROLAND_TO_IDX = {p: i for i, p in enumerate(ROLAND_PITCHES)}
+
+# Category mapping for gatekeeper (3 families)
+CATEGORY_MAP = {
+    0: {36, 35},   # Kick
+    1: {38, 40, 37, 39, 45, 47, 43, 58, 48, 50},  # Snare/Toms
+    2: {42, 44, 22, 46, 26, 49, 55, 52, 57, 51, 53, 59}  # Cymbals
+}
+
+
+def get_category_for_pitch(pitch: int) -> int:
+    """Map Roland pitch to gatekeeper category (0, 1, or 2)."""
+    for cat_idx, pitches in CATEGORY_MAP.items():
+        if pitch in pitches:
+            return cat_idx
+    return -1  # Unknown
+
+
+def midi_to_multitarget_arrays(
+    midi_notes: List[NoteAdapter],
+    total_frames: int,
+    hop_length: int = 512,
+    sr: int = 44100
+) -> dict:
+    """
+    Maps MIDI notes to 4 target arrays for multi-task learning.
+    
+    Returns:
+        dict with keys:
+          - gatekeeper: [3, Frames] one-hot category labels
+          - groupings: [10, Frames] binary labels with causal smear
+          - precision: [24, Frames] per-Roland-pitch binary labels with smear
+          - velocity: [24, Frames] velocity-scaled labels (0.3-1.0 range)
+    """
+    gatekeeper_labels = torch.zeros((3, total_frames))
+    groupings_labels = torch.zeros((10, total_frames))
+    precision_labels = torch.zeros((24, total_frames))
+    velocity_labels = torch.zeros((24, total_frames))
+    
+    seconds_per_frame = hop_length / sr
+    
+    for note in midi_notes:
+        if note.pitch not in MAPPING:
+            continue
+            
+        hit_frame = int(note.start_time / seconds_per_frame)
+        idx = MAPPING[note.pitch]  # 0-9 for groupings
+        roland_idx = ROLAND_TO_IDX.get(note.pitch, -1)
+        
+        if roland_idx < 0:
+            continue
+        
+        # Gatekeeper: one-hot category (Head 1)
+        cat_idx = get_category_for_pitch(note.pitch)
+        if cat_idx >= 0 and 0 <= hit_frame < total_frames:
+            gatekeeper_labels[cat_idx, hit_frame] = 1.0
+        
+        # Groupings: 10-class smear (Head 2)
+        if 0 <= hit_frame < total_frames:
+            for offset, val in enumerate([1.0, 0.8, 0.5, 0.2]):
+                f = hit_frame + offset
+                if f < total_frames:
+                    groupings_labels[idx, f] = val
+        
+        # Precision: 24-channel per-Roland-pitch smear (Head 3)
+        if 0 <= hit_frame < total_frames:
+            for offset, val in enumerate([1.0, 0.8, 0.5, 0.2]):
+                f = hit_frame + offset
+                if f < total_frames:
+                    precision_labels[roland_idx, f] = val
+        
+        # Velocity: scale by MIDI velocity 1-127 → 0.3-1.0 (Head 4)
+        vel_scale = 0.3 + (note.velocity / 127.0) * 0.7
+        if 0 <= hit_frame < total_frames:
+            velocity_labels[roland_idx, hit_frame] = vel_scale
+    
+    return {
+        'gatekeeper': gatekeeper_labels,
+        'groupings': groupings_labels,
+        'precision': precision_labels,
+        'velocity': velocity_labels
+    }
+
+
 if __name__ == "__main__":
     import sys
     sys.path.insert(0, '/Users/jasoncopp/Source/GitHub/larsnet')

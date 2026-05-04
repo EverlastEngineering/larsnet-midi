@@ -27,11 +27,12 @@ from scipy.signal import find_peaks
 from pathlib import Path
 
 from feature_extractor import get_input_tensor
-from model import DrumTranscriber
+from model import DrumTranscriber, IDX_TO_ROLAND, ROLAND_PITCHES
+from label_encoder import get_category_for_pitch
 
 
 # ============================================================================
-# Drum Class Mapping (from roadmap)
+# Drum Class Mapping (legacy 10-class)
 # ============================================================================
 INDEX_TO_MIDI = {
     0: 36,   # Kick
@@ -104,7 +105,7 @@ def find_peaks_with_onset_snap(probabilities: np.ndarray, threshold: float, min_
 
 def heatmap_to_notes(prediction: torch.Tensor, threshold: float = 0.8) -> list:
     """
-    Convert neural heatmap to MIDI note events.
+    Convert neural heatmap to MIDI note events (legacy single-head model).
     
     Args:
         prediction: Tensor of shape [Batch, Time, 10] — probabilities per class
@@ -139,6 +140,52 @@ def heatmap_to_notes(prediction: torch.Tensor, threshold: float = 0.8) -> list:
             notes.append((time_seconds, midi_note, velocity))
     
     # Sort by time
+    notes.sort(key=lambda x: x[0])
+    return notes
+
+
+def heatmap_to_mtl_notes(prediction: dict, threshold: float = 0.75, gatekeeper_thresh: float = 0.4) -> list:
+    """
+    Convert MTL model output to MIDI note events.
+    
+    Args:
+        prediction: Dict with keys 'gatekeeper', 'groupings', 'precision', 'velocity'
+                  shapes: [B, T, 3], [B, T, 10], [B, T, 24], [B, T, 24]
+        threshold: Precision head threshold (default 0.75)
+        gatekeeper_thresh: Gatekeeper category veto threshold (default 0.4)
+    
+    Returns:
+        List of (time_seconds, midi_note, velocity) tuples
+    """
+    gatekeeper = prediction['gatekeeper'][0].cpu().detach().numpy()  # [T, 3]
+    precision = prediction['precision'][0].cpu().detach().numpy()      # [T, 24]
+    velocity = prediction['velocity'][0].cpu().detach().numpy()       # [T, 24]
+    
+    time_steps = precision.shape[0]
+    notes = []
+    
+    for roland_idx in range(24):
+        midi_note = IDX_TO_ROLAND[roland_idx]
+        probs = precision[:, roland_idx]
+        
+        # Find peaks with onset snapping
+        peaks = find_peaks_with_onset_snap(probs, threshold, min_distance=1)
+        
+        for frame, prob in peaks:
+            # Gatekeeper veto: check category probability
+            cat_idx = get_category_for_pitch(midi_note)
+            if cat_idx >= 0:
+                cat_prob = gatekeeper[frame, cat_idx]
+                if cat_prob < gatekeeper_thresh:
+                    continue  # Vetoed by gatekeeper
+            
+            # Get velocity from velocity head
+            raw_vel = velocity[frame, roland_idx]
+            midi_vel = max(1, int(raw_vel * 127))
+            
+            time_seconds = frame * SECONDS_PER_FRAME
+            notes.append((time_seconds, midi_note, midi_vel))
+    
     notes.sort(key=lambda x: x[0])
     return notes
 
@@ -434,19 +481,21 @@ def run_inference(
     print(f"\nRunning inference with threshold={threshold}...")
     model.eval()
     with torch.no_grad():
-        prediction = model(spec)  # [1, Time, 10]
+        prediction = model(spec)  # Returns dict with keys
     
-    print(f"  Prediction shape: {prediction.shape}")
+    # Handle both legacy tensor output (single-head) and dict output (MTL)
+    if isinstance(prediction, dict):
+        print(f"  MTL model detected:")
+        print(f"    gatekeeper: {prediction['gatekeeper'].shape}")
+        print(f"    groupings:  {prediction['groupings'].shape}")
+        print(f"    precision:  {prediction['precision'].shape}")
+        print(f"    velocity:   {prediction['velocity'].shape}")
+        notes = heatmap_to_mtl_notes(prediction, threshold=threshold)
+    else:
+        # Legacy single-head model
+        print(f"  Legacy single-head model: {prediction.shape}")
+        notes = heatmap_to_notes(prediction, threshold=threshold)
     
-    # Debug: show per-class prediction stats
-    pred_np = prediction[0].cpu().numpy()
-    print(f"  Per-class prediction stats (max/mean):")
-    for i in range(10):
-        vals = pred_np[:, i]
-        print(f"    {INDEX_TO_NAME[i]:<10}: max={vals.max():.4f}, mean={vals.mean():.4f}")
-    
-    # Convert to MIDI notes
-    notes = heatmap_to_notes(prediction, threshold=threshold)
     print(f"  Detected {len(notes)} note events")
     
     # Show per-class breakdown (debug info)

@@ -3,85 +3,129 @@ DrumTranscriber - CRNN Model Architecture
 
 Convolutional layers extract frequency-domain features (transients).
 Bi-directional GRU processes temporal sequences.
-Linear layer maps 256 GRU features to 11 drum class probabilities.
+Multi-head output: gatekeeper, groupings, precision, velocity.
 """
 
 import torch
 import torch.nn as nn
 
 
+# 24 unique Roland TD-17 pitches
+ROLAND_PITCHES = [22, 26, 35, 36, 37, 38, 39, 40, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 55, 57, 58, 59]
+ROLAND_TO_IDX = {p: i for i, p in enumerate(ROLAND_PITCHES)}
+IDX_TO_ROLAND = {i: p for p, i in ROLAND_TO_IDX.items()}
+
+
+class GatekeeperHead(nn.Module):
+    """Head 1: 3-class instrument family (Kick/Snare/Toms/Cymbals)"""
+    def __init__(self, in_features=256):
+        super().__init__()
+        self.fc = nn.Linear(in_features, 3)
+    
+    def forward(self, x):
+        return torch.sigmoid(self.fc(x))
+
+
+class GroupingsHead(nn.Module):
+    """Head 2: 10-class drum categories"""
+    def __init__(self, in_features=256):
+        super().__init__()
+        self.fc = nn.Linear(in_features, 10)
+    
+    def forward(self, x):
+        return torch.sigmoid(self.fc(x))
+
+
+class PrecisionHead(nn.Module):
+    """Head 3: 24-channel per-Roland-pitch trigger detection"""
+    def __init__(self, in_features=256):
+        super().__init__()
+        self.fc = nn.Linear(in_features, 24)
+    
+    def forward(self, x):
+        return torch.sigmoid(self.fc(x))
+
+
+class VelocityHead(nn.Module):
+    """Head 4: 24-channel per-Roland-pitch velocity regression"""
+    def __init__(self, in_features=256):
+        super().__init__()
+        self.fc = nn.Linear(in_features, 24)
+    
+    def forward(self, x):
+        # Constrain to 0.0-1.0 range (MIDI velocity normalized)
+        return torch.sigmoid(self.fc(x))
+
+
 class DrumTranscriber(nn.Module):
     """
-    CRNN for drum transcription.
+    CRNN for drum transcription with multi-task learning heads.
     
     Architecture:
     - Conv2d blocks extract frequency-domain features
     - MaxPool2d((2,1)) reduces frequency height, preserves time
     - Bi-directional GRU for temporal processing
-    - Linear layer for 11-class probability output
+    - Four heads: gatekeeper, groupings, precision, velocity
     """
     
     def __init__(self):
         super().__init__()
         
-        # THE EYES: Conv block extracts frequency-domain features (transients)
         self.conv = nn.Sequential(
             nn.Conv2d(1, 32, 3, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d((2, 1)),  # Reduce frequency height, preserve time resolution
+            nn.MaxPool2d((2, 1)),
             nn.Conv2d(32, 64, 3, padding=1),
             nn.ReLU(),
             nn.MaxPool2d((2, 1))
         )
         
-        # THE BRAIN: GRU processes the timeline
-        # Bi-directional allows the model to look 'ahead' to see if a cymbal tail follows
-        # Input size (2048) comes from 64 filters * (128 / 2 / 2) freq bins
         self.rnn = nn.GRU(2048, 128, batch_first=True, bidirectional=True)
         
-        # THE DECISION: Linear layer maps 256 GRU features to 10 probability bits
-        self.fc = nn.Linear(256, 10)
+        self.gatekeeper = GatekeeperHead(256)
+        self.groupings = GroupingsHead(256)
+        self.precision = PrecisionHead(256)
+        self.velocity = VelocityHead(256)
         
     def forward(self, x):
         """
-        Forward pass.
-        
         Args:
-            x: Input tensor of shape [Batch, Channels, Freq, Time]
-               Channels should be 3 (L, R, Width)
-               Freq should be 128 (mel bins)
-        
+            x: [Batch, 1, Freq, Time] - Freq=128 mel bins
         Returns:
-            Output tensor of shape [Batch, Time, 10]
-            Each of the 10 values is a probability 0.0-1.0
+            Dict with 4 heads:
+              - gatekeeper: [Batch, Time, 3]
+              - groupings: [Batch, Time, 10]
+              - precision: [Batch, Time, 24]
+              - velocity: [Batch, Time, 24]
         """
-        # Conv block: [B, 3, 128, T] -> [B, 64, 32, T]
         x = self.conv(x)
-        
-        # Prepare for RNN: Reorder to [Batch, Time, Features]
-        # [B, 64, 32, T] -> [B, T, 64*32] = [B, T, 2048]
         x = x.permute(0, 3, 1, 2).flatten(2)
-        
-        # Temporal processing: [B, T, 2048] -> [B, T, 256]
         x, _ = self.rnn(x)
         
-        # Return probability (0.0 - 1.0) for every frame
-        return torch.sigmoid(self.fc(x))
+        return {
+            'gatekeeper': self.gatekeeper(x),
+            'groupings': self.groupings(x),
+            'precision': self.precision(x),
+            'velocity': self.velocity(x)
+        }
 
 
 if __name__ == "__main__":
-    # Smoke test
     device = torch.device("cpu")
     model = DrumTranscriber().to(device)
     
-    # Dummy input: [Batch, Channels, Freq, Time] = [1, 3, 128, 100]
-    dummy = torch.randn(1, 3, 128, 100).to(device)
+    # Dummy input: [Batch, 1, Freq, Time] = [1, 1, 128, 100]
+    dummy = torch.randn(1, 1, 128, 100).to(device)
     
     output = model(dummy)
-    print(f"Input shape:  {dummy.shape}")
-    print(f"Output shape: {output.shape}")
-    print(f"Expected:     [1, 100, 11]")
+    print(f"Input shape:       {dummy.shape}")
+    print(f"gatekeeper shape:  {output['gatekeeper'].shape}")
+    print(f"groupings shape:   {output['groupings'].shape}")
+    print(f"precision shape:   {output['precision'].shape}")
+    print(f"velocity shape:    {output['velocity'].shape}")
     
-    # Verify shape
-    assert output.shape == (1, 100, 11), f"Shape mismatch: {output.shape}"
+    assert output['gatekeeper'].shape == (1, 100, 3), f"gatekeeper shape mismatch"
+    assert output['groupings'].shape == (1, 100, 10), f"groupings shape mismatch"
+    assert output['precision'].shape == (1, 100, 24), f"precision shape mismatch"
+    assert output['velocity'].shape == (1, 100, 24), f"velocity shape mismatch"
     print("Model forward pass: OK")

@@ -27,7 +27,7 @@ from datetime import datetime
 
 # Import our modules
 from feature_extractor import get_input_tensor
-from label_encoder import midi_to_frame_array, NoteAdapter, LABEL_NAMES
+from label_encoder import midi_to_multitarget_arrays, midi_to_frame_array, NoteAdapter, LABEL_NAMES
 from model import DrumTranscriber
 from midi_shell import load_midi_file
 from midi_core import extract_midi_notes_from_tracks, build_tempo_map_from_tracks
@@ -54,6 +54,7 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200, model=Non
         tuple: (final_loss, model, optimizer)
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    models_dir = Path(__file__).parent / "models"
     
     # STEP 1: Load audio
     print("\n[1] Loading audio...")
@@ -80,13 +81,21 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200, model=Non
         print(f"    ERROR: {e}")
         return None, None, None
     
-    # STEP 3: Create labels
-    print("[3] Creating labels...")
+    # STEP 3: Create multi-target labels
+    print("[3] Creating multi-target labels...")
     try:
         total_frames = input_tensor.shape[3]
-        target_tensor = midi_to_frame_array(notes, total_frames, 512, 44100)
-        target_tensor = target_tensor.unsqueeze(0).permute(0, 2, 1).to(device)
-        assert target_tensor.shape == (1, total_frames, 10), "Target shape mismatch"
+        targets = midi_to_multitarget_arrays(notes, total_frames, 2048, 44100)
+        
+        # Permute and move to device: [10, T] -> [1, T, 10] or [24, T] -> [1, T, 24]
+        target_gatekeeper = targets['gatekeeper'].unsqueeze(0).permute(0, 2, 1).to(device)
+        target_groupings = targets['groupings'].unsqueeze(0).permute(0, 2, 1).to(device)
+        target_precision = targets['precision'].unsqueeze(0).permute(0, 2, 1).to(device)
+        target_velocity = targets['velocity'].unsqueeze(0).permute(0, 2, 1).to(device)
+        
+        assert target_groupings.shape == (1, total_frames, 10), f"groupings shape mismatch"
+        assert target_precision.shape == (1, total_frames, 24), f"precision shape mismatch"
+        assert target_velocity.shape == (1, total_frames, 24), f"velocity shape mismatch"
     except Exception as e:
         print(f"    ERROR: {e}")
         return None, None, None
@@ -103,30 +112,64 @@ def run_smoke_test(audio_path: str, midi_path: str, epochs: int = 200, model=Non
         criterion = nn.BCELoss()
         scheduler = None  # Will be recreated if needed
     
-    # STEP 5: Training loop
+    # STEP 5: Training loop with MTL loss
     chunk_frames = 2000
     print(f"\n[5] Training {epochs} epochs on {total_frames} frames...")
+    print("      (MTL: gatekeeper + groupings + precision + masked velocity)")
     
     for epoch in range(epochs):
+        # Check abort at start of each epoch
+        abort_file = models_dir / ".abort_training"
+        if abort_file.exists():
+            abort_file.unlink()
+            raise KeyboardInterrupt("Abort requested")
+        
         epoch_loss = 0.0
         step_count = 0
+        loss_components = {'gatekeeper': 0, 'groupings': 0, 'precision': 0, 'velocity': 0}
+        
         for chunk_start in range(0, total_frames, chunk_frames):
+            # print a chunk update on each chunk with a \r to overwrite
+            print(f"    Epoch {epoch+1:3d}/{epochs} | Processing frames {chunk_start}-{min(chunk_start+chunk_frames, total_frames)} / {total_frames}", end='\r')
             chunk_end = min(chunk_start + chunk_frames, total_frames)
             input_chunk = input_tensor[:, :, :, chunk_start:chunk_end]
-            target_chunk = target_tensor[:, chunk_start:chunk_end, :]
+            
+            # MTL targets for this chunk
+            tgt_gate = target_gatekeeper[:, chunk_start:chunk_end, :]
+            tgt_group = target_groupings[:, chunk_start:chunk_end, :]
+            tgt_prec = target_precision[:, chunk_start:chunk_end, :]
+            tgt_vel = target_velocity[:, chunk_start:chunk_end, :]
             
             optimizer.zero_grad()
-            output = model(input_chunk)
-            loss = criterion(output, target_chunk)
-            loss.backward()
+            outputs = model(input_chunk)
+            
+            # Individual losses
+            loss_gate = nn.BCELoss()(outputs['gatekeeper'], tgt_gate)
+            loss_group = nn.BCELoss()(outputs['groupings'], tgt_group)
+            loss_prec = nn.BCELoss()(outputs['precision'], tgt_prec)
+            
+            # Masked MSE: include smear frames (>0.2) for better temporal context
+            prec_mask = (tgt_prec > 0.2).float()
+            loss_vel_raw = nn.MSELoss(reduction='none')(outputs['velocity'], tgt_vel)
+            loss_vel = (loss_vel_raw * prec_mask).sum() / (prec_mask.sum() + 1e-8)
+            
+            total_loss = loss_gate + loss_group + loss_prec + loss_vel * 5.0
+            total_loss.backward()
             optimizer.step()
             
-            epoch_loss += loss.item()
+            epoch_loss += total_loss.item()
             step_count += 1
+            loss_components['gatekeeper'] += loss_gate.item()
+            loss_components['groupings'] += loss_group.item()
+            loss_components['precision'] += loss_prec.item()
+            loss_components['velocity'] += loss_vel.item()
         
         avg_loss = epoch_loss / step_count
-        if (epoch + 1) % 10 == 0 or epoch == 0:
-            print(f"    Epoch {epoch+1:3d}/{epochs} | Loss: {avg_loss:.6f}")
+        g = loss_components['gatekeeper'] / step_count
+        gr = loss_components['groupings'] / step_count
+        p = loss_components['precision'] / step_count
+        v = loss_components['velocity'] / step_count
+        print(f"    Epoch {epoch+1:3d}/{epochs} | Loss: {avg_loss:.6f} (G:{g:.4f} Gr:{gr:.4f} P:{p:.4f} V:{v:.4f})")
         
         if scheduler:
             scheduler.step(avg_loss)
@@ -259,9 +302,42 @@ if __name__ == "__main__":
     if args.list:
         run_batch_smoke_test(args.list, epochs=args.epochs, checkpoint_path=args.checkpoint)
     elif args.audio and args.midi:
-        result = run_smoke_test(args.audio, args.midi, epochs=args.epochs)
-        if result[0] is not None:
-            print(f"\nFinal loss: {result[0]:.6f}")
+        # Wrap with checkpoint saving on any exit
+        models_dir = Path(__file__).parent / "models"
+        models_dir.mkdir(exist_ok=True)
+        
+        model = DrumTranscriber()
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        
+        try:
+            result = run_smoke_test(args.audio, args.midi, epochs=args.epochs, model=model, optimizer=optimizer)
+            if result[0] is not None:
+                print(f"\nFinal loss: {result[0]:.6f}")
+                # Save on success
+                version = find_next_version(models_dir)
+                ckpt_path = models_dir / f"smoke_test_checkpoint_v{version}.ckpt"
+                torch.save({
+                    'model_state_dict': result[1].state_dict(),
+                    'optimizer_state_dict': result[2].state_dict(),
+                    'loss': result[0],
+                    'epochs': args.epochs,
+                    'source': args.audio
+                }, ckpt_path)
+                print(f"[CHECKPOINT] Saved to {ckpt_path}")
+        except (KeyboardInterrupt, Exception) as e:
+            print(f"\nTraining interrupted: {e}")
+            # Save on interrupt
+            version = find_next_version(models_dir)
+            ckpt_path = models_dir / f"smoke_test_checkpoint_v{version}.ckpt"
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'loss': None,
+                'epochs': args.epochs,
+                'source': args.audio,
+                'interrupted': True
+            }, ckpt_path)
+            print(f"[CHECKPOINT] Saved on exit to {ckpt_path}")
     else:
         parser.print_help()
         print("\nExamples:")
