@@ -63,7 +63,7 @@ SECONDS_PER_FRAME = HOP_LENGTH / SAMPLE_RATE
 # Peak Detection with Onset Snapping
 # ============================================================================
 
-def find_peaks_with_onset_snap(probabilities: np.ndarray, threshold: float, min_distance: int = 5):
+def find_peaks_with_onset_snap(probabilities: np.ndarray, threshold: float, min_distance: int = 1):
     """
     Find peaks in a probability curve and snap to steepest onset point.
     
@@ -130,7 +130,7 @@ def heatmap_to_notes(prediction: torch.Tensor, threshold: float = 0.8) -> list:
         midi_note = INDEX_TO_MIDI[class_idx]
         
         # Find peaks with onset snapping
-        peaks = find_peaks_with_onset_snap(probs, threshold, min_distance=5)
+        peaks = find_peaks_with_onset_snap(probs, threshold, min_distance=1)
         
         for frame, prob in peaks:
             time_seconds = frame * SECONDS_PER_FRAME
@@ -505,7 +505,7 @@ def run_inference(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='DrumToMIDI Inference Post-Processor')
-    parser.add_argument('audio', help='Input audio file (.wav)')
+    parser.add_argument('audio', nargs='?', help='Input audio file (.wav)')
     parser.add_argument('--output', '-o', help='Output MIDI file path')
     parser.add_argument('--checkpoint', '-c', help='Model checkpoint path')
     parser.add_argument('--threshold', '-t', type=float, default=0.8,
@@ -513,8 +513,56 @@ if __name__ == "__main__":
     parser.add_argument('--device', '-d', choices=['cpu', 'cuda', 'mps'],
                         help='Device to use (auto-detect if not specified)')
     parser.add_argument('--compare', help='Ground truth MIDI to compare against')
+    parser.add_argument('--list', '-l', help='File containing lines of: audio.wav\tmidi.mid\t[output.wav] for batch processing')
     
     args = parser.parse_args()
+    
+    # Batch mode: read from file
+    if args.list:
+        if not Path(args.list).exists():
+            print(f"ERROR: List file not found: {args.list}")
+            sys.exit(1)
+        
+        with open(args.list, 'r') as f:
+            for line_num, line in enumerate(f, 1):
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                
+                parts = line.split('\t')
+                if len(parts) < 2:
+                    print(f"  Line {line_num}: Malformed (need at least audio\\tmid), skipping: {line}")
+                    continue
+                
+                audio_path = parts[0].strip()
+                midi_path = parts[1].strip()
+                output_path = parts[2].strip() if len(parts) > 2 else None
+                
+                print(f"\n=== File {line_num}: {audio_path} ===")
+                
+                if not Path(audio_path).exists():
+                    print(f"  ERROR: Audio not found: {audio_path}")
+                    continue
+                
+                # Build compare path if not provided
+                compare_path = midi_path if Path(midi_path).exists() else None
+                
+                run_inference(
+                    audio_path=audio_path,
+                    output_path=output_path,
+                    checkpoint_path=args.checkpoint,
+                    threshold=args.threshold,
+                    device=args.device,
+                    compare_path=compare_path
+                )
+        print(f"\n=== Batch complete ({line_num} files) ===")
+        sys.exit(0)
+    
+    # Single file mode
+    if not args.audio:
+        parser.print_help()
+        print("\n  Supply audio file, or use --list/-l for batch processing")
+        sys.exit(1)
     
     run_inference(
         audio_path=args.audio,
