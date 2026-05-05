@@ -71,6 +71,10 @@ def get_chunk_frames():
     """Return chunk_frames from config.yaml (default 2000)."""
     return get_training_config().get('chunk_frames', 2000)
 
+def get_velocity_weight():
+    """Return velocity_weight from config.yaml (default 2.0)."""
+    return get_training_config().get('velocity_weight', 2.0)
+
 # Global device — always cpu for now
 DEVICE = 'cpu'
 

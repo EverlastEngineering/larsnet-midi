@@ -59,7 +59,7 @@ def heatmap_to_notes(
     Convert neural heatmap to MIDI note events.
     
     Args:
-        prediction: Tensor of shape [Batch, Time, 10] or [Time, 10]
+        prediction: Tensor of shape [Batch, Time, 20] or [Time, 20]
         threshold: Minimum probability to trigger a note
     
     Returns:
@@ -70,18 +70,21 @@ def heatmap_to_notes(
     pred_np = prediction.detach().cpu().numpy()
     
     if pred_np.ndim == 3:
-        pred_np = pred_np[0]  # [Time, 10]
+        pred_np = pred_np[0]  # [Time, 20]
     
     notes = []
     for class_idx in range(10):
-        probs = pred_np[:, class_idx]
+        # Channels 0-9: onset probabilities (pass through sigmoid)
+        onset_probs = 1.0 / (1.0 + np.exp(-pred_np[:, class_idx]))
         midi_note = INDEX_TO_MIDI[class_idx]
         
-        peaks = find_peaks_with_onset_snap(probs, threshold, min_distance=1)
+        peaks = find_peaks_with_onset_snap(onset_probs, threshold, min_distance=1)
         
         for frame, prob in peaks:
             time_seconds = frame * SECONDS_PER_FRAME
-            velocity = int(min(127, prob * 127))
+            # Channels 10-19: velocity regression values (already normalized 0.0-1.0)
+            velocity_value = pred_np[frame, class_idx + 10]
+            velocity = int(min(127, max(1, velocity_value * 127)))
             notes.append((time_seconds, midi_note, velocity))
     
     notes.sort(key=lambda x: x[0])

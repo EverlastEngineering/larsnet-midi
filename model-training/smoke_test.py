@@ -76,7 +76,7 @@ def run_smoke_test(
         total_frames = input_tensor.shape[3]
         target_tensor = build_targets(notes, total_frames)
         target_tensor = target_tensor.to(device)
-        assert target_tensor.shape == (1, total_frames, 10), f"Target shape mismatch: {target_tensor.shape}"
+        assert target_tensor.shape == (1, total_frames, 20), f"Target shape mismatch: {target_tensor.shape}"
     except Exception as e:
         print(f"    ERROR: {e}")
         return None, None, None

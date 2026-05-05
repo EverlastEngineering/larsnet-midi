@@ -3,7 +3,7 @@ DrumTranscriber - CRNN Model Architecture
 
 Convolutional layers extract frequency-domain features (transients).
 Bi-directional GRU processes temporal sequences.
-Linear layer maps 256 GRU features to 11 drum class probabilities.
+Linear layer maps 256 GRU features to 20 outputs (10 onset + 10 velocity).
 """
 
 import torch
@@ -18,7 +18,7 @@ class DrumTranscriber(nn.Module):
     - Conv2d blocks extract frequency-domain features
     - MaxPool2d((2,1)) reduces frequency height, preserves time
     - Bi-directional GRU for temporal processing
-    - Linear layer for 11-class probability output
+    - Linear layer maps 256 GRU features to 20 outputs (10 onset + 10 velocity)
     """
     
     def __init__(self):
@@ -39,8 +39,10 @@ class DrumTranscriber(nn.Module):
         # Input size (2048) comes from 64 filters * (128 / 2 / 2) freq bins
         self.rnn = nn.GRU(2048, 128, batch_first=True, bidirectional=True)
         
-        # THE DECISION: Linear layer maps 256 GRU features to 10 probability bits
-        self.fc = nn.Linear(256, 10)
+        # THE DECISION: Linear layer maps 256 GRU features to 20 output dimensions.
+        # First 10 channels (0-9): onset classification logits
+        # Last 10 channels (10-19): velocity regression values (normalized 0.0-1.0)
+        self.fc = nn.Linear(256, 20)
         
     def forward(self, x):
         """
@@ -52,8 +54,9 @@ class DrumTranscriber(nn.Module):
                Freq should be 128 (mel bins)
         
         Returns:
-            Output tensor of shape [Batch, Time, 10]
-            Each of the 10 values is a probability 0.0-1.0
+            Output tensor of shape [Batch, Time, 20]
+            Channels 0-9: onset classification logits
+            Channels 10-19: velocity regression values (normalized 0.0-1.0)
         """
         # Conv block: [B, 3, 128, T] -> [B, 64, 32, T]
         x = self.conv(x)

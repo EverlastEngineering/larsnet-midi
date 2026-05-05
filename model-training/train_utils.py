@@ -11,6 +11,61 @@ from typing import Any, List, Tuple, Optional
 from config import HOP_LENGTH, SAMPLE_RATE
 
 
+class MultiTaskDrumLoss(nn.Module):
+    """
+    Multi-task loss for drum transcription.
+    
+    Splits the 20-dim output into:
+    - Channels 0-9: onset classification (BCEWithLogitsLoss)
+    - Channels 10-19: velocity regression (masked MSE on onset frames only)
+    """
+    
+    def __init__(self, velocity_weight: float = 2.0, device: str = 'cpu'):
+        super().__init__()
+        self.velocity_weight = velocity_weight
+        
+        # Pos weight for onset classification: [Class 0 (Kick), Class 1 (Snare), ...]
+        # Kick/Snare/HHC need more weight to stand out
+        pos_weight = torch.tensor([150.0, 15.0, 2.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0]).to(device)
+        self.onset_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            pred: [Batch, Time, 20] raw logits from model
+            target: [Batch, Time, 20] target tensor
+            
+        Returns:
+            Scalar loss = onset_loss + (weight * velocity_loss)
+        """
+        onset_pred = pred[:, :, :10]
+        onset_target = target[:, :, :10]
+        
+        velocity_pred = pred[:, :, 10:]
+        velocity_target = target[:, :, 10:]
+        
+        # Onset loss: standard BCEWithLogitsLoss
+        onset_loss = self.onset_criterion(onset_pred, onset_target)
+        
+        # Velocity loss: masked MSE — only compute on frames where GT onset is active
+        # Create mask from onset target: [Batch, Time, 10]
+        onset_mask = (onset_target > 0.5).float()
+        
+        # Expand mask to velocity channels [Batch, Time, 10] → [Batch, Time, 10] (same shape as velocity_target)
+        # Each velocity channel corresponds to its onset channel
+        velocity_squared_error = (velocity_pred - velocity_target) ** 2
+        
+        # Apply mask: only compute MSE where onset target > 0.5
+        masked_squared_error = velocity_squared_error * onset_mask
+        
+        # Sum over velocity channels first, then divide by count of valid frames
+        num_valid_frames = onset_mask.sum() + 1e-8
+        velocity_loss = masked_squared_error.sum() / num_valid_frames
+        
+        total_loss = onset_loss + (self.velocity_weight * velocity_loss)
+        return total_loss
+
+
 def build_targets(
     midi_notes: List[Any],
     total_frames: int,
@@ -19,11 +74,13 @@ def build_targets(
     Convert MIDI notes to a target tensor for training.
     
     Args:
-        midi_notes: List of note objects with .pitch, .start_time attributes
+        midi_notes: List of note objects with .pitch, .start_time, .velocity attributes
         total_frames: Total spectrogram frames
         
     Returns:
-        Target tensor of shape [1, total_frames, 10]
+        Target tensor of shape [1, total_frames, 20]
+        Channels 0-9: binary onset heatmap
+        Channels 10-19: normalized velocity targets
     """
     from label_encoder import midi_to_frame_array
     
@@ -43,7 +100,7 @@ def get_chunk(
     
     Args:
         input_tensor: Shape [1, 1, 128, T]
-        target_tensor: Shape [1, T, 10]
+        target_tensor: Shape [1, T, 20]
         chunk_start: Starting frame
         chunk_frames: Number of frames to include
         
@@ -138,18 +195,10 @@ def setup_training(
     
     model = model.to(device)
     
-    # 1. POS_WEIGHT: This is the 'Contrast' knob.
-    # We tell the model that a drum hit (1) is 25x more important 
-    # than a silent frame (0). This kills the 0.51 'gray smear'.
-    # [Class 0 (Blue), Class 1 (Orange), Class 2 (Green)]
-    # We give Orange and Blue more 'Gain' to help them stand out
-    weights = [150.0, 15.0, 2.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0]
-    pos_weight = torch.tensor(weights).to(device)
-    
-    # 2. CRITERION: Swap BCELoss for BCEWithLogitsLoss.
-    # This expects raw values from your model (no sigmoid) 
-    # and is numerically stable.
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    # Multi-task loss: onset classification (BCEWithLogitsLoss) + velocity regression (masked MSE)
+    from config import get_velocity_weight
+    velocity_weight = get_velocity_weight()
+    criterion = MultiTaskDrumLoss(velocity_weight=velocity_weight, device=device)
     
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     

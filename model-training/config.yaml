@@ -9,6 +9,7 @@ training:
   chunk_frames: 2000
   scheduler_patience: 10
   scheduler_factor: 0.1
+  velocity_weight: 2.0
 
 # Inference defaults
 inference:

@@ -1,8 +1,11 @@
 """
-Label Encoder - MIDI to 10-Channel Heatmap
+Label Encoder - MIDI to 20-Channel Heatmap
 
-Maps MIDI notes to a 10-channel binary heatmap with causal smearing.
+Maps MIDI notes to a 20-channel tensor with causal smearing.
 Forward-only smearing ensures model can't "predict the future".
+
+Channels 0-9: binary onset heatmap
+Channels 10-19: normalized velocity (midi_velocity / 127.0)
 
 Label mapping:
   0: Kick (35, 36)
@@ -52,18 +55,21 @@ def midi_to_frame_array(
     sr: int = 44100
 ) -> torch.Tensor:
     """
-    Maps MIDI notes to a [10, Frames] binary heatmap with causal smearing.
+    Maps MIDI notes to a [20, Frames] tensor with causal smearing.
+    
+    Channels 0-9: binary onset heatmap (existing behavior)
+    Channels 10-19: normalized velocity (midi_velocity / 127.0) at onset frames
     
     Args:
-        midi_notes: List of note objects with .pitch and .start_time attributes
+        midi_notes: List of note objects with .pitch, .start_time, .velocity attributes
         total_frames: Total number of spectrogram frames
         hop_length: FFT hop length (default 512)
         sr: Sample rate (default 44100)
     
     Returns:
-        Tensor of shape [10, total_frames] with causal smeared labels
+        Tensor of shape [20, total_frames] with causal smeared labels
     """
-    labels = torch.zeros((10, total_frames))
+    labels = torch.zeros((20, total_frames))
     seconds_per_frame = hop_length / sr
     
     for note in midi_notes:
@@ -75,13 +81,18 @@ def midi_to_frame_array(
             # Causal Smear: Probability is 1.0 at impact, then decays
             # This allows the model to be 'close' and still receive partial credit
             if 0 <= hit_frame < total_frames:
-                labels[idx, hit_frame] = 1.0       # Precision Hit
+                labels[idx, hit_frame] = 1.0       # Precision Hit (onset channel)
                 if hit_frame + 1 < total_frames:
                     labels[idx, hit_frame + 1] = 0.8
                 if hit_frame + 2 < total_frames:
                     labels[idx, hit_frame + 2] = 0.5
                 if hit_frame + 3 < total_frames:
                     labels[idx, hit_frame + 3] = 0.2
+                
+                # Velocity channel: only non-zero at the exact hit frame
+                velocity_channel = idx + 10
+                normalized_velocity = note.velocity / 127.0
+                labels[velocity_channel, hit_frame] = normalized_velocity
                     
     return labels
 
