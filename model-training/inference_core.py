@@ -155,13 +155,13 @@ def write_midi(
     
     # Anchor note at time 0 for proper timing offset
     midi.addText(track, 0.0, "START")
-    midi.addNote(track, 9, 27, 0.0, 0.01, 1)
+    midi.addNote(track, 9, 27, 0.0, 0.01, 100)
     
     notes.sort(key=lambda x: x[0])
     
     for time_sec, midi_note, velocity in notes:
         time_beats = seconds_to_beats(time_sec, bpm)
-        midi.addNote(track, channel, midi_note, time_beats, 0.08, velocity)
+        midi.addNote(track, channel, midi_note, time_beats, 0.08, max(1, min(127, int(velocity))))
     
     with open(output_path, 'wb') as f:
         midi.writeFile(f)

@@ -141,7 +141,10 @@ def setup_training(
     # 1. POS_WEIGHT: This is the 'Contrast' knob.
     # We tell the model that a drum hit (1) is 25x more important 
     # than a silent frame (0). This kills the 0.51 'gray smear'.
-    pos_weight = torch.tensor([25.0]).to(device)
+    # [Class 0 (Blue), Class 1 (Orange), Class 2 (Green)]
+    # We give Orange and Blue more 'Gain' to help them stand out
+    weights = [150.0, 15.0, 2.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0]
+    pos_weight = torch.tensor(weights).to(device)
     
     # 2. CRITERION: Swap BCELoss for BCEWithLogitsLoss.
     # This expects raw values from your model (no sigmoid) 

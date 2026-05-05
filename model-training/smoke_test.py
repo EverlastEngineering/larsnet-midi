@@ -150,12 +150,12 @@ if __name__ == "__main__":
                 print(f"=== ABORT at file {idx+1}, checkpoint saved ===")
                 break
             
-            parts = line.split('\t')
+            parts = line.split()
             if len(parts) < 2:
                 results.append((line, None, "Malformed"))
                 continue
-            audio_path = parts[0].strip()
-            midi_path = parts[1].strip()
+            audio_path = parts[0]
+            midi_path = parts[1]
             file_epochs = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else args.epochs
             
             print(f"\n--- File {idx+1}/{len(lines)}: {audio_path} ({file_epochs} epochs) ---")
