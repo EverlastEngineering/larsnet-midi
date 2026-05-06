@@ -150,7 +150,7 @@ if __name__ == "__main__":
                 print(f"=== ABORT at file {idx+1}, checkpoint saved ===")
                 break
             
-            parts = line.split()
+            parts = line.split('\t', 1)
             if len(parts) < 2:
                 results.append((line, None, "Malformed"))
                 continue
@@ -219,4 +219,4 @@ if __name__ == "__main__":
         print("  python smoke_test.py --audio file.wav --midi file.mid")
         print("  python smoke_test.py --list training_files.txt --epochs 100")
         print("  python smoke_test.py --list training_files.txt --checkpoint smoke_test_checkpoint_v2.ckpt")
-        print("\nBatch mode: Create 'model-training/models/.abort_training' to stop gracefully")
+        print("\nBatch mode: Create 'model-training/models/abort' to stop gracefully")

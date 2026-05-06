@@ -193,12 +193,12 @@ def check_abort(models_dir: Path) -> bool:
     Check if abort file exists.
     
     Args:
-        models_dir: Directory containing .abort_training file
+        models_dir: Directory containing abort file
         
     Returns:
         True if abort file exists
     """
-    return (models_dir / ".abort_training").exists()
+    return (models_dir / "abort").exists()
 
 
 def clear_abort(models_dir: Path) -> None:

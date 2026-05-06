@@ -20,14 +20,21 @@ class MultiTaskDrumLoss(nn.Module):
     - Channels 10-19: velocity regression (masked MSE on onset frames only)
     """
     
+    # Velocity importance multiplier per class.
+    # HHC (index 2) has 2.5x weight because high-frequency transients
+    # are more prone to velocity compression.
+    VELOCITY_CLASS_WEIGHTS = [1.0, 1.0, 2.5, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    
     def __init__(self, velocity_weight: float = 2.0, device: str = 'cpu'):
         super().__init__()
         self.velocity_weight = velocity_weight
         
         # Pos weight for onset classification: [Class 0 (Kick), Class 1 (Snare), ...]
-        # Kick/Snare/HHC need more weight to stand out
-        pos_weight = torch.tensor([150.0, 15.0, 2.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0]).to(device)
+        pos_weight = torch.tensor([15.0, 15.0, 15.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0]).to(device)
         self.onset_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        
+        # Per-class velocity importance weights
+        self.velocity_class_weights = torch.tensor(self.VELOCITY_CLASS_WEIGHTS).to(device)
     
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """
@@ -48,17 +55,19 @@ class MultiTaskDrumLoss(nn.Module):
         onset_loss = self.onset_criterion(onset_pred, onset_target)
         
         # Velocity loss: masked MSE — only compute on frames where GT onset is active
-        # Create mask from onset target: [Batch, Time, 10]
         onset_mask = (onset_target > 0.5).float()
         
-        # Expand mask to velocity channels [Batch, Time, 10] → [Batch, Time, 10] (same shape as velocity_target)
-        # Each velocity channel corresponds to its onset channel
         velocity_squared_error = (velocity_pred - velocity_target) ** 2
         
-        # Apply mask: only compute MSE where onset target > 0.5
-        masked_squared_error = velocity_squared_error * onset_mask
+        # Apply per-class weight before averaging
+        # Expand weights from [10] → [Batch, Time, 10]
+        weights_expanded = self.velocity_class_weights.view(1, 1, 10)
+        weighted_squared_error = velocity_squared_error * weights_expanded
         
-        # Sum over velocity channels first, then divide by count of valid frames
+        # Apply onset mask: only compute MSE where onset target > 0.5
+        masked_squared_error = weighted_squared_error * onset_mask
+        
+        # Sum over velocity channels, then divide by count of valid frames
         num_valid_frames = onset_mask.sum() + 1e-8
         velocity_loss = masked_squared_error.sum() / num_valid_frames
         

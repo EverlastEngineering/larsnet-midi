@@ -58,7 +58,7 @@ def midi_to_frame_array(
     Maps MIDI notes to a [20, Frames] tensor with causal smearing.
     
     Channels 0-9: binary onset heatmap (existing behavior)
-    Channels 10-19: normalized velocity (midi_velocity / 127.0) at onset frames
+    Channels 10-19: power-law scaled velocity ((midi_velocity/127.0)^0.7) at onset frames
     
     Args:
         midi_notes: List of note objects with .pitch, .start_time, .velocity attributes
@@ -90,8 +90,10 @@ def midi_to_frame_array(
                     labels[idx, hit_frame + 3] = 0.2
                 
                 # Velocity channel: only non-zero at the exact hit frame
+                # Power-law scaling (0.7 exponent) expands lower velocities,
+                # making ghost notes easier for MSE to distinguish
                 velocity_channel = idx + 10
-                normalized_velocity = note.velocity / 127.0
+                normalized_velocity = (note.velocity / 127.0) ** 0.7
                 labels[velocity_channel, hit_frame] = normalized_velocity
                     
     return labels

@@ -42,9 +42,13 @@ def generate_visual_report(model_path, audio_path, midi_path=None, output_png="d
     with torch.no_grad():
         logits = model(audio_tensor)
         # Apply Sigmoid here because model returns raw logits for BCEWithLogitsLoss
+        # probs shape is [Time, 20] — channels 0-9 are onset, 10-19 are velocity
         probs = torch.sigmoid(logits).cpu().numpy()
         if probs.ndim == 3:
             probs = probs[0]
+        # Only plot onset channels (first 10) for probability visualization
+        probs = probs[:, :10]
+    num_classes = probs.shape[1]
 
     # 3. Plotting Setup
     plt.figure(figsize=(15, 25)) 
@@ -53,7 +57,6 @@ def generate_visual_report(model_path, audio_path, midi_path=None, output_png="d
     mask = time_axis <= duration
     time_zoom = time_axis[mask]
     probs_zoom = probs[mask]
-    num_classes = probs.shape[1]
     
     # Use a 10-color categorical palette
     colors = plt.cm.tab10(np.linspace(0, 1, 10))
