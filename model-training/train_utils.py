@@ -228,23 +228,28 @@ def run_eval(
         except Exception:
             continue
 
-        # Accumulate chunk losses
         file_losses = []
         file_onset = []
         file_velocity = []
 
         for chunk_start in range(0, total_frames, get_chunk_frames()):
             input_chunk, target_chunk = get_chunk(input_tensor, target_tensor, chunk_start, get_chunk_frames())
-            loss_val, _ = compute_loss(model, input_chunk, target_chunk, criterion)
+            loss_val, loss_dict = compute_loss(model, input_chunk, target_chunk, criterion)
             file_losses.append(loss_val)
+            file_onset.append(loss_dict['onset_loss'])
+            file_velocity.append(loss_dict['velocity_loss'])
 
         if file_losses:
             total_loss += sum(file_losses) / len(file_losses)
+            total_onset += sum(file_onset) / len(file_onset)
+            total_velocity += sum(file_velocity) / len(file_velocity)
             count += 1
 
     model.train()
     avg_loss = total_loss / count if count > 0 else 0.0
-    return avg_loss, 0.0, 0.0  # onset/velocity not tracked in eval for now
+    avg_onset = total_onset / count if count > 0 else 0.0
+    avg_velocity = total_velocity / count if count > 0 else 0.0
+    return avg_loss, avg_onset, avg_velocity
 
 
 def setup_training(

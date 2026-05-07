@@ -285,32 +285,18 @@ if __name__ == "__main__":
                 elapsed_for_file = time.time() - file_process_start
                 elapsed_for_process = time.time() - process_start
                 lr_val = optimizer.param_groups[0]['lr']
-                # eta = (elapsed / (epoch + 1)) * (epochs - epoch - 1)
-                # m, s = divmod(eta, 60)
-                # h, m = divmod(int(m), 60)
-                # eta_str = f"{h}h {m}m {s:.0f}s" if h > 0 else f"{m}m {s:.0f}s"
-                # print(f"    Epoch {epoch+1:3d}/{epochs} | Loss: {avg_loss:.6f} | LR: {lr_val:.0e} | ETA: {eta_str}")
-                # \033[1A
-                # print(f"--- Loss: {loss:.6f} File {idx+1}/{len(lines)}: {Path(audio_path).name} ---")
-                # print("\033[1A\033[1A\033[1A\033[1A")
-       
+
+                total_files_processed = (current_epoch_idx * len(lines)) + idx
+                total_files = total_epochs * len(lines)
+                files_remaining = total_files - total_files_processed
+
+                eta = (elapsed_for_process / max(total_files_processed, 1)) * files_remaining
+
+                files_in_epoch_processed = idx + 1
+                eta_epoch = (elapsed_for_process / max(files_in_epoch_processed, 1)) * (len(lines) - idx - 1)
+
                 print(f"Loss: {loss:.6f} | Epoch {current_epoch_idx+1}/{total_epochs} | LR: {lr_val:.0e} | Overall Time: {elapsed_for_process:.1f}s | Frames: {total_frames} | File {idx+1}/{len(lines)}: {Path(audio_path).name}")
-                # print(" ")
-    
-                # Print filename, loss, and elapsed time for this file                
-                # print(f"    Loss: {loss:.6f} | Time For This File: {elapsed_for_file:.1f}s")
-
-                #calculate ETA considering elapsed time, number of files and epochs
-                eta = (elapsed_for_process / ((current_epoch_idx * len(lines)) + idx + 1)) * ((total_epochs * len(lines)) - ((current_epoch_idx * len(lines)) + idx + 1))
-                
-                # calculate eta for this epoch to complete based on elapsed time and remaining files
-                eta_epoch = (elapsed_for_process / (idx + 1)) * (len(lines) - idx - 1)
-
                 print(f"                              ETA for this epoch: {eta_epoch:.1f}s | Overall ETA: {eta:.1f}s", end='\r')
-
-                # Print current file number, loss, elapsed time, and learning rate and epoch info
-                # print(f"    Epoch {current_epoch_idx+1:3d}/{total_epochs} | Loss: {loss:.6f} ")    
-                # print(f"\n\n  Current File loss: {loss:.6f} | Time: {elapsed:.1f}s | LR: {lr_val:.0e}" if loss is not None else "  FAILED")
                 results.append((audio_path, loss, "OK" if loss is not None else "FAILED"))
             except KeyboardInterrupt:
                 version = save_train_checkpoint(
