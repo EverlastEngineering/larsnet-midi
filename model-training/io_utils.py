@@ -17,7 +17,7 @@ def get_models_dir() -> Path:
     return MODELS_DIR
 
 
-def find_next_version(models_dir: Path, prefix: str = "smoke_test_checkpoint_v") -> int:
+def find_next_version(models_dir: Path, prefix: str = "train_checkpoint_v") -> int:
     """
     Find the next version number for checkpoint naming.
     
@@ -206,9 +206,9 @@ def clear_abort(models_dir: Path) -> None:
     Remove abort file if it exists.
     
     Args:
-        models_dir: Directory containing .abort_training file
+        models_dir: Directory containing abort file
     """
-    abort_file = models_dir / ".abort_training"
+    abort_file = models_dir / "abort"
     if abort_file.exists():
         abort_file.unlink()
 

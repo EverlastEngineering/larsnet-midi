@@ -141,7 +141,7 @@ if __name__ == "__main__":
         model = None
         optimizer = None
         results = []
-        version = find_next_version(models_dir)
+        version = find_next_version(models_dir, prefix="smoke_test_checkpoint_v")
         
         for idx, line in enumerate(lines):
             if check_abort(models_dir):
@@ -195,7 +195,7 @@ if __name__ == "__main__":
             if result[0] is not None:
                 print(f"\nFinal loss: {result[0]:.6f}")
                 # Save on success
-                version = find_next_version(models_dir)
+                version = find_next_version(models_dir, prefix="smoke_test_checkpoint_v")
                 ckpt_path = models_dir / f"smoke_test_checkpoint_v{version}.ckpt"
                 save_checkpoint(ckpt_path, result[1], result[2], result[0], {
                     'epochs': args.epochs,
@@ -205,7 +205,7 @@ if __name__ == "__main__":
         except (KeyboardInterrupt, Exception) as e:
             print(f"\nTraining interrupted: {e}")
             # Save on interrupt
-            version = find_next_version(models_dir)
+            version = find_next_version(models_dir, prefix="smoke_test_checkpoint_v")
             ckpt_path = models_dir / f"smoke_test_checkpoint_v{version}.ckpt"
             save_checkpoint(ckpt_path, model, optimizer, None, {
                 'epochs': args.epochs,
