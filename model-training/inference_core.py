@@ -82,10 +82,11 @@ def heatmap_to_notes(
         
         for frame, prob in peaks:
             time_seconds = frame * SECONDS_PER_FRAME
-            # Channels 10-19: velocity regression values (power-law scaled)
-            # Inverse power-law: (pred_val ^ (1/0.7)) * 127 to recover MIDI velocity
+            # Channels 10-19: velocity regression values (sigmoid输出, 0-1范围)
+            # Apply sigmoid to match training loss, then power-law scale to MIDI velocity
             # Clamp to valid MIDI velocity range [35, 127]
-            velocity_value = max(0.0, pred_np[frame, class_idx + 10])
+            raw_vel = pred_np[frame, class_idx + 10]
+            velocity_value = 1.0 / (1.0 + np.exp(-raw_vel))  # sigmoid
             velocity = int(min(127, max(35, (velocity_value ** (1.0 / 0.7)) * 127)))
             notes.append((time_seconds, midi_note, velocity))
     

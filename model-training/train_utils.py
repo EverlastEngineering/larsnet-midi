@@ -29,21 +29,32 @@ class MultiTaskDrumLoss(nn.Module):
         super().__init__()
         self.velocity_weight = velocity_weight
         
-        # Pos weight for onset classification: [Class 0 (Kick), Class 1 (Snare), ...]
-        pos_weight = torch.tensor([15.0, 15.0, 15.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0, 150.0]).to(device)
-        self.onset_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        # Register buffers once — they move to GPU with the model and stay there.
+        # No per-forward-pass tensor allocation.
+        #
+        # Weights computed from Roland e-GMD dataset frequency analysis.
+        # Aggregated from Roland pitches to our 10-class mapping:
+        #   Kick(36): 88067, Snare(38+40+37): 134745, HHC(42+22+44): 118798,
+        #   HHO(46+26): 14148, TomHigh(50+48): 14706, TomMid(47+45): 5257,
+        #   TomLow(43+58): 12263, Crash1(49+55): 6287, Crash2(57+52): 2878,
+        #   Ride(51+59+53): 51634. Total ~449283.
+        # Inverse frequency weighting: weight = total / count, then normalized so sum=10.
+        pos_weight = torch.tensor([5.10, 3.34, 3.78, 31.77, 30.56, 85.45, 36.65, 71.49, 156.13, 8.70])
+        self.register_buffer('pos_weight', pos_weight)
         
-        # Per-class velocity importance weights
-        self.velocity_class_weights = torch.tensor(self.VELOCITY_CLASS_WEIGHTS).to(device)
+        velocity_class_weights = torch.tensor(self.VELOCITY_CLASS_WEIGHTS)
+        self.register_buffer('velocity_class_weights', velocity_class_weights)
+        
+        self.onset_criterion = nn.BCEWithLogitsLoss(pos_weight=self.pos_weight)
     
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> Tuple[torch.Tensor, dict]:
         """
         Args:
             pred: [Batch, Time, 20] raw logits from model
             target: [Batch, Time, 20] target tensor
             
         Returns:
-            Scalar loss = onset_loss + (weight * velocity_loss)
+            Tuple of (scalar_loss, dict with onset_loss and velocity_loss for logging)
         """
         onset_pred = pred[:, :, :10]
         onset_target = target[:, :, :10]
@@ -57,10 +68,11 @@ class MultiTaskDrumLoss(nn.Module):
         # Velocity loss: masked MSE — only compute on frames where GT onset is active
         onset_mask = (onset_target > 0.5).float()
         
-        velocity_squared_error = (velocity_pred - velocity_target) ** 2
+        # Apply sigmoid to velocity predictions to match 0.0-1.0 target range
+        vel_prob = torch.sigmoid(velocity_pred)
+        velocity_squared_error = (vel_prob - velocity_target) ** 2
         
         # Apply per-class weight before averaging
-        # Expand weights from [10] → [Batch, Time, 10]
         weights_expanded = self.velocity_class_weights.view(1, 1, 10)
         weighted_squared_error = velocity_squared_error * weights_expanded
         
@@ -72,7 +84,7 @@ class MultiTaskDrumLoss(nn.Module):
         velocity_loss = masked_squared_error.sum() / num_valid_frames
         
         total_loss = onset_loss + (self.velocity_weight * velocity_loss)
-        return total_loss
+        return total_loss, {'onset_loss': onset_loss.item(), 'velocity_loss': velocity_loss.item()}
 
 
 def build_targets(
@@ -128,6 +140,7 @@ def train_chunk(
     target_chunk: torch.Tensor,
     optimizer: torch.optim.Optimizer,
     criterion: nn.Module,
+    clip_grad: Optional[float] = 1.0,
 ) -> Tuple[float, torch.Tensor]:
     """
     Run one training step on a chunk.
@@ -138,14 +151,17 @@ def train_chunk(
         target_chunk: Target tensor slice
         optimizer: Optimizer
         criterion: Loss function
+        clip_grad: Max gradient norm for clipping (None to skip)
         
     Returns:
         Tuple of (loss_value, output_tensor)
     """
     optimizer.zero_grad()
     output = model(input_chunk)
-    loss = criterion(output, target_chunk)
+    loss, _ = criterion(output, target_chunk)
     loss.backward()
+    if clip_grad is not None:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
     optimizer.step()
     return loss.item(), output
 
@@ -155,32 +171,90 @@ def compute_loss(
     input_chunk: torch.Tensor,
     target_chunk: torch.Tensor,
     criterion: nn.Module,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> Tuple[float, torch.Tensor]:
     """
     Compute loss without weight updates (for evaluation).
-    
+
     Args:
         model: PyTorch model
         input_chunk: Input tensor
         target_chunk: Target tensor
         criterion: Loss function
-        
+
     Returns:
         Tuple of (loss_value, output_tensor)
     """
     with torch.no_grad():
         output = model(input_chunk)
-        loss = criterion(output, target_chunk)
+        loss, _ = criterion(output, target_chunk)
     return loss.item(), output
+
+
+def run_eval(
+    model: torch.nn.Module,
+    val_lines: list,
+    criterion: nn.Module,
+    device: str,
+) -> Tuple[float, float, float]:
+    """
+    Run validation pass over all files in val_lines.
+
+    Returns:
+        Tuple of (avg_loss, avg_onset_loss, avg_velocity_loss)
+    """
+    from pathlib import Path
+    from config import get_chunk_frames
+    model.eval()
+    total_loss = 0.0
+    total_onset = 0.0
+    total_velocity = 0.0
+    count = 0
+
+    for line in val_lines:
+        parts = line.split('\t', 1)
+        if len(parts) < 2:
+            continue
+        audio_path = parts[0].strip()
+        midi_path = parts[1].strip()
+
+        if not Path(audio_path).exists():
+            continue
+
+        try:
+            input_tensor = load_audio(audio_path).to(device)
+            notes, duration = load_midi_notes(midi_path)
+            total_frames = input_tensor.shape[3]
+            target_tensor = build_targets(notes, total_frames).to(device)
+        except Exception:
+            continue
+
+        # Accumulate chunk losses
+        file_losses = []
+        file_onset = []
+        file_velocity = []
+
+        for chunk_start in range(0, total_frames, get_chunk_frames()):
+            input_chunk, target_chunk = get_chunk(input_tensor, target_tensor, chunk_start, get_chunk_frames())
+            loss_val, _ = compute_loss(model, input_chunk, target_chunk, criterion)
+            file_losses.append(loss_val)
+
+        if file_losses:
+            total_loss += sum(file_losses) / len(file_losses)
+            count += 1
+
+    model.train()
+    avg_loss = total_loss / count if count > 0 else 0.0
+    return avg_loss, 0.0, 0.0  # onset/velocity not tracked in eval for now
 
 
 def setup_training(
     model: Optional[torch.nn.Module] = None,
-    learning_rate: float = 1e-3,
+    learning_rate: float = 1e-4,
     device: Optional[str] = None,
     scheduler_patience: int = 10,
     scheduler_factor: float = 0.1,
-) -> Tuple[torch.nn.Module, torch.optim.Optimizer, nn.Module, Optional[torch.optim.lr_scheduler.ReduceLROnPlateau]]:
+    clip_grad: Optional[float] = 1.0,
+) -> Tuple[torch.nn.Module, torch.optim.Optimizer, nn.Module, Optional[torch.optim.lr_scheduler.ReduceLROnPlateau], float]:
     """
     Initialize or reset training components.
     
@@ -218,7 +292,7 @@ def setup_training(
         patience=scheduler_patience
     )
     
-    return model, optimizer, criterion, scheduler
+    return model, optimizer, criterion, scheduler, clip_grad
 
 
 def load_audio(path: str) -> torch.Tensor:

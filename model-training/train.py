@@ -12,6 +12,9 @@ Usage:
     # Use with saved checkpoint
     python train.py --list training_files.txt --checkpoint train_checkpoint_v3.ckpt --epochs 100
 
+    # With validation
+    python train.py --list training_files.txt --val-list val_files.txt --epochs 100
+
 Checkpoint format:
     'file_idx': current file index (0-based)
     'epoch_idx': current epoch index (0-based)
@@ -26,7 +29,7 @@ from pathlib import Path
 
 from config import DEVICE, get_models_dir, get_learning_rate, get_chunk_frames, get_training_config
 from io_utils import find_next_version, save_checkpoint, check_abort, clear_abort
-from train_utils import setup_training, load_audio, load_midi_notes, build_targets, get_chunk, train_chunk
+from train_utils import setup_training, load_audio, load_midi_notes, build_targets, get_chunk, train_chunk, run_eval
 
 from model import DrumTranscriber
 
@@ -64,21 +67,24 @@ def train_file(
     midi_path: str,
     model=None,
     optimizer=None,
+    criterion=None,
+    clip_grad=1.0,
     device: str = None,
 ) -> tuple:
     """
-    Train on a batch of files. If model/optimizer provided, continue training.
+    Train on one file, iterating over chunks.
     
     Args:
         audio_path: Path to audio file
         midi_path: Path to MIDI file
-        epochs: Number of training epochs
-        model: Existing model or None to create fresh
-        optimizer: Existing optimizer or None
+        model: Existing model
+        optimizer: Existing optimizer
+        criterion: Loss function (already initialized)
+        clip_grad: Gradient clipping value
         device: Device string or None for auto-detect
         
     Returns:
-        Tuple of (final_loss, model, optimizer)
+        Tuple of (avg_loss, total_frames)
     """
     if device is None:
         device = DEVICE
@@ -112,27 +118,41 @@ def train_file(
         print(f"    ERROR: {e}")
         return None, None, None
     
-    # STEP 4: Initialize model if not provided
-    # print("Initializing model. ", end='')
-    lr = get_learning_rate()
-    chunk_frames = get_chunk_frames()
-    train_cfg = get_training_config()
-    scheduler_patience = train_cfg.get('scheduler_patience', 10)
-    scheduler_factor = train_cfg.get('scheduler_factor', 0.1)
-    model, optimizer, criterion, scheduler = setup_training(
-        model=model, device=device, learning_rate=lr,
-        scheduler_patience=scheduler_patience, scheduler_factor=scheduler_factor,
-    )
+    # STEP 4: model and criterion are passed in — just move to device
+    # Only initialize fresh model/criterion if not already provided
+    if model is None:
+        train_cfg = get_training_config()
+        scheduler_patience = train_cfg.get('scheduler_patience', 10)
+        scheduler_factor = train_cfg.get('scheduler_factor', 0.1)
+        model, optimizer, criterion, scheduler, clip_grad = setup_training(
+            device=device, learning_rate=lr,
+            scheduler_patience=scheduler_patience, scheduler_factor=scheduler_factor,
+        )
+    else:
+        model = model.to(device)
+        if criterion is None:
+            from config import get_velocity_weight
+            velocity_weight = get_velocity_weight()
+            from train_utils import MultiTaskDrumLoss
+            criterion = MultiTaskDrumLoss(velocity_weight=velocity_weight, device=device)
     
-    # STEP 5: Training loop (one pass through chunks, averaged loss returned)
+    # STEP 5: chunk_frames is always needed
+    chunk_frames = get_chunk_frames()
+    
+    # STEP 6: Training loop (one pass through chunks, averaged loss returned)
     # print(f"\rTraining on {total_frames} frames...", end='')
     # file_loss = 0.0
     # step_count = 0
     # file_start = time.time()
     
+    epoch_losses = []
+    epoch_onset_losses = []
+    epoch_velocity_losses = []
+    
     for chunk_start in range(0, total_frames, chunk_frames):
         input_chunk, target_chunk = get_chunk(input_tensor, target_tensor, chunk_start, chunk_frames)
-        loss_value, _ = train_chunk(model, input_chunk, target_chunk, optimizer, criterion)
+        loss_value, _ = train_chunk(model, input_chunk, target_chunk, optimizer, criterion, clip_grad)
+        epoch_losses.append(loss_value)
         # file_loss += loss_value
         # step_count += 1
         # print("\033[1A\033[1A\033[1A")
@@ -143,15 +163,16 @@ def train_file(
     # lr_val = optimizer.param_groups[0]['lr']
     # print(f"    {total_frames} frames | File Loss: {avg_loss:.6f} | LR: {lr_val:.0e} | Time: {elapsed:.1f}s")
 
-    if scheduler:
-        scheduler.step(loss_value)
+    # Return average loss across chunks for scheduler
+    avg_loss = sum(epoch_losses) / len(epoch_losses) if epoch_losses else 0.0
     
-    return loss_value, model, optimizer, total_frames
+    return avg_loss, model, optimizer, total_frames
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Full-Batch Training')
     parser.add_argument('--list', '-l', required=True, help='File with lines of: audio.wav\\tmidi.mid\\t[epochs]')
     parser.add_argument('--epochs', '-e', type=int, default=200, help='Total passes through the file list (default 200)')
+    parser.add_argument('--val-list', help='Validation file list (audio\\tMIDI per line)')
     parser.add_argument('--checkpoint', '-c', help='Checkpoint to resume from')
     
     args = parser.parse_args()
@@ -162,9 +183,17 @@ if __name__ == "__main__":
         lines = [line.strip() for line in f if line.strip() and not line.startswith('#')]
     print(f"=== Training: {len(lines)} files per epoch ===\n")
     
+    val_lines = []
+    if args.val_list:
+        with open(args.val_list, 'r') as f:
+            val_lines = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+        print(f"=== Validation: {len(val_lines)} files ===\n")
+    
     models_dir = get_models_dir()
     model = None
     optimizer = None
+    criterion = None
+    clip_grad = 1.0
     results = []
     version = find_next_version(models_dir)
     
@@ -190,6 +219,17 @@ if __name__ == "__main__":
     loss = None
     process_start = time.time()
 
+    # Initialize model, optimizer, criterion once before the training loop
+    lr = get_learning_rate()
+    train_cfg = get_training_config()
+    scheduler_patience = train_cfg.get('scheduler_patience', 10)
+    scheduler_factor = train_cfg.get('scheduler_factor', 0.1)
+    model, optimizer, criterion, scheduler, clip_grad = setup_training(
+        device=DEVICE, learning_rate=lr,
+        scheduler_patience=scheduler_patience, scheduler_factor=scheduler_factor,
+    )
+    print(f"  Starting LR: {lr:.0e}, clip_grad: {clip_grad}")
+
     while total_epochs is None or current_epoch_idx < total_epochs:
         # Check for abort signal
         if check_abort(models_dir):
@@ -201,6 +241,9 @@ if __name__ == "__main__":
             )
             print(f"\n=== ABORT at epoch {current_epoch_idx+1}, file {current_file_idx+1} ===")
             break
+        
+        # Track epoch-level losses for scheduler
+        epoch_file_losses = []
         
         # Loop over files
         for idx in range(start_file_idx, len(lines)):
@@ -229,8 +272,14 @@ if __name__ == "__main__":
                     midi_path,
                     model=model,
                     optimizer=optimizer,
+                    criterion=criterion,
+                    clip_grad=clip_grad,
                     device=DEVICE
                 )
+                
+                # accumulate for epoch-average scheduler
+                if loss is not None:
+                    epoch_file_losses.append(loss)
 
                 # calculate elapsed time for this file
                 elapsed_for_file = time.time() - file_process_start
@@ -286,14 +335,33 @@ if __name__ == "__main__":
             # Completed one full epoch without break/interrupt
             current_epoch_idx += 1
             start_file_idx = 0  # Reset for next epoch
+
+            # Validation pass (no gradients, usually faster)
+            val_loss = None
+            if val_lines:
+                val_start = time.time()
+                val_loss, _, _ = run_eval(model, val_lines, criterion, DEVICE)
+                val_elapsed = time.time() - val_start
+                print(f"  Validation: val_loss={val_loss:.6f} ({val_elapsed:.1f}s)")
+
+            # STEP LR scheduler with validation loss (not training loss!)
+            if val_loss is not None:
+                scheduler.step(val_loss)
+            elif epoch_file_losses:
+                avg_epoch_loss = sum(epoch_file_losses) / len(epoch_file_losses)
+                scheduler.step(avg_epoch_loss)
+
+            lr_val = optimizer.param_groups[0]['lr']
+            avg_train = sum(epoch_file_losses) / len(epoch_file_losses) if epoch_file_losses else 0.0
+            val_str = f"{val_loss:.6f}" if val_loss is not None else "N/A"
+            print(f"\r\033[K=== Epoch {current_epoch_idx} Complete | Val Loss: {val_str} | Train Avg: {avg_train:.6f} | LR: {lr_val:.0e} ===")
+
             # Epoch-level checkpoint (auto-increments version)
-            epoch_path = models_dir / f"train_checkpoint_v{version + 1}_epoch{current_epoch_idx}.ckpt"
             version = save_train_checkpoint(
                 models_dir, model, optimizer,
-                results[-1][1] if results else None,
+                val_loss if val_loss is not None else (results[-1][1] if results else None),
                 len(lines) - 1, current_epoch_idx, results, lines, version
             )
-            print(f"\r\033[K\n=== Epoch {current_epoch_idx} Complete ({len(results)} files) ===")
             continue
         
         # Interrupted or aborted — break outer loop
