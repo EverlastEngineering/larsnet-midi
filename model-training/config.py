@@ -39,7 +39,7 @@ INDEX_TO_NAME = {
 LABEL_NAMES = list(INDEX_TO_NAME.values())
 
 # MTL training constants (overridden by config.yaml if present)
-VELOCITY_WEIGHT = 5.0
+VELOCITY_WEIGHT = 2.0
 SMEAR_THRESHOLD = 0.2
 
 # Load config.yaml once at module load

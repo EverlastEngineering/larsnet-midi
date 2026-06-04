@@ -27,11 +27,14 @@ import time
 import torch
 from pathlib import Path
 
-from config import DEVICE, get_models_dir, get_learning_rate, get_chunk_frames, get_training_config
+from config import DEVICE, get_models_dir, get_learning_rate, get_chunk_frames, get_training_config, SAMPLE_RATE, HOP_LENGTH
 from io_utils import find_next_version, save_checkpoint, check_abort, clear_abort
 from train_utils import setup_training, load_audio, load_midi_notes, build_targets, get_chunk, train_chunk, run_eval
 
 from model import DrumTranscriber
+
+MAX_TRAIN_SECONDS = 30
+MAX_FRAMES = MAX_TRAIN_SECONDS * SAMPLE_RATE // HOP_LENGTH
 
 
 def save_train_checkpoint(
@@ -106,6 +109,9 @@ def train_file(
     except Exception as e:
         print(f"    ERROR: {e}")
         return None, None, None
+
+    # STEP 2b: Truncate to MAX_FRAMES
+    input_tensor = input_tensor[:, :, :, :MAX_FRAMES]
     
     # STEP 3: Create labels
     # print("Creating labels. ", end='')

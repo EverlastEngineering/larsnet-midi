@@ -34,12 +34,23 @@ class MultiTaskDrumLoss(nn.Module):
         #
         # Weights computed from Roland e-GMD dataset frequency analysis.
         # Aggregated from Roland pitches to our 10-class mapping:
-        #   Kick(36): 88067, Snare(38+40+37): 134745, HHC(42+22+44): 118798,
-        #   HHO(46+26): 14148, TomHigh(50+48): 14706, TomMid(47+45): 5257,
-        #   TomLow(43+58): 12263, Crash1(49+55): 6287, Crash2(57+52): 2878,
-        #   Ride(51+59+53): 51634. Total ~449283.
+        #   Kick(36):           88067, 
+        #   Snare(38+40+37):    134745,
+        #   HHC(42+22+44):      118798,
+        #   HHO(46+26):         14148,
+        #   TomHigh(50+48):     14706,
+        #   TomMid(47+45):      5257,
+        #   TomLow(43+58):      12263,
+        #   Crash1(49+55):      6287,
+        #   Crash2(57+52):      2878,
+        #   Ride(51+59+53):     51634.
+        #
+        #  Total ~449283.
         # Inverse frequency weighting: weight = total / count, then normalized so sum=10.
-        pos_weight = torch.tensor([5.10, 3.34, 3.78, 31.77, 30.56, 85.45, 36.65, 71.49, 156.13, 8.70])
+        # pos_weight = torch.tensor([5.10, 3.34, 3.78, 31.77, 30.56, 85.45, 36.65, 71.49, 156.13, 8.70])
+        # Dampened weights: We scale your inverse frequencies but cap the max impact.
+# Good for general accuracy without massive False Positives.
+        pos_weight = torch.tensor([2.0, 1.5, 1.8, 5.0, 5.0, 8.0, 5.0, 7.0, 10.0, 3.0])
         self.register_buffer('pos_weight', pos_weight)
         
         velocity_class_weights = torch.tensor(self.VELOCITY_CLASS_WEIGHTS)
@@ -186,8 +197,8 @@ def compute_loss(
     """
     with torch.no_grad():
         output = model(input_chunk)
-        loss, _ = criterion(output, target_chunk)
-    return loss.item(), output
+        loss, loss_dict = criterion(output, target_chunk)
+    return loss.item(), loss_dict
 
 
 def run_eval(
