@@ -87,7 +87,7 @@ def run_smoke_test(
     train_cfg = get_training_config()
     scheduler_patience = train_cfg.get('scheduler_patience', 10)
     scheduler_factor = train_cfg.get('scheduler_factor', 0.1)
-    model, optimizer, criterion, scheduler = setup_training(
+    model, optimizer, criterion, scheduler, clip_grad = setup_training(
         model=model, device=device, learning_rate=lr,
         scheduler_patience=scheduler_patience, scheduler_factor=scheduler_factor,
     )
@@ -103,7 +103,7 @@ def run_smoke_test(
             # show progress per chunk with \r to overwrite line
             print(f"    Epoch {epoch+1:3d}/{epochs} | Chunk {chunk_start}-{min(chunk_start+chunk_frames, total_frames)}", end='\r')
             input_chunk, target_chunk = get_chunk(input_tensor, target_tensor, chunk_start, chunk_frames)
-            loss_value, _ = train_chunk(model, input_chunk, target_chunk, optimizer, criterion)
+            loss_value, _ = train_chunk(model, input_chunk, target_chunk, optimizer, criterion, clip_grad)
             epoch_loss += loss_value
             step_count += 1
         
@@ -185,7 +185,7 @@ if __name__ == "__main__":
         train_cfg = get_training_config()
         scheduler_patience = train_cfg.get('scheduler_patience', 10)
         scheduler_factor = train_cfg.get('scheduler_factor', 0.1)
-        model, optimizer, criterion, scheduler = setup_training(
+        model, optimizer, criterion, scheduler, clip_grad = setup_training(
             model=model, device=device, learning_rate=lr,
             scheduler_patience=scheduler_patience, scheduler_factor=scheduler_factor,
         )
