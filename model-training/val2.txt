@@ -1,0 +1,5 @@
+/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/221_rock-halftime_140_fill_4-4_53.wav	/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/221_rock-halftime_140_fill_4-4_53.midi
+/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/222_rock-halftime_140_fill_4-4_1.wav	/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/222_rock-halftime_140_fill_4-4_1.midi
+/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/223_rock-halftime_140_fill_4-4_16.wav	/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/223_rock-halftime_140_fill_4-4_16.midi
+/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/224_rock-halftime_140_fill_4-4_53.wav	/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/224_rock-halftime_140_fill_4-4_53.midi
+/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/225_rock-halftime_140_fill_4-4_1.wav	/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/225_rock-halftime_140_fill_4-4_1.midi

@@ -69,3 +69,17 @@ Anaconda-*.sh
 site/
 .claude/settings.local.json
 .claude/settings.local.json
+
+# model-training: artifacts (predictions, plots, audit images)
+# Inputs (audio/MIDI ground truth, batch list .txt) are tracked or covered by *.wav.
+model-training/*.mid
+model-training/*.midi
+model-training/*_predicted_*.mid
+model-training/*.png
+model-training/visualizer/*.png
+model-training/visualizer/*copy*.png
+model-training/models/
+model-training/__pycache__/
+
+# model-training: re-allow specific tracked-by-hand exceptions
+!model-training/dl-1.mid

@@ -1,0 +1,2 @@
+/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/52_jazz_125_beat_4-4_4.wav	/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/52_jazz_125_beat_4-4_4.midi
+/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/1_funk_80_beat_4-4_4.wav	/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/1_funk_80_beat_4-4_4.midi

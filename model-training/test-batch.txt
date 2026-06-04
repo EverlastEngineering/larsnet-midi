@@ -1,0 +1,8 @@
+/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/1_funk_80_beat_4-4_15.wav	/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/1_funk_80_beat_4-4_15.midi
+/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/1_funk_80_beat_4-4_15.wav	/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/1_funk_80_beat_4-4_15.midi
+/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/1_funk_80_beat_4-4_15.wav	/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/1_funk_80_beat_4-4_15.midi
+/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/146_latin-brazilian-baiao_95_beat_4-4_57.wav	/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/146_latin-brazilian-baiao_95_beat_4-4_57.midi
+/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/146_latin-brazilian-baiao_95_beat_4-4_57.wav	/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/146_latin-brazilian-baiao_95_beat_4-4_57.midi
+noisy_brown.wav	longer-silence.mid
+/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/239_funk-purdieshuffle_130_beat_4-4_24.wav	/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/239_funk-purdieshuffle_130_beat_4-4_24.midi
+/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/145_latin-brazilian-baiao_95_beat_4-4_24.wav	/Volumes/1TB SSD 1/e-gmd-v1.0.0/drummer1/session1/145_latin-brazilian-baiao_95_beat_4-4_24.midi
