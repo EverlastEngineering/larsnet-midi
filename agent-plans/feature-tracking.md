@@ -62,3 +62,14 @@
   - snare: `body_energy`, `wire_energy`, `geomean`, `spectral_centroid_hz`
   - toms: `fundamental_energy`, `body_energy`, `geomean`, `spectral_centroid_hz`
 - **Files**: New `stems_to_midi/note_classification_core.py` (pure functions), updates to `rebuild_core.py` and `midi.py`
+
+---
+
+## Cross-reference: model-training subproject
+
+The `model-training/` directory is a self-contained subproject with its
+own planning docs at `model-training/agent-plans/`. As of 2026-06-04 the
+deep-learning training experiment was abandoned in a non-converged state
+and the working tree was cleaned up on the `rescued` branch. See
+`model-training/agent-plans/rescue-summary-2026-06-04.md` for entry-point
+context if you're picking that work back up.
