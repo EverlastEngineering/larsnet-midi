@@ -1,1 +1,0 @@
-python visual_diagnostic.py models/smoke_test_checkpoint_v47.ckpt dl-1.wav dl-1.mid
