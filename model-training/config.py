@@ -6,6 +6,7 @@ Loads hyperparameters from config.yaml.
 
 import sys
 from pathlib import Path
+import torch
 
 # Add parent workspace to path for device_shell import
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -75,8 +76,33 @@ def get_velocity_weight():
     """Return velocity_weight from config.yaml (default 2.0)."""
     return get_training_config().get('velocity_weight', 2.0)
 
-# Global device — always cpu for now
-DEVICE = 'cpu'
+# Global device — INTENTIONALLY FORCED TO CPU.
+#
+# The cuda/mps code paths below appear correct but fail at runtime during
+# training (silent NaNs / wrong-device tensors when crossing the MultiTaskDrumLoss
+# boundary on Apple MPS, untested on CUDA). Until those failures are debugged,
+# _DEVICE_CACHE is pre-seeded to 'cpu' so the `is None` branch in get_device()
+# never runs. Leave the auto-detect function in place as a documented escape
+# hatch: set `_DEVICE_CACHE = None` to re-enable it.
+_DEVICE_CACHE = 'cpu'  # set to None to re-enable cuda/mps auto-detect
+
+def get_device() -> str:
+    """Auto-detect the best available device (cuda > mps > cpu).
+
+    DORMANT: see _DEVICE_CACHE comment above. Currently always returns 'cpu'
+    because cuda/mps paths produced incorrect training behavior.
+    """
+    global _DEVICE_CACHE
+    if _DEVICE_CACHE is None:
+        if torch.cuda.is_available():
+            _DEVICE_CACHE = 'cuda'
+        elif torch.backends.mps.is_available():
+            _DEVICE_CACHE = 'mps'
+        else:
+            _DEVICE_CACHE = 'cpu'
+    return _DEVICE_CACHE
+
+DEVICE = get_device()
 
 
 def get_models_dir() -> Path:

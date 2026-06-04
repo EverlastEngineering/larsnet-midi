@@ -33,7 +33,7 @@ from train_utils import setup_training, load_audio, load_midi_notes, build_targe
 
 from model import DrumTranscriber
 
-MAX_TRAIN_SECONDS = 30
+MAX_TRAIN_SECONDS = 300
 MAX_FRAMES = MAX_TRAIN_SECONDS * SAMPLE_RATE // HOP_LENGTH
 
 
@@ -135,13 +135,15 @@ def train_file(
             scheduler_patience=scheduler_patience, scheduler_factor=scheduler_factor,
         )
     else:
-        model = model.to(device)
+        if next(model.parameters()).device != torch.device(device):
+            model = model.to(device)
         if criterion is None:
             from config import get_velocity_weight
             velocity_weight = get_velocity_weight()
             from train_utils import MultiTaskDrumLoss
             criterion = MultiTaskDrumLoss(velocity_weight=velocity_weight, device=device)
-    
+            criterion = criterion.to(device)
+
     # STEP 5: chunk_frames is always needed
     chunk_frames = get_chunk_frames()
     
@@ -212,7 +214,7 @@ if __name__ == "__main__":
         ckpt = torch.load(args.checkpoint, map_location=DEVICE, weights_only=False)
         model = DrumTranscriber().to(DEVICE)
         model.load_state_dict(ckpt['model_state_dict'])
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         start_file_idx = ckpt.get('file_idx', 0)
         start_epoch_idx = ckpt.get('epoch_idx', 0)

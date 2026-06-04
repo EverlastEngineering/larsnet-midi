@@ -34,7 +34,7 @@ class MultiTaskDrumLoss(nn.Module):
         #
         # Weights computed from Roland e-GMD dataset frequency analysis.
         # Aggregated from Roland pitches to our 10-class mapping:
-        #   Kick(36):           88067, 
+        #   Kick(36):           88067,
         #   Snare(38+40+37):    134745,
         #   HHC(42+22+44):      118798,
         #   HHO(46+26):         14148,
@@ -48,8 +48,9 @@ class MultiTaskDrumLoss(nn.Module):
         #  Total ~449283.
         # Inverse frequency weighting: weight = total / count, then normalized so sum=10.
         # pos_weight = torch.tensor([5.10, 3.34, 3.78, 31.77, 30.56, 85.45, 36.65, 71.49, 156.13, 8.70])
-        # Dampened weights: We scale your inverse frequencies but cap the max impact.
-# Good for general accuracy without massive False Positives.
+        #
+        # Dampened weights: scale the inverse frequencies but cap the max impact.
+        # Good for general accuracy without massive false positives.
         pos_weight = torch.tensor([2.0, 1.5, 1.8, 5.0, 5.0, 8.0, 5.0, 7.0, 10.0, 3.0])
         self.register_buffer('pos_weight', pos_weight)
         
@@ -265,9 +266,9 @@ def run_eval(
 
 def setup_training(
     model: Optional[torch.nn.Module] = None,
-    learning_rate: float = 1e-4,
+    learning_rate: float = 1e-3,
     device: Optional[str] = None,
-    scheduler_patience: int = 10,
+    scheduler_patience: int = 3,
     scheduler_factor: float = 0.1,
     clip_grad: Optional[float] = 1.0,
 ) -> Tuple[torch.nn.Module, torch.optim.Optimizer, nn.Module, Optional[torch.optim.lr_scheduler.ReduceLROnPlateau], float]:
@@ -291,13 +292,13 @@ def setup_training(
     if model is None:
         from model import DrumTranscriber
         model = DrumTranscriber()
-    
+
     model = model.to(device)
-    
-    # Multi-task loss: onset classification (BCEWithLogitsLoss) + velocity regression (masked MSE)
+
     from config import get_velocity_weight
     velocity_weight = get_velocity_weight()
     criterion = MultiTaskDrumLoss(velocity_weight=velocity_weight, device=device)
+    criterion = criterion.to(device)
     
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     
