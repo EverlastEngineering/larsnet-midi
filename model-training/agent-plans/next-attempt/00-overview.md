@@ -210,7 +210,8 @@ were previously gated.
 model-training/agent-plans/next-attempt/
 ├── 00-overview.md                          ← you are here
 ├── 01-critique-and-theories.md             ← read this second
-├── 02-tooling-wishlist.md                  ← read if blocked
+├── 02-tooling-wishlist.md                  ← ML/research tooling (mir_eval, compute, papers)
+├── 02b-supercharge-the-agent.md            ← opencode-side tooling (MCPs, subagents, skills)
 ├── 03-test-prove-overfit-first.md          ← the mandatory baseline
 ├── 04-test-bug-isolation-grid.md           ← bisection tool
 ├── 05-approach-stems-as-input.md           ← ★ top rec
