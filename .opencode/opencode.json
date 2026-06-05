@@ -1,0 +1,86 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "instructions": [
+    "AGENTS.md",
+    "model-training/agent-plans/next-attempt/00-overview.md"
+  ],
+
+  "permission": {
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "todowrite": "allow",
+    "question": "allow",
+    "webfetch": "allow",
+    "edit": {
+      "model-training/models/**": "deny",
+      "model-training/agent-plans/**": "allow",
+      "model-training/**": "allow",
+      ".opencode/**": "allow",
+      "stems_to_midi/**": "ask",
+      "*": "ask"
+    },
+    "bash": {
+      "git status": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git show*": "allow",
+      "git branch*": "allow",
+      "ls *": "allow",
+      "tail */loss.log": "allow",
+      "conda run -n drumtomidi python -c *": "allow",
+      "conda run -n drumtomidi pytest model-training/*": "allow",
+      "conda run -n drumtomidi python model-training/smoke_test.py *": "allow",
+      "conda run -n drumtomidi python model-training/tools/*": "allow",
+      "conda env list": "allow",
+      "rm -rf *": "deny",
+      "rm -r *": "deny",
+      "rm /*": "deny",
+      "git push*": "ask",
+      "git reset --hard*": "ask",
+      "git rebase*": "ask",
+      "*": "ask"
+    },
+    "external_directory": {
+      "/Volumes/1TB SSD 1/e-gmd-v1.0.0/**": "allow",
+      "/var/folders/**/opencode/**": "allow",
+      "*": "ask"
+    }
+  },
+
+  "mcp": {
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+      "enabled": true,
+      "headers": {
+        "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}"
+      }
+    }
+  },
+
+  "command": {
+    "smoke": {
+      "description": "Run the mandatory overfit-reproduction smoke test. If it fails, walk the bisection in 03-test-prove-overfit-first.md.",
+      "template": "Run the prove-overfit-first smoke test from model-training/agent-plans/next-attempt/03-test-prove-overfit-first.md. Steps: (1) Verify model-training/tests/test_overfit_reproduction.py exists; if not, create it per that doc's spec. (2) Run: conda run -n drumtomidi pytest model-training/tests/test_overfit_reproduction.py -v -s. (3) Interpret per the table in that doc. (4) If any assertion fails, use the drum-transcription-debug skill to walk the 4-test bisection."
+    },
+    "eval": {
+      "description": "Evaluate a checkpoint vs ground-truth MIDI using mir_eval. Usage: /eval <ckpt_path> <audio.wav> <ground_truth.mid>",
+      "template": "Use the mir-eval-drum-evaluation skill and model-training/tools/eval_with_mir_eval.py. Args: $ARGUMENTS. If no ckpt was provided, ask the user which one. Load the ckpt, run inference, write predicted MIDI, then run the eval script with --tolerance 0.05. Report overall + per-class F1. Flag any class with recall=0 (Theory T4 from 01-critique-and-theories.md)."
+    },
+    "grid": {
+      "description": "Run the 2x2x2 bug-isolation ablation grid on dl-1.",
+      "template": "Execute the plan in model-training/agent-plans/next-attempt/04-test-bug-isolation-grid.md. Steps: (1) Wire feature flags into feature_extractor.py / label_encoder.py / model.py / train_utils.py. (2) Write model-training/tools/bug_isolation_grid.py. (3) Run via the training-monitor subagent (avoids 120s timeout). (4) Tabulate F1 per config. (5) Identify winning config; recommend next approach."
+    },
+    "train-stem": {
+      "description": "Train one per-stem transcriber per approach 05. Usage: /train-stem <kick|snare|hihat|toms|cymbals>",
+      "template": "Follow approach 05 (model-training/agent-plans/next-attempt/05-approach-stems-as-input.md) for the stem named in $ARGUMENTS. Steps: (1) Verify per-stem dataset infra exists; create if missing per the spec. (2) Confirm the per-stem overfit smoke test passes before scaling up. (3) Spawn the training-monitor subagent to start full training (do NOT wait inline). (4) When training-monitor returns, run /eval on the resulting checkpoint."
+    },
+    "rescue-status": {
+      "description": "Summarize where the model-training rescue + re-attempt stands. Useful for a fresh session.",
+      "template": "Read model-training/agent-plans/next-attempt/00-overview.md and report concisely (max 15 lines): (1) Which approaches in 05-14 have been started (look for tools/, tests/, or new files implying work). (2) Whether model-training/tests/test_overfit_reproduction.py exists and what its last run reported. (3) Current branch and git status. (4) The strong recommendation from 00-overview.md for what to do next."
+    }
+  }
+}
