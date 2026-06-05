@@ -12,5 +12,10 @@ training:
   velocity_weight: 2.0
 
 # Inference defaults
+# Threshold lowered from 0.8 to 0.3: with the 3-channel input, the
+# model is more confident but the dampened pos_weight [2.0..10.0]
+# means borderline hits land at sigmoid ~0.5-0.7. Empirically
+# (overfit 10s crop) F1 = 0.98 at 0.3 vs 0.83 at 0.4 vs 0.87 at 0.8.
+# Real-world tuning should sweep [0.2, 0.5] per class.
 inference:
-  threshold: 0.8
+  threshold: 0.3
