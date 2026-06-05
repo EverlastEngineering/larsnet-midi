@@ -25,8 +25,9 @@ class DrumTranscriber(nn.Module):
         super().__init__()
         
         # THE EYES: Conv block extracts frequency-domain features (transients)
+        # Input: 3 channels (Left, Right, Stereo-Width mel-specs) per roadmap §1.
         self.conv = nn.Sequential(
-            nn.Conv2d(1, 32, 3, padding=1),
+            nn.Conv2d(3, 32, 3, padding=1),
             nn.ReLU(),
             nn.MaxPool2d((2, 1)),  # Reduce frequency height, preserve time resolution
             nn.Conv2d(32, 64, 3, padding=1),

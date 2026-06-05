@@ -315,18 +315,18 @@ def setup_training(
 def load_audio(path: str) -> torch.Tensor:
     """
     Load audio file and return spectrogram tensor.
-    
+
     Args:
         path: Path to audio file
-        
+
     Returns:
-        Tensor of shape [1, 1, 128, T]
+        Tensor of shape [1, 3, 128, T]
     """
     from feature_extractor import get_input_tensor
-    
+
     tensor = get_input_tensor(path)
-    assert tensor.shape[0] == 1, "Should have 1 channel"
-    assert tensor.shape[1] == 128, "Should have 128 mel bins"
+    assert tensor.shape[0] == 3, f"Expected 3 channels (L/R/Width), got {tensor.shape[0]}"
+    assert tensor.shape[1] == 128, f"Expected 128 mel bins, got {tensor.shape[1]}"
     return tensor.unsqueeze(0)
 
 
