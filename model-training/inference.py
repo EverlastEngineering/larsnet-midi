@@ -59,14 +59,19 @@ def run_inference(
     if output_path is None:
         audio_name = Path(audio_path).stem
         output_path = f"{Path(audio_path).parent}/{audio_name}_predicted.mid"
-    
+
     output_path = Path(output_path)
     base = output_path.stem
     base_clean = re.sub(r'_t[0-9.]+$', '', base)
     ext = output_path.suffix
     parent = output_path.parent
-    
-    # Find next version number
+
+    # CRITICAL: the output naming convention is <stem>_v<N>_t<threshold>.mid.
+    # This suffix is the visual signal that distinguishes MODEL OUTPUT
+    # from GROUND-TRUTH MIDI. Any test or evaluation that wants to use
+    # a MIDI file as a reference MUST verify it does NOT match this
+    # pattern; otherwise the test is contaminated. See
+    # tests/fixtures/e-gmd/README.md for the control-group rule.
     counter = 1
     while True:
         import glob
@@ -76,7 +81,7 @@ def run_inference(
             counter += 1
         else:
             break
-    
+
     output_path = parent / f"{base_clean}_v{counter}_t{threshold}{ext}"
     
     print(f"Loading audio: {audio_path}")

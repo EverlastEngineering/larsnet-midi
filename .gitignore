@@ -81,5 +81,15 @@ model-training/visualizer/*copy*.png
 model-training/models/
 model-training/__pycache__/
 
+# model-training: control-group test fixtures
+# e-GMD ground truth WAVs/MIDIs that the smoke test consumes
+# as the ONLY valid test references. NEVER use as test references:
+#   *_predicted_*.mid (anywhere)
+#   /tmp/drumtomidi/*_pred_*.mid
+# The overfit ckpt cache is regenerable, not source.
+model-training/tests/fixtures/e-gmd/.overfit_ckpts/
+
 # model-training: re-allow specific tracked-by-hand exceptions
 !model-training/dl-1.mid
+!model-training/tests/fixtures/e-gmd/*.wav
+!model-training/tests/fixtures/e-gmd/*.midi

@@ -1,0 +1,37 @@
+{
+  "seed": 42,
+  "min_notes": 100,
+  "candidates": 1290,
+  "selected": [
+    {
+      "wav": "202_rock-halftime_140_beat_4-4_16.wav",
+      "midi": "202_rock-halftime_140_beat_4-4_16.midi",
+      "notes": 1334,
+      "genre_hint": "rock"
+    },
+    {
+      "wav": "2_funk_80_beat_4-4_4.wav",
+      "midi": "2_funk_80_beat_4-4_4.midi",
+      "notes": 754,
+      "genre_hint": "funk"
+    },
+    {
+      "wav": "5_jazz-funk_116_beat_4-4_56.wav",
+      "midi": "5_jazz-funk_116_beat_4-4_56.midi",
+      "notes": 1899,
+      "genre_hint": "jazz"
+    },
+    {
+      "wav": "28_latin-samba_116_beat_4-4_17.wav",
+      "midi": "28_latin-samba_116_beat_4-4_17.midi",
+      "notes": 3236,
+      "genre_hint": "latin"
+    },
+    {
+      "wav": "81_dance-breakbeat_170_beat_4-4_37.wav",
+      "midi": "81_dance-breakbeat_170_beat_4-4_37.midi",
+      "notes": 637,
+      "genre_hint": "other"
+    }
+  ]
+}

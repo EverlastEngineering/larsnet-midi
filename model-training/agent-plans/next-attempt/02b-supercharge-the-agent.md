@@ -15,6 +15,30 @@
 
 ---
 
+## Control-group rule (CRITICAL)
+
+**Test references MUST be ground-truth matched .wav + .midi pairs from
+verified sources, NEVER model outputs.** The pattern
+`<input>_v<N>_t<threshold>.mid` is the visual signal that a MIDI is a
+model output, not ground truth. Specifically, the only valid test
+references are:
+
+- The committed control group at `model-training/tests/fixtures/e-gmd/`
+  (5 deterministically-sampled e-GMD ground-truth pairs)
+- The user's project ground truth in `user_files/`
+- The full e-GMD drive at `/Volumes/1TB SSD 1/e-gmd-v1.0.0/`
+
+The `tests/fixtures/e-gmd/README.md` documents the rule in detail.
+Any test that uses `*_predicted_*.mid` or `/tmp/drumtomidi/*_pred_*.mid`
+as a reference is contaminated and produces meaningless results.
+
+This rule was added 2026-06-06 after the rescue-phase smoke test was
+discovered to have persistence of prior model outputs in
+`/tmp/drumtomidi/`, which could have been confused with ground truth
+on subsequent runs.
+
+---
+
 ## Honest self-assessment
 
 ### What I have today

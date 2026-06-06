@@ -1,0 +1,6 @@
+#!/bin/sh
+# Sentinel file to ensure eval_fixtures/ is tracked in git.
+# The directory is intentionally empty in the repo (test data lives
+# in user_files/, tests/fixtures/e-gmd/, and the external e-GMD drive).
+# See README.md in this directory for what goes here at evaluation
+# time.
