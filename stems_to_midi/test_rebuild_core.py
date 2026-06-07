@@ -6,7 +6,10 @@ and produces MIDI-ready events without audio I/O.
 """
 
 import copy
+import json
+
 import pytest
+import yaml
 from unittest.mock import patch
 
 from .rebuild_core import (
@@ -914,3 +917,118 @@ class TestRebuildPreservesHihatState:
         # to hihat_open (46) instead of hihat_closed (42).
         _, midi_events = rebuild_events_from_analysis(analysis, {}, config)
         assert midi_events['hihat'][0]['note'] == 46  # hihat_open
+
+
+# ============================================================================
+# Bug D regression: WebUI slider overrides reach the rebuild
+# ============================================================================
+
+
+class TestRebuildConfigOverrides:
+    """Verify _apply_config_overrides writes the slider values into the config
+    that the rebuild actually reads from. Without this fix (bug D), the UI
+    would show one set of events while the saved MIDI would have a different
+    set, because the server ignored the slider values entirely.
+    """
+
+    def test_simple_per_stem_override(self):
+        """dotted path 'kick.geomean_threshold' → config['kick']['geomean_threshold']"""
+        from stems_to_midi.rebuild_shell import _apply_config_overrides
+        config = {'kick': {'geomean_threshold': 800}}
+        _apply_config_overrides(config, {'kick.geomean_threshold': 600})
+        assert config['kick']['geomean_threshold'] == 600
+
+    def test_global_filtering_override(self):
+        """filtering.* lives at config root, not in a stem section."""
+        from stems_to_midi.rebuild_shell import _apply_config_overrides
+        config = {'filtering': {'reverb_continuation_attack_threshold': 0.4}}
+        _apply_config_overrides(config, {
+            'filtering.reverb_continuation_attack_threshold': 0.3,
+        })
+        assert config['filtering']['reverb_continuation_attack_threshold'] == 0.3
+
+    def test_creates_missing_section(self):
+        """Override creates a new section if it doesn't exist."""
+        from stems_to_midi.rebuild_shell import _apply_config_overrides
+        config = {'kick': {}}
+        _apply_config_overrides(config, {
+            'hihat.open_geomean_min': 250.0,
+        })
+        assert config['hihat']['open_geomean_min'] == 250.0
+
+    def test_none_value_is_ignored(self):
+        """None override values are skipped (don't overwrite with null)."""
+        from stems_to_midi.rebuild_shell import _apply_config_overrides
+        config = {'kick': {'geomean_threshold': 800}}
+        _apply_config_overrides(config, {'kick.geomean_threshold': None})
+        assert config['kick']['geomean_threshold'] == 800
+
+    def test_rebuild_endpoint_accepts_overrides(self, tmp_path):
+        """The /api/rebuild-midi endpoint should pass config_overrides through.
+
+        End-to-end-ish test: build a real project with a stub analysis.json,
+        call rebuild_midi_for_project with overrides, and verify the rebuilt
+        analysis_data reflects the new threshold in its logic block.
+        """
+        from stems_to_midi.rebuild_shell import rebuild_midi_for_project
+
+        # Build a minimal project: midi/ dir + stub analysis.json + YAML
+        midi_dir = tmp_path / 'midi'
+        midi_dir.mkdir()
+        analysis_path = midi_dir / 'funk.analysis.json'
+        analysis_path.write_text(json.dumps({
+            'version': '3.0',
+            'tempo_bpm': 120.0,
+            'stems': {
+                'kick': {
+                    'logic': {
+                        'geomean_threshold': 50.0,
+                        'min_sustain_ms': None,
+                    },
+                    'events_configured': [],
+                    'events_sensitive': [],
+                }
+            }
+        }))
+        # Empty MIDI file is required by _find_midi_path
+        (midi_dir / 'funk.mid').write_bytes(b'')
+
+        # Project midiconfig.yaml with all the kick spectral fields the
+        # pipeline reads (fundamental_freq_min/max, body_freq_min/max, etc.).
+        config_yaml = tmp_path / 'midiconfig.yaml'
+        config_yaml.write_text(yaml.safe_dump({
+            'kick': {
+                'geomean_threshold': 800.0,
+                'fundamental_freq_min': 30, 'fundamental_freq_max': 80,
+                'body_freq_min': 100, 'body_freq_max': 300,
+                'attack_freq_min': 2000, 'attack_freq_max': 5000,
+            },
+            'filtering': {'reverb_continuation_attack_threshold': 0.4},
+            'midi': {'default_tempo': 120.0, 'max_note_duration': 0.5,
+                     'min_velocity': 80, 'max_velocity': 110},
+            'audio': {'default_note_duration': 0.1},
+            'onset_detection': {'hop_length': 512, 'threshold': 0.3,
+                                'delta': 0.01, 'wait': 3},
+        }))
+
+        result = rebuild_midi_for_project(
+            project_dir=tmp_path,
+            config_path=config_yaml,
+            honor_overrides=False,
+            config_overrides={
+                'kick.geomean_threshold': 200.0,
+                'filtering.reverb_continuation_attack_threshold': 0.25,
+            },
+        )
+
+        assert result['success'], f"rebuild failed: {result.get('error')}"
+        logic = result['analysis_data']['stems']['kick']['logic']
+        assert logic['geomean_threshold'] == 200.0, (
+            f"Expected geomean_threshold to reflect the override (200), "
+            f"got {logic['geomean_threshold']}"
+        )
+        assert logic['reverb_continuation_attack_threshold'] == 0.25, (
+            f"Expected reverb_continuation_attack_threshold to reflect the "
+            f"override (0.25), got "
+            f"{logic['reverb_continuation_attack_threshold']}"
+        )

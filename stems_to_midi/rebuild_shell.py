@@ -41,6 +41,38 @@ def _load_overrides(midi_dir: Path) -> Dict[str, Dict[str, str]]:
         return json.load(f)
 
 
+def _apply_config_overrides(config: Dict, overrides: Dict) -> None:
+    """
+    Write WebUI slider values into a loaded config dict.
+
+    Keys are dotted paths matching the YAML structure:
+        'filtering.reverb_continuation_attack_threshold'
+        'kick.geomean_threshold'
+        'hihat.open_geomean_min'
+        'hihat.open_sustain_ms'
+        'snare.expected_clusters'
+        'snare.cluster_feature'
+        etc.
+
+    Existing nested dicts are preserved; missing sections are created.
+    Mutates ``config`` in place.
+
+    Args:
+        config: The loaded midiconfig.yaml dict (mutated).
+        overrides: Mapping of dotted path → value.
+    """
+    for dotted_key, value in overrides.items():
+        if value is None:
+            continue
+        parts = dotted_key.split('.')
+        node = config
+        for part in parts[:-1]:
+            if part not in node or not isinstance(node[part], dict):
+                node[part] = {}
+            node = node[part]
+        node[parts[-1]] = value
+
+
 def _save_analysis(analysis_data: Dict, midi_path: Path) -> Path:
     """Write updated analysis.json sidecar."""
     sidecar_path = midi_path.with_suffix('.analysis.json')
@@ -54,6 +86,7 @@ def rebuild_midi_for_project(
     config_path: Optional[Path] = None,
     stem_types: Optional[List[str]] = None,
     honor_overrides: bool = True,
+    config_overrides: Optional[Dict] = None,
 ) -> Dict:
     """
     Rebuild MIDI from cached analysis data without re-running detection.
@@ -70,6 +103,12 @@ def rebuild_midi_for_project(
             then falls back to root config.
         stem_types: Optional list of stems to rebuild (None = all).
         honor_overrides: Whether to apply manual event overrides.
+        config_overrides: Optional mapping of config keys to override
+            values. Keys use the YAML structure (e.g. 'filtering.
+            reverb_continuation_attack_threshold', 'kick.geomean_threshold',
+            'hihat.open_geomean_min'). Used by the WebUI tuning panel
+            to pass the slider values the user just moved — without this
+            the UI filter would diverge from the server result (bug D).
 
     Returns:
         Dict with:
@@ -124,6 +163,13 @@ def rebuild_midi_for_project(
         # Fall back to root config
         config_path = Path(__file__).parent.parent / 'midiconfig.yaml'
     config = load_config(config_path)
+
+    # Apply WebUI slider overrides (bug D: ensures UI and server agree on
+    # the threshold values used for filtering). Keys are YAML paths
+    # (e.g. 'filtering.reverb_continuation_attack_threshold') and are
+    # written into the matching nested config section.
+    if config_overrides:
+        _apply_config_overrides(config, config_overrides)
 
     # Load overrides
     overrides = _load_overrides(midi_dir) if honor_overrides else {}

@@ -370,8 +370,13 @@ def rebuild_midi():
     Request body (JSON):
         {
             "project_number": 1,
-            "stem_types": ["kick", "snare"],  # optional: null = all stems
-            "honor_overrides": true             # optional: default true
+            "stem_types": ["kick", "snare"],   # optional: null = all stems
+            "honor_overrides": true,            # optional: default true
+            "config_overrides": {               # optional: bug D
+                "filtering.reverb_continuation_attack_threshold": 0.3,
+                "kick.geomean_threshold": 600,
+                "hihat.open_geomean_min": 200
+            }
         }
 
     Returns:
@@ -386,7 +391,8 @@ def rebuild_midi():
             "stems_rebuilt": ["kick", "snare"],
             "elapsed_ms": 42,
             "analysis_data": { ... },
-            "events_by_stem": { ... }
+            "events_by_stem": { ... },
+            "data_integrity_warnings": [...]    # bug C
         }
     """
     try:
@@ -411,6 +417,10 @@ def rebuild_midi():
         # Extract optional parameters
         stem_types = data.get('stem_types', None)
         honor_overrides = data.get('honor_overrides', True)
+        # Bug D: WebUI slider values (e.g. reverb_continuation_attack_threshold)
+        # must reach the server so the actual filter matches what the user
+        # sees in the tuning panel. Keys are dotted YAML paths.
+        config_overrides = data.get('config_overrides', None)
 
         # Run rebuild synchronously (sub-second, no job queue needed)
         from stems_to_midi.rebuild_shell import rebuild_midi_for_project
@@ -419,6 +429,7 @@ def rebuild_midi():
             project_dir=project['path'],
             stem_types=stem_types,
             honor_overrides=honor_overrides,
+            config_overrides=config_overrides,
         )
 
         if not result['success']:

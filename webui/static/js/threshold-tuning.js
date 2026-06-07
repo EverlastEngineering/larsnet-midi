@@ -326,6 +326,48 @@ function formatSliderValue(val) {
 }
 
 /**
+ * Convert tuning slider values for a stem into a flat dotted-path
+ * config_overrides dict suitable for /api/rebuild-midi.
+ *
+ * Maps the per-stem slider keys to their YAML nested paths:
+ *   geomean_threshold           → <stem>.geomean_threshold
+ *   min_sustain_ms              → <stem>.min_sustain_ms
+ *   min_strength_threshold      → <stem>.min_strength_threshold
+ *   open_geomean_min            → hihat.open_geomean_min
+ *   open_sustain_ms             → hihat.open_sustain_ms
+ *   expected_clusters           → <stem>.expected_clusters
+ *   cluster_feature             → <stem>.cluster_feature
+ *   reverb_continuation_attack_threshold (global) → filtering.reverb_continuation_attack_threshold
+ *
+ * Returns an empty object when no sliders have been moved (i.e. the
+ * stored values are identical to the logic block defaults — the
+ * rebuild would do nothing useful anyway).
+ */
+function _buildConfigOverrides(stemType, stored) {
+    const overrides = {};
+    if (!stored) return overrides;
+
+    // Per-stem keys (each stem has its own section in the YAML).
+    for (const key of [
+        'geomean_threshold', 'min_sustain_ms', 'min_strength_threshold',
+        'open_geomean_min', 'open_sustain_ms', 'expected_clusters',
+        'cluster_feature',
+    ]) {
+        if (stored[key] != null) {
+            overrides[`${stemType}.${key}`] = stored[key];
+        }
+    }
+
+    // Global filtering key (lives in [filtering] not per-stem).
+    if (stored.reverb_continuation_attack_threshold != null) {
+        overrides['filtering.reverb_continuation_attack_threshold'] =
+            stored.reverb_continuation_attack_threshold;
+    }
+
+    return overrides;
+}
+
+/**
  * Handle slider input events — debounced via requestAnimationFrame.
  * Classification sliders (marked with data-classification="true") trigger
  * a server-side reclassify call instead of local filtering.
@@ -820,8 +862,17 @@ async function saveTuningAndReconvert() {
         if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Rebuilding…';
 
         try {
+            // Bug D: build config_overrides from the current slider values
+            // so the server-side rebuild uses the same thresholds the user
+            // sees in the tuning panel. Without this, the UI filter and
+            // the actual saved MIDI filter would diverge for any slider
+            // (especially reverb_continuation_attack_threshold).
+            const stored = tuningSliderValues[stemType] || {};
+            const configOverrides = _buildConfigOverrides(stemType, stored);
+
             const result = await api.rebuildMidi(currentProject.number, {
                 honor_overrides: true,
+                config_overrides: configOverrides,
             });
 
             if (result.success) {
