@@ -25,6 +25,7 @@ import numpy as np
 def classify_hihat_notes(
     events: List[Dict],
     config: Dict,
+    force_reclassify: bool = False,
 ) -> List[Dict]:
     """
     Classify hihat events as open or closed from stored spectral features.
@@ -33,11 +34,21 @@ def classify_hihat_notes(
     to distinguish open from closed hits. Matches the logic in
     detection_shell.detect_hihat_state() but operates on stored data.
 
+    By default, events that already have a stored ``hihat_state`` keep it.
+    This matches the behavior of other stems (snare/toms/cymbals keep their
+    stored ``classification`` when re-running pass-2) and prevents
+    threshold-slider changes from silently re-classifying the same event
+    differently on rebuild.  Pass ``force_reclassify=True`` to override
+    stored states (e.g. when the user has explicitly changed the sliders
+    and wants the new thresholds applied to the existing data).
+
     Args:
         events: KEPT hihat event dicts with body_energy, sizzle_energy,
             sustain_ms, and optionally geomean fields.
         config: Full config dict. Reads hihat.open_geomean_min (default 262)
             and hihat.open_sustain_ms (default 100).
+        force_reclassify: If True, recompute hihat_state for every event
+            even if one is already stored. Default False.
 
     Returns:
         Same events with 'hihat_state' field set to 'open' or 'closed'.
@@ -47,6 +58,11 @@ def classify_hihat_notes(
     open_sustain_ms = hihat_config.get('open_sustain_ms', 100.0)
 
     for event in events:
+        # Preserve stored classification across rebuilds (parity with
+        # snare/toms/cymbals which keep their stored 'classification').
+        if not force_reclassify and event.get('hihat_state') in ('open', 'closed'):
+            continue
+
         # Use stored geomean if available, otherwise compute from energies
         geomean = event.get('geomean')
         if geomean is None:
@@ -715,6 +731,7 @@ def classify_notes(
     stem_type: str,
     drum_mapping,
     config: Dict,
+    force_reclassify: bool = False,
 ) -> List[Dict]:
     """
     Classify and assign MIDI notes to KEPT events based on stored features.
@@ -730,6 +747,10 @@ def classify_notes(
         stem_type: Stem type ('hihat', 'toms', 'cymbals', 'snare', 'kick').
         drum_mapping: DrumMapping instance with note number attributes.
         config: Full config dict.
+        force_reclassify: If True, ignore any stored hihat_state/classification
+            and recompute from current thresholds.  Default False preserves
+            stored classification across rebuilds (see hihat bug A4 and the
+            'hihat_classification_unchanged' event_overrides semantics).
 
     Returns:
         Same events with 'note' field set to the classified MIDI note.
@@ -745,7 +766,7 @@ def classify_notes(
 
     # Run per-stem classifier
     if stem_type == 'hihat':
-        classify_hihat_notes(events, config)
+        classify_hihat_notes(events, config, force_reclassify=force_reclassify)
     elif stem_type == 'toms':
         classify_tom_notes(events, config)
     elif stem_type == 'cymbals':

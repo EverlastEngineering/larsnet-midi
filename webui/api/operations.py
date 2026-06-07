@@ -544,8 +544,13 @@ def reclassify():
             for key, value in config_overrides.items():
                 config[stem_type][key] = value
 
-        # Run classification
-        classify_notes(kept_events, stem_type, drum_mapping, config)
+        # Run classification. force_reclassify=True because the reclassify
+        # endpoint is only called when the user has changed a classification
+        # slider (open_geomean_min, open_sustain_ms, expected_clusters, or
+        # cluster_feature) — we WANT the new thresholds to take effect on
+        # every event, not preserve the old hihat_state / classification.
+        classify_notes(kept_events, stem_type, drum_mapping, config,
+                       force_reclassify=True)
 
         # Analyze cluster characteristics for the UI
         cluster_info = analyze_clusters(

@@ -17,6 +17,7 @@ from .rebuild_core import (
     _events_to_midi,
     _thresholds_changed,
     _thresholds_lowered,
+    _classification_thresholds_changed,
     _build_logic_block,
     rebuild_events_from_analysis,
 )
@@ -750,3 +751,166 @@ class TestRebuildEventsFromAnalysis:
         logic = updated['stems']['kick']['logic']
         # Should keep the original logic block (including statistical_enabled)
         assert logic.get('statistical_enabled') is False
+
+
+# ============================================================================
+# _classification_thresholds_changed tests (bug A4)
+# ============================================================================
+
+
+class TestClassificationThresholdsChanged:
+    """Detect when hihat open/closed sliders have moved so reclassify is forced."""
+
+    def test_hihat_open_geomean_unchanged(self):
+        spectral = {'geomean_threshold': 50.0, 'min_sustain_ms': None}
+        logic = {'geomean_threshold': 50.0, 'min_sustain_ms': None,
+                 'open_geomean_min': 262.0, 'open_sustain_ms': 100.0}
+        config = {'hihat': {'open_geomean_min': 262.0, 'open_sustain_ms': 100.0}}
+        assert _classification_thresholds_changed(spectral, logic, config, 'hihat') is False
+
+    def test_hihat_open_geomean_lowered(self):
+        """Lowering open_geomean_min should trigger reclassification."""
+        spectral = {'geomean_threshold': 50.0, 'min_sustain_ms': None}
+        logic = {'geomean_threshold': 50.0, 'min_sustain_ms': None,
+                 'open_geomean_min': 262.0, 'open_sustain_ms': 100.0}
+        config = {'hihat': {'open_geomean_min': 200.0, 'open_sustain_ms': 100.0}}
+        assert _classification_thresholds_changed(spectral, logic, config, 'hihat') is True
+
+    def test_hihat_open_sustain_raised(self):
+        """Raising open_sustain_ms should trigger reclassification."""
+        spectral = {'geomean_threshold': 50.0, 'min_sustain_ms': None}
+        logic = {'geomean_threshold': 50.0, 'min_sustain_ms': None,
+                 'open_geomean_min': 262.0, 'open_sustain_ms': 100.0}
+        config = {'hihat': {'open_geomean_min': 262.0, 'open_sustain_ms': 150.0}}
+        assert _classification_thresholds_changed(spectral, logic, config, 'hihat') is True
+
+    def test_hihat_logic_missing_open_keys(self):
+        """If stored logic has no open_* keys, treat as no change."""
+        spectral = {'geomean_threshold': 50.0, 'min_sustain_ms': None}
+        logic = {'geomean_threshold': 50.0, 'min_sustain_ms': None}
+        config = {'hihat': {'open_geomean_min': 262.0, 'open_sustain_ms': 100.0}}
+        # Both stored and current are effectively None vs None → unchanged
+        assert _classification_thresholds_changed(spectral, logic, config, 'hihat') is False
+
+    def test_non_hihat_returns_false(self):
+        """Only hihat is wired through this check (others use cluster sliders)."""
+        spectral = {'geomean_threshold': 50.0, 'min_sustain_ms': None}
+        logic = {'geomean_threshold': 50.0, 'min_sustain_ms': None}
+        config = {'kick': {}}
+        assert _classification_thresholds_changed(spectral, logic, config, 'kick') is False
+
+
+# ============================================================================
+# Bug A4 regression: rebuild preserves stored hihat_state
+# ============================================================================
+
+
+class TestRebuildPreservesHihatState:
+    """Bug A4 — stored hihat_state should survive a no-threshold-change rebuild."""
+
+    def _hihat_config(self, **overrides):
+        base = {
+            'midi': {'default_tempo': 120.0, 'max_note_duration': 0.5,
+                     'min_velocity': 80, 'max_velocity': 110},
+            'audio': {'default_note_duration': 0.1},
+            'onset_detection': {'hop_length': 512, 'threshold': 0.3,
+                                'delta': 0.01, 'wait': 3},
+            'hihat': {
+                'body_freq_min': 500, 'body_freq_max': 4000,
+                'sizzle_freq_min': 8000, 'sizzle_freq_max': 16000,
+                'min_sustain_ms': 25, 'open_sustain_ms': 100.0,
+                'geomean_threshold': 50.0,
+                'open_geomean_min': 262.0,
+            },
+        }
+        base['hihat'].update(overrides)
+        return base
+
+    def test_rebuild_preserves_stored_hihat_state(self):
+        """Rebuild with same thresholds must not flip a stored hihat_state.
+
+        Without the fix, every rebuild re-classified hihats from the
+        current sliders, so a closed-by-criterion event could silently
+        become open on a Save & Reconvert.
+        """
+        analysis = {
+            'version': '3.0',
+            'tempo_bpm': 120.0,
+            'stems': {
+                'hihat': {
+                    'logic': {
+                        'geomean_threshold': 50.0,
+                        'min_sustain_ms': 25,
+                        'open_geomean_min': 262.0,
+                        'open_sustain_ms': 100.0,
+                    },
+                    'events_configured': [
+                        # geomean=10, sustain=10 → would classify as closed,
+                        # but the event was stored as 'open' from a prior run.
+                        _make_event(1.0, geomean=10.0, sustain_ms=10.0,
+                                    status='KEPT', hihat_state='open',
+                                    body_energy=1.0, sizzle_energy=1.0),
+                        # geomean=500, sustain=500 → would classify as open,
+                        # but the event was stored as 'closed'.
+                        _make_event(2.0, geomean=500.0, sustain_ms=500.0,
+                                    status='KEPT', hihat_state='closed',
+                                    body_energy=300.0, sizzle_energy=300.0),
+                    ],
+                    'events_sensitive': [],
+                }
+            }
+        }
+        config = self._hihat_config()
+
+        updated, midi_events = rebuild_events_from_analysis(analysis, {}, config)
+
+        # Updated analysis should keep the stored hihat_state on each KEPT event
+        configured = updated['stems']['hihat']['events_configured']
+        kept = [e for e in configured if e.get('status') == 'KEPT']
+        assert len(kept) == 2
+        assert kept[0]['hihat_state'] == 'open'   # Preserved
+        assert kept[1]['hihat_state'] == 'closed'  # Preserved
+
+        # MIDI events should also reflect the preserved states
+        assert len(midi_events['hihat']) == 2
+        notes_by_time = {round(e['time'], 4): e['note'] for e in midi_events['hihat']}
+        # open → hihat_open (46), closed → hihat_closed (42)
+        assert notes_by_time[1.0] == 46
+        assert notes_by_time[2.0] == 42
+
+    def test_rebuild_reclassifies_when_open_threshold_changes(self):
+        """Lowering open_geomean_min triggers reclassification (slider moved)."""
+        analysis = {
+            'version': '3.0',
+            'tempo_bpm': 120.0,
+            'stems': {
+                'hihat': {
+                    'logic': {
+                        'geomean_threshold': 50.0,
+                        'min_sustain_ms': 25,
+                        'open_geomean_min': 262.0,  # original threshold
+                        'open_sustain_ms': 100.0,
+                    },
+                    'events_configured': [
+                        _make_event(1.0, geomean=200.0, sustain_ms=200.0,
+                                    status='KEPT', hihat_state='closed',
+                                    body_energy=200.0, sizzle_energy=200.0),
+                    ],
+                    'events_sensitive': [],
+                }
+            }
+        }
+        # User dropped the threshold to 150 in the UI
+        config = self._hihat_config(open_geomean_min=150.0)
+
+        _, _ = rebuild_events_from_analysis(analysis, {}, config)
+
+        # With the lower threshold, the event should now be classified as open
+        # (geomean=200 >= 150 and sustain=200 >= 100).
+        # We check the analysis_data we'd serve back to the client — but
+        # rebuild_events_from_analysis returns the updated analysis and
+        # midi_events. The hihat_state should be re-computed.
+        # We test this via midi_events: the event at t=1.0 should now map
+        # to hihat_open (46) instead of hihat_closed (42).
+        _, midi_events = rebuild_events_from_analysis(analysis, {}, config)
+        assert midi_events['hihat'][0]['note'] == 46  # hihat_open

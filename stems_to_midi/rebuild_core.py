@@ -77,6 +77,51 @@ def _thresholds_changed(
     return False
 
 
+def _classification_thresholds_changed(
+    spectral_config: Dict,
+    stored_logic: Dict,
+    config: Dict,
+    stem_type: str,
+) -> bool:
+    """
+    Determine if hihat open/closed (or any future threshold-based classification)
+    thresholds have changed since the last rebuild.
+
+    The Pass 2 classifier (note_classification_core.classify_notes) preserves
+    stored ``hihat_state`` / ``classification`` to avoid silently flipping
+    a previously-classified event when nothing about its inputs has changed.
+    When the user moves an open_geomean_min / open_sustain_ms / cluster
+    threshold slider, we need to force reclassification so the new
+    thresholds take effect.
+
+    Args:
+        spectral_config: Current config from get_spectral_config_for_stem().
+        stored_logic: The 'logic' block from analysis.json for this stem.
+        config: Full config dict (for hihat.* / per-stem classification keys).
+        stem_type: Stem type to inspect.
+
+    Returns:
+        True if any classification threshold has changed, False if identical.
+    """
+    if stem_type == 'hihat':
+        hihat_config = config.get('hihat', {})
+        for key in ('open_geomean_min', 'open_sustain_ms'):
+            current = hihat_config.get(key)
+            stored = stored_logic.get(key)
+            # Only treat as a real change when both sides are known and
+            # disagree. If the stored logic has no record of the key (older
+            # analysis.json, or key was added after the save), assume the
+            # stored event classifications are still authoritative — the
+            # rebuild path will repopulate the logic block for the next save.
+            if current is not None and stored is not None and current != stored:
+                return True
+        return False
+
+    # For snare/toms/cymbals, cluster thresholds (expected_clusters, cluster_feature)
+    # already trigger reclassification via the 'classification' slider key path.
+    return False
+
+
 def _thresholds_lowered(
     spectral_config: Dict,
     stored_logic: Dict,
@@ -523,6 +568,9 @@ def rebuild_events_from_analysis(
         # Determine rebuild strategy based on threshold changes
         changed = _thresholds_changed(spectral_config, stored_logic)
         lowered = changed and _thresholds_lowered(spectral_config, stored_logic)
+        classification_changed = _classification_thresholds_changed(
+            spectral_config, stored_logic, config, stem_type,
+        )
 
         if changed:
             # Thresholds changed — need to re-filter
@@ -553,8 +601,15 @@ def rebuild_events_from_analysis(
         # Extract kept events for MIDI generation
         kept_events = [e for e in events if e.get('status') == 'KEPT']
 
-        # Pass 2: Classify notes on the final KEPT set using stored features
-        classify_notes(kept_events, stem_type, drum_mapping, config)
+        # Pass 2: Classify notes on the final KEPT set using stored features.
+        # Force re-classification only when a classification threshold has
+        # actually changed (e.g. user moved the open_geomean_min slider) —
+        # otherwise preserve the stored hihat_state/classification so a
+        # simple rebuild does not silently re-classify events.
+        classify_notes(
+            kept_events, stem_type, drum_mapping, config,
+            force_reclassify=classification_changed,
+        )
 
         # Generate MIDI events
         midi_events = _events_to_midi(

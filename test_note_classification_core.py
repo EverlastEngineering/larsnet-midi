@@ -237,6 +237,52 @@ class TestClassifyHihatNotes:
         classify_hihat_notes(events, config)
         assert events[0]['hihat_state'] == 'open'
 
+    def test_preserves_stored_open_state(self, default_config):
+        """Stored hihat_state='open' is preserved on rebuild (parity with other stems).
+
+        Regression for bug A4: hihat classification was always overwriting
+        hihat_state even when the event already had one, which meant a
+        reconvert could silently flip a previously-classified event.
+        """
+        events = [
+            _make_event(geomean=10.0, sustain_ms=10.0, hihat_state='open'),
+            _make_event(geomean=10.0, sustain_ms=10.0, hihat_state='closed'),
+        ]
+        classify_hihat_notes(events, default_config)
+        assert events[0]['hihat_state'] == 'open'   # Preserved
+        assert events[1]['hihat_state'] == 'closed'  # Preserved
+
+    def test_force_reclassify_overrides_stored(self, default_config):
+        """force_reclassify=True re-runs classification ignoring stored state."""
+        events = [
+            # Stored 'open' but the new thresholds would say 'closed'
+            _make_event(geomean=10.0, sustain_ms=10.0, hihat_state='open'),
+            # Stored 'closed' but the new thresholds would say 'open'
+            _make_event(geomean=500.0, sustain_ms=200.0, hihat_state='closed'),
+        ]
+        classify_hihat_notes(events, default_config, force_reclassify=True)
+        assert events[0]['hihat_state'] == 'closed'  # Reclassified
+        assert events[1]['hihat_state'] == 'open'    # Reclassified
+
+    def test_unset_state_always_classified(self, default_config):
+        """Events without a stored hihat_state get classified fresh."""
+        events = [
+            _make_event(geomean=500.0, sustain_ms=200.0),
+            _make_event(geomean=10.0, sustain_ms=10.0),
+        ]
+        classify_hihat_notes(events, default_config)
+        assert events[0]['hihat_state'] == 'open'
+        assert events[1]['hihat_state'] == 'closed'
+
+    def test_stored_state_not_treated_as_truth_when_invalid(self, default_config):
+        """Stored hihat_state with unknown value is reclassified."""
+        events = [
+            _make_event(geomean=500.0, sustain_ms=200.0, hihat_state='handclap'),
+        ]
+        classify_hihat_notes(events, default_config)
+        # 'handclap' is not in the ('open', 'closed') truth set → reclassify
+        assert events[0]['hihat_state'] == 'open'
+
     def test_none_sustain_treated_as_zero(self, default_config):
         """None sustain_ms should not crash, treat as 0."""
         events = [_make_event(geomean=500.0, sustain_ms=None)]
