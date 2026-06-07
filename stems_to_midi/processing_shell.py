@@ -714,8 +714,8 @@ def _run_sensitive_detection(
 
     sensitive_onset_data = filter_result.get('all_onset_data', [])
 
-    # Attach stereo features for non-kick stems
-    if is_stereo and stem_type != 'kick' and len(sensitive_onset_data) > 0:
+    # Attach stereo features for any stereo stem (bug B: kick included)
+    if is_stereo and len(sensitive_onset_data) > 0:
         sens_times = np.array([d['time'] for d in sensitive_onset_data])
         stereo_feats = calculate_stereo_features(audio, sens_times, sr)
         for onset_d, sf in zip(sensitive_onset_data, stereo_feats):
@@ -951,8 +951,12 @@ def process_stem_to_midi(
         all_onset_data = filter_result['all_onset_data']
         filtered_onset_data = filter_result.get('filtered_onset_data', [])
 
-        # Attach stereo features (pan_confidence, stereo_width) for non-kick stems
-        if is_stereo and stem_type != 'kick' and len(all_onset_data) > 0:
+        # Attach stereo features (pan_confidence, stereo_width) for any
+        # stereo stem (including kick — the bug B spec says kick should
+        # also have these fields when audio is stereo). For mono audio
+        # we skip the computation; the JSON serializer will write null
+        # for the missing key.
+        if is_stereo and len(all_onset_data) > 0:
             all_times = np.array([d['time'] for d in all_onset_data])
             stereo_feats = calculate_stereo_features(stereo_audio, all_times, sr)
             for onset_d, sf in zip(all_onset_data, stereo_feats):

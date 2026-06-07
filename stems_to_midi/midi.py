@@ -160,9 +160,36 @@ def _serialize_onset_events(
 
     Returns:
         List of serialized event dicts with rounded numeric values.
+
+    Notes:
+        - ``duration_sec``, ``amplitude_at_start``, ``amplitude_at_end``,
+          ``attack_sharpness``, ``envelope_continuity``, ``peak_prominence``,
+          ``spectral_centroid_hz``, ``spectral_flux``, and
+          ``gap_from_previous_sec`` are omitted when missing (older analyses
+          may not have Phase 2 metadata at all).
+        - ``pitch_hz``, ``pan_confidence``, and ``stereo_width`` are always
+          written, with ``null`` when the underlying feature is not
+          applicable (e.g. mono audio, pitch detection disabled, kick stem
+          without pan). This guarantees a stable schema for downstream
+          consumers (WebUI tuning panel, cluster features, JSON-driven
+          analysis scripts).
     """
     events = []
     midi_idx = 0
+
+    # Fields that are stem-relevant and should always be present in the
+    # JSON (with null when missing). Bug B: pan_confidence/pitch_hz/
+    # stereo_width are computed in the pipeline and must surface in the
+    # sidecar even when the value happens to be 0.0 or None.
+    ALWAYS_PRESENT_FIELDS = ('pan_confidence', 'stereo_width', 'pitch_hz')
+
+    # Fields that are present-or-absent (older analyses may lack them).
+    OPTIONAL_PHASE2_FIELDS = (
+        'duration_sec', 'amplitude_at_start', 'amplitude_at_end',
+        'attack_sharpness', 'envelope_continuity', 'peak_prominence',
+        'spectral_centroid_hz', 'spectral_flux',
+        'gap_from_previous_sec',
+    )
 
     for onset_data in onset_data_list:
         event = {
@@ -178,15 +205,19 @@ def _serialize_onset_events(
             if value is not None:
                 event[field] = _round_value(value, 2)
 
-        # Add Phase 2 metadata fields (enriched metadata)
-        for field in ['duration_sec', 'amplitude_at_start', 'amplitude_at_end',
-                     'attack_sharpness', 'envelope_continuity', 'peak_prominence',
-                     'spectral_centroid_hz', 'spectral_flux', 'pitch_hz',
-                     'gap_from_previous_sec',
-                     'pan_confidence', 'stereo_width']:
+        # Optional Phase 2 metadata — present when the upstream pipeline
+        # computed them, omitted otherwise.
+        for field in OPTIONAL_PHASE2_FIELDS:
             value = onset_data.get(field)
             if value is not None:
                 event[field] = _round_value(value, 4)
+
+        # Stem-relevant features — always present, with null when missing
+        # so downstream consumers (WebUI, scripts) can rely on the key
+        # existing in every event.
+        for field in ALWAYS_PRESENT_FIELDS:
+            value = onset_data.get(field)
+            event[field] = _round_value(value, 4) if value is not None else None
 
         # Add MIDI fields for KEPT events (from midi_events by index)
         if midi_events is not None and event['status'] == 'KEPT':
@@ -302,14 +333,17 @@ def save_analysis_sidecar(
             midi_events = [e for e in events if e.get('note') != 44]  # Exclude foot-close
             configured_events = _serialize_onset_events(all_onset_data, midi_events=midi_events)
         else:
-            # Fallback: use events_by_stem directly if no all_onset_data
+            # Fallback: use events_by_stem directly if no all_onset_data.
+            # Mirrors the always-present fields contract from the primary
+            # serializer (pan_confidence / stereo_width / pitch_hz always
+            # present, with null when missing).
             configured_events = []
             for midi_event in events:
                 event = {
                     'time': _round_value(midi_event.get('time'), 4),
                     'note': midi_event.get('note'),
                     'velocity': midi_event.get('velocity'),
-                    'status': 'KEPT'
+                    'status': 'KEPT',
                 }
                 band_fields = [f'{b}_energy' for b in midi_event.get('geomean_bands', [])]
                 for field in ['onset_strength', 'peak_amplitude'] + band_fields + ['geomean',
@@ -317,6 +351,10 @@ def save_analysis_sidecar(
                     value = midi_event.get(field)
                     if value is not None:
                         event[field] = _round_value(value, 2)
+                # Bug B: always present (null when missing)
+                for field in ('pan_confidence', 'stereo_width', 'pitch_hz'):
+                    value = midi_event.get(field)
+                    event[field] = _round_value(value, 4) if value is not None else None
                 configured_events.append(event)
 
         # Serialize sensitive events (all from max-sensitivity detection)
