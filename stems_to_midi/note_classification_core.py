@@ -37,14 +37,14 @@ def classify_hihat_notes(
         events: KEPT hihat event dicts with body_energy, sizzle_energy,
             sustain_ms, and optionally geomean fields.
         config: Full config dict. Reads hihat.open_geomean_min (default 262)
-            and hihat.open_sustain_ms (default 150).
+            and hihat.open_sustain_ms (default 100).
 
     Returns:
         Same events with 'hihat_state' field set to 'open' or 'closed'.
     """
     hihat_config = config.get('hihat', {})
     open_geomean_min = hihat_config.get('open_geomean_min', 262.0)
-    open_sustain_ms = hihat_config.get('open_sustain_ms', 150.0)
+    open_sustain_ms = hihat_config.get('open_sustain_ms', 100.0)
 
     for event in events:
         # Use stored geomean if available, otherwise compute from energies

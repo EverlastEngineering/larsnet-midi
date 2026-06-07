@@ -9,10 +9,16 @@ Architecture: Modular Design (Functional Core, Imperative Shell)
 - project_manager: Project discovery and management
 - stems_to_midi_cli.py (this file): CLI orchestration
 
+CLI flags are now generated from the centralized settings schema
+(see webui.settings_schema + webui.cli_builder). Adding a new
+``SettingDefinition`` with a non-empty ``cli_flag`` is the ONLY place
+a new CLI flag needs to be declared.
+
 Usage:
     python stems_to_midi_cli.py              # Auto-detect project
     python stems_to_midi_cli.py 1            # Process specific project
     python stems_to_midi_cli.py --learn      # Learning mode
+    python stems_to_midi_cli.py --help       # List all schema-driven flags
 """
 
 from pathlib import Path
@@ -35,92 +41,82 @@ from project_manager import (
     USER_FILES_DIR
 )
 
+# Schema-driven CLI builder
+from webui.cli_builder import (
+    build_cli_parser,
+    count_cli_flags,
+    apply_cli_overrides,
+    validate_args,
+)
+
 
 def stems_to_midi_for_project(
     project: dict,
-    onset_threshold: float = None,
-    onset_delta: float = None,
-    onset_wait: int = None,
-    hop_length: int = None,
-    min_velocity: int = 80,
-    max_velocity: int = 110,
-    tempo: float = None,
+    config: dict = None,
     stems_to_process: List[str] = None,
     max_duration: float = None,
-    learning_mode: bool = False
+    learning_mode: bool = False,
 ):
     """
     Convert separated drum stems to MIDI files for a specific project.
-    
+
     Args:
-        project: Project info dictionary from project_manager
-        onset_threshold: Threshold for onset detection (None = use config)
-        onset_delta: Peak picking sensitivity (None = use config)
-        onset_wait: Minimum frames between peaks (None = use config)
-        hop_length: Samples between frames (None = use config)
-        min_velocity: Minimum MIDI velocity
-        max_velocity: Maximum MIDI velocity
-        tempo: Tempo in BPM (None = use config)
-        stems_to_process: List of stem types to process (default: all)
-        max_duration: Maximum duration in seconds (for faster learning)
-        learning_mode: Enable learning mode (export all detections)
+        project: Project info dictionary from project_manager.
+        config: Fully-resolved config dict (CLI overrides already applied).
+            If None, the project's midiconfig.yaml is loaded fresh.
+        stems_to_process: List of stem types to process (default: all).
+        max_duration: Maximum duration in seconds (for faster learning).
+        learning_mode: Enable learning mode (export all detections).
     """
     project_dir = project["path"]
-    
+
     print(f"\n{'='*60}")
     print(f"Converting Stems to MIDI - Project {project['number']}: {project['name']}")
     print(f"{'='*60}\n")
-    
-    # Load project-specific config
-    config_path = get_project_config(project_dir, "midiconfig.yaml")
-    if config_path is None:
-        print("ERROR: midiconfig.yaml not found in project or root directory")
-        sys.exit(1)
-    
-    print(f"Using config: {config_path}")
-    
-    # Load configuration
-    try:
-        import yaml # type: ignore
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-    except Exception as e:
-        print(f"ERROR: Failed to load config: {e}")
-        sys.exit(1)
-    
+
+    # Load project-specific config if not provided
+    if config is None:
+        config_path = get_project_config(project_dir, "midiconfig.yaml")
+        if config_path is None:
+            print("ERROR: midiconfig.yaml not found in project or root directory")
+            sys.exit(1)
+        print(f"Using config: {config_path}")
+        try:
+            import yaml
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+        except Exception as e:
+            print(f"ERROR: Failed to load config: {e}")
+            sys.exit(1)
+    else:
+        print("Using CLI-overridden config")
+
     # Use cleaned stems if available, otherwise use regular stems
     stems_source = project_dir / "cleaned"
     if not stems_source.exists() or not any(stems_source.iterdir()):
         stems_source = project_dir / "stems"
-    
+
     if not stems_source.exists():
         print("ERROR: No stems found in project. Run separate.py first.")
         sys.exit(1)
-    
+
     print(f"Using stems from: {stems_source}")
-    
+
     # Output to project/midi/ directory
     midi_dir = project_dir / "midi"
     midi_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Process using existing logic
     _process_stems_to_midi(
         stems_source=stems_source,
         midi_dir=midi_dir,
         project_name=project["name"],
         config=config,
-        onset_threshold=onset_threshold,
-        onset_delta=onset_delta,
-        onset_wait=onset_wait,
-        hop_length=hop_length,
-        min_velocity=min_velocity,
-        max_velocity=max_velocity,
-        tempo=tempo,
         stems_to_process=stems_to_process,
         max_duration=max_duration,
         learning_mode=learning_mode
     )
-    
+
     # Update project metadata
     update_project_metadata(project_dir, {
         "status": {
@@ -130,7 +126,7 @@ def stems_to_midi_for_project(
             "video_rendered": project["metadata"]["status"].get("video_rendered", False) if project["metadata"] else False
         }
     })
-    
+
     print("Status Update: MIDI conversion complete!")
     print(f"  MIDI files saved to: {midi_dir}")
     print("  Project status updated\n")
@@ -141,56 +137,46 @@ def _process_stems_to_midi(
     midi_dir: Path,
     project_name: str,
     config: dict,
-    onset_threshold: float,
-    onset_delta: float,
-    onset_wait: int,
-    hop_length: int,
-    min_velocity: int,
-    max_velocity: int,
-    tempo: float,
     stems_to_process: List[str],
     max_duration: float,
-    learning_mode: bool
+    learning_mode: bool,
 ):
     """
-    Internal function to process stems to MIDI (extracted from original stems_to_midi).
-    
-    This handles the core conversion logic, called by stems_to_midi_for_project().
-    
-    Hihat open/closed classification is always run using config thresholds
-    (open_geomean_min, open_sustain_ms) - no separate toggle.
+    Internal function to process stems to MIDI.
+
+    All tuning parameters come from ``config`` (which has been merged
+    with CLI overrides). The legacy ``onset_threshold`` etc. CLI args
+    are now applied to the config dict via the schema's yaml_path, so
+    we read them from config like the pipeline does.
     """
     # Apply learning mode if enabled
     if learning_mode:
         config['learning_mode'] = config.get('learning_mode', {})
         config['learning_mode']['enabled'] = True
-    
+
     # Default stems to process
     if stems_to_process is None:
         stems_to_process = ['kick', 'snare', 'toms', 'hihat', 'cymbals']
-    
+
     # Initialize drum mapping from config
     drum_mapping = DrumMapping.from_config(config)
-    
+
     # Find stem files in the stems_source directory
     # Expected pattern: project_name-kick.wav, project_name-snare.wav, etc.
     stem_files = list(stems_source.glob("*.wav"))
-    
+
     if not stem_files:
         raise RuntimeError(f"No WAV files found in {stems_source}")
-    
-    # Set onset detection params from config if not provided
-    if onset_threshold is None:
-        onset_threshold = config['onset_detection']['threshold']
-    if onset_delta is None:
-        onset_delta = config['onset_detection']['delta']
-    if onset_wait is None:
-        onset_wait = config['onset_detection']['wait']
-    if hop_length is None:
-        hop_length = config['onset_detection']['hop_length']
-    if tempo is None:
-        tempo = config['midi']['default_tempo']
-    
+
+    # Pull all onset / midi parameters from config (single source of truth).
+    onset_threshold = config['onset_detection']['threshold']
+    onset_delta = config['onset_detection']['delta']
+    onset_wait = config['onset_detection']['wait']
+    hop_length = config['onset_detection']['hop_length']
+    min_velocity = config['midi'].get('min_velocity', 80)
+    max_velocity = config['midi'].get('max_velocity', 110)
+    tempo = config['midi'].get('default_tempo') or config['midi'].get('tempo')
+
     print("Settings:")
     print(f"  Onset threshold: {onset_threshold}")
     print(f"  Onset delta: {onset_delta}")
@@ -201,11 +187,11 @@ def _process_stems_to_midi(
     if max_duration is not None:
         print(f"  Max duration: {max_duration} seconds (fast learning mode)")
     print()
-    
+
     # Group stem files by base name (everything before the last hyphen and stem type)
     from collections import defaultdict
     files_by_song = defaultdict(dict)
-    
+
     for stem_file in stem_files:
         # Parse filename: "song_name-stem_type.wav"
         name_without_ext = stem_file.stem
@@ -214,23 +200,23 @@ def _process_stems_to_midi(
                 base_name = name_without_ext[:-len(f"-{stem_type}")]
                 files_by_song[base_name][stem_type] = stem_file
                 break
-    
+
     if not files_by_song:
         print("No stem files found matching expected pattern (name-stemtype.wav)")
         return
-    
+
     total_songs = len(files_by_song)
     for song_idx, (base_name, stem_files_dict) in enumerate(files_by_song.items(), 1):
         print(f"Processing: {base_name}")
-        
+
         # Progress: start of song processing
         song_start_progress = int((song_idx - 1) / total_songs * 90)
         print(f"Progress: {song_start_progress}%")
-        
+
         events_by_stem = {}
         analysis_by_stem = {}
         envelope_by_stem = {}
-        
+
         # Process each stem type
         total_stems = len(stems_to_process)
         processed_stems = 0
@@ -239,10 +225,9 @@ def _process_stems_to_midi(
                 print(f"  Warning: {stem_type} file not found, skipping...")
                 processed_stems += 1
                 continue
-            
+
             stem_file = stem_files_dict[stem_type]
-            
-            # Hihat open/closed classification always runs using config thresholds
+
             result = process_stem_to_midi(
                 stem_file,
                 stem_type,
@@ -256,7 +241,7 @@ def _process_stems_to_midi(
                 max_velocity=max_velocity,
                 max_duration=max_duration
             )
-            
+
             if result and result.get('events'):
                 events_by_stem[stem_type] = result['events']
                 # Store analysis data for sidecar v3 (configured + sensitive)
@@ -268,15 +253,13 @@ def _process_stems_to_midi(
                 # Store envelope data for waveform visualization
                 if result.get('envelope_data'):
                     envelope_by_stem[stem_type] = result['envelope_data']
-            
+
             # Progress: after each stem (0-90% of total)
             processed_stems += 1
             stem_progress = int((song_idx - 1) / total_songs * 90 + (processed_stems / total_stems) * (90 / total_songs))
             print(f"Progress: {stem_progress}%")
-        
+
         # Create MIDI file using rebuild logic (same as "Save & Reconvert")
-        # This ensures initial conversion uses the same filtering/classification
-        # as reconvert, producing consistent results.
         if events_by_stem:
             # Add suffix for learning mode
             if learning_mode:
@@ -293,7 +276,6 @@ def _process_stems_to_midi(
             )
 
             # Step 2: Load the analysis sidecar and rebuild MIDI from it
-            # This uses the same rebuild logic as "Save & Reconvert"
             analysis_data = load_analysis_sidecar(midi_path)
             if not analysis_data:
                 raise RuntimeError(f"Failed to save analysis sidecar for {midi_path}")
@@ -313,15 +295,15 @@ def _process_stems_to_midi(
                 track_name=f"Drums - {base_name}",
                 config=config
             )
-            
+
             # Save energy envelope data for waveform visualization
             if envelope_by_stem:
                 save_envelope_data(envelope_by_stem, midi_path)
-            
+
             # Progress: after MIDI creation (90-100% of total)
             midi_progress = int(90 + (song_idx / total_songs) * 10)
             print(f"Progress: {midi_progress}%")
-            
+
             if learning_mode:
                 print(f"  Saved LEARNING MIDI: {midi_path}")
                 print(f"  ** Load in DAW, delete false positives (velocity=1 hits), save as: {base_name}_edited.mid **\n")
@@ -331,86 +313,60 @@ def _process_stems_to_midi(
             print("  No events detected, skipping MIDI creation\n")
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description="Convert separated drum stems to MIDI tracks.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Basic usage - auto-detect project
-  python stems_to_midi_cli.py
-  
-  # Process specific project
-  python stems_to_midi_cli.py 1
-  
-  # More sensitive onset detection
-  python stems_to_midi.py -t 0.2
-  
-  # Less sensitive (fewer false positives)
-  python stems_to_midi.py -t 0.5
-  
-  # Full velocity range
-  python stems_to_midi.py --min-vel 1 --max-vel 127
-  
-  # Specific tempo
-  python stems_to_midi.py --tempo 140
-  
-  # Learning mode with 50 seconds limit (faster for long tracks)
-  python stems_to_midi.py --learn --maxtime 50
-
-MIDI Note Mapping (General MIDI):
-  Kick:    36 (C1)  - Bass Drum 1
-  Snare:   38 (D1)  - Acoustic Snare
-  Toms:    45 (A1)  - Low Tom
-  Hi-Hat:  42 (F#1) - Closed Hi-Hat
-           46 (A#1) - Open Hi-Hat
-  Cymbals: 49 (C#2) - Crash Cymbal 1
-        """
+def _build_argparser() -> argparse.ArgumentParser:
+    """
+    Build the CLI parser: schema-driven flags + orchestration flags.
+    Schema-driven flags are generated by webui.cli_builder; orchestration
+    flags (--learn, --maxtime, --stems, project) live here because they
+    don't correspond to a single yaml_path.
+    """
+    parser = build_cli_parser(
+        prog='stems_to_midi_cli',
+        description=(
+            "Convert separated drum stems to MIDI tracks. "
+            "Every setting flag is generated from the centralized "
+            "settings schema (webui.settings_schema)."
+        ),
     )
-    
+
+    # Orchestration flags (not in the schema because they don't map to
+    # a single yaml_path).
     parser.add_argument('project_number', type=int, nargs='?', default=None,
-                        help="Project number to process (optional)")
-    parser.add_argument('-t', '--threshold', type=float, default=None,
-                        help="Onset detection threshold (0-1, lower = more sensitive). If not specified, uses value from midiconfig.yaml.")
-    parser.add_argument('--delta', type=float, default=None,
-                        help="Peak picking sensitivity for onset detection (lower = more sensitive). If not specified, uses value from midiconfig.yaml.")
-    parser.add_argument('--wait', type=int, default=None,
-                        help="Minimum frames between detected peaks (controls minimum spacing, 1 ≈ 11ms). If not specified, uses value from midiconfig.yaml.")
-    parser.add_argument('--hop-length', type=int, default=None,
-                        help="Number of samples between frames for onset detection (affects time resolution). If not specified, uses value from midiconfig.yaml.")
-    parser.add_argument('--min-vel', type=int, default=40,
-                        help="Minimum MIDI velocity (1-127, default: 40).")
-    parser.add_argument('--max-vel', type=int, default=127,
-                        help="Maximum MIDI velocity (1-127, default: 127).")
-    parser.add_argument('--tempo', type=float, default=None,
-                        help="Tempo in BPM for MIDI timing (default: read from midiconfig.yaml).")
+                        help="Project number to process (optional, auto-detects if omitted)")
     parser.add_argument('--stems', type=str, nargs='+',
                         choices=['kick', 'snare', 'toms', 'hihat', 'cymbals'],
-                        help="Specific stems to process (default: all).")
-    
-    # Learning mode arguments
+                        help="Specific stems to process (default: all)")
+
     learning_group = parser.add_argument_group('Threshold Learning Mode')
     learning_group.add_argument('--learn', action='store_true',
-                               help="Enable learning mode (exports all detections, rejected=velocity 1).")
+                                help="Enable learning mode (exports all detections, rejected=velocity 1).")
     learning_group.add_argument('--maxtime', type=float, default=None,
-                               help="Maximum duration in seconds to analyze (for faster learning on long tracks).")
-    
+                                help="Maximum duration in seconds to analyze (for faster learning on long tracks).")
+
+    return parser
+
+
+if __name__ == '__main__':
+    n_flags = count_cli_flags()
+    print(f"{n_flags} CLI flags available, run --help to see them")
+
+    parser = _build_argparser()
     args = parser.parse_args()
-    
-    # Validate
-    if args.threshold is not None and not (0.0 <= args.threshold <= 1.0):
-        print("ERROR: --threshold must be between 0.0 and 1.0")
+
+    # Validate args via SettingDefinition.validate
+    errors = validate_args(args)
+    if errors:
+        for e in errors:
+            print(f"ERROR: {e}")
         sys.exit(1)
-    if not (1 <= args.min_vel <= 127):
-        print("ERROR: --min-vel must be between 1 and 127")
-        sys.exit(1)
-    if not (1 <= args.max_vel <= 127):
-        print("ERROR: --max-vel must be between 1 and 127")
-        sys.exit(1)
-    if args.min_vel > args.max_vel:
-        print("ERROR: --min-vel cannot be greater than --max-vel")
-        sys.exit(1)
-    
+
+    # Cross-field validation
+    if hasattr(args, 'min_velocity') and hasattr(args, 'max_velocity'):
+        if args.min_velocity is not None and args.max_velocity is not None:
+            if args.min_velocity > args.max_velocity:
+                print("ERROR: --min-velocity cannot be greater than --max-velocity")
+                sys.exit(1)
+
     # Select project
     if args.project_number is not None:
         project = get_project_by_number(args.project_number, USER_FILES_DIR)
@@ -424,32 +380,40 @@ MIDI Note Mapping (General MIDI):
             print("\nNo projects found in user_files/")
             print("Run separate.py first to create stems!")
             sys.exit(0)
-    
+
     # Check that project has stems
     has_stems = (project["path"] / "stems").exists()
     has_cleaned = (project["path"] / "cleaned").exists()
-    
+
     if not has_stems and not has_cleaned:
         print(f"\nERROR: Project {project['number']} has no stems.")
         print("Run separate.py first!")
         sys.exit(1)
-    
+
     # Process the project
     if args.learn:
         print("=== LEARNING MODE ENABLED ===")
         print("All detections will be exported. Rejected hits have velocity=1.")
         print("Load MIDI in DAW, delete false positives, then use calibrated settings.\n")
-    
+
+    # Load project config (so we have a dict to merge CLI overrides into)
+    config_path = get_project_config(project["path"], "midiconfig.yaml")
+    if config_path is None:
+        print("ERROR: midiconfig.yaml not found in project or root directory")
+        sys.exit(1)
+    import yaml
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f) or {}
+
+    # Apply CLI overrides to the config dict (flag → yaml_path)
+    n_applied, applied = apply_cli_overrides(args, config)
+    if n_applied:
+        print(f"Applied {n_applied} CLI override(s): {', '.join(applied)}")
+
     stems_to_midi_for_project(
         project=project,
-        onset_threshold=args.threshold,
-        onset_delta=args.delta,
-        onset_wait=args.wait,
-        hop_length=args.hop_length,
-        min_velocity=args.min_vel,
-        max_velocity=args.max_vel,
-        tempo=args.tempo,
+        config=config,
         stems_to_process=args.stems,
         max_duration=args.maxtime,
-        learning_mode=args.learn
+        learning_mode=args.learn,
     )

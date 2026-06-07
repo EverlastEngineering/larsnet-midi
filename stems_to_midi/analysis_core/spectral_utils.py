@@ -121,7 +121,7 @@ def get_spectral_config_for_stem(stem_type: str, config: Dict) -> Dict:
     
     elif stem_type == 'hihat':
         min_sustain = stem_config.get('min_sustain_ms', 25)
-        open_sustain = stem_config.get('open_sustain_ms', 150)
+        open_sustain = stem_config.get('open_sustain_ms', 100)
         hints = [
             f"Minimum sustain duration: {min_sustain}ms (filters out handclap bleed)",
             f"Open/Closed threshold: {open_sustain}ms (>={open_sustain}ms = open hihat)"

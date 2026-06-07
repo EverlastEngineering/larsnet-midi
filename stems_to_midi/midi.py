@@ -290,7 +290,7 @@ def save_analysis_sidecar(
             stem_config = config.get(stem_type, {})
             if stem_type == 'hihat':
                 logic['open_geomean_min'] = stem_config.get('open_geomean_min', 262.0)
-                logic['open_sustain_ms'] = stem_config.get('open_sustain_ms', 150.0)
+                logic['open_sustain_ms'] = stem_config.get('open_sustain_ms', 100.0)
             if stem_type in ('snare', 'toms', 'cymbals'):
                 defaults = {'snare': 2, 'toms': 3, 'cymbals': 2}
                 raw = stem_config.get('expected_clusters')

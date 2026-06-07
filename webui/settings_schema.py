@@ -304,7 +304,7 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
     # ================================
     # Global Onset Detection Settings
     # ================================
-    
+
     SettingDefinition(
         key='onset_threshold',
         type=SettingType.FLOAT,
@@ -319,7 +319,7 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         yaml_path=['onset_detection', 'threshold'],
         cli_flag='--onset-threshold',
     ),
-    
+
     SettingDefinition(
         key='onset_delta',
         type=SettingType.FLOAT,
@@ -334,7 +334,7 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         yaml_path=['onset_detection', 'delta'],
         cli_flag='--onset-delta',
     ),
-    
+
     SettingDefinition(
         key='onset_wait',
         type=SettingType.INT,
@@ -351,7 +351,7 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         yaml_path=['onset_detection', 'wait'],
         cli_flag='--onset-wait',
     ),
-    
+
     SettingDefinition(
         key='hop_length',
         type=SettingType.INT,
@@ -368,11 +368,11 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         yaml_path=['onset_detection', 'hop_length'],
         cli_flag='--hop-length',
     ),
-    
+
     # ======================
     # MIDI Output Settings
     # ======================
-    
+
     SettingDefinition(
         key='min_velocity',
         type=SettingType.INT,
@@ -387,7 +387,7 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         yaml_path=['midi', 'min_velocity'],
         cli_flag='--min-velocity',
     ),
-    
+
     SettingDefinition(
         key='max_velocity',
         type=SettingType.INT,
@@ -402,7 +402,7 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         yaml_path=['midi', 'max_velocity'],
         cli_flag='--max-velocity',
     ),
-    
+
     SettingDefinition(
         key='tempo',
         type=SettingType.FLOAT,
@@ -417,6 +417,24 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         unit='BPM',
         nullable=True,
         cli_flag='--tempo',
+    ),
+
+    # =================
+    # Global filtering
+    # =================
+    SettingDefinition(
+        key='reverb_continuation_attack_threshold',
+        type=SettingType.FLOAT,
+        default=0.4,
+        label='Reverb Attack Threshold',
+        description='Attack sharpness threshold for reverb continuation filtering (real hits >= 0.4, reverb/echo < 0.4)',
+        category=SettingCategory.MIDI_OUTPUT,
+        ui_control=UIControl.SLIDER,
+        min_value=0.0,
+        max_value=1.0,
+        step=0.01,
+        yaml_path=['filtering', 'reverb_continuation_attack_threshold'],
+        cli_flag='--reverb-attack-threshold',
     ),
     
     # =================
@@ -436,9 +454,10 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         max_value=127,
         step=1,
         yaml_path=['kick', 'midi_note'],
+        cli_flag='--kick-midi-note',
         advanced=True,
     ),
-    
+
     SettingDefinition(
         key='kick_onset_threshold',
         type=SettingType.FLOAT,
@@ -454,7 +473,7 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         advanced=True,
         yaml_path=['kick', 'onset_threshold'],
     ),
-    
+
     SettingDefinition(
         key='kick_timing_offset',
         type=SettingType.FLOAT,
@@ -470,22 +489,22 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         advanced=True,
         yaml_path=['kick', 'timing_offset'],
     ),
-    
+
     SettingDefinition(
         key='kick_geomean_threshold',
         type=SettingType.FLOAT,
-        default=70.0,
+        default=800.0,
         label='GeoMean Threshold',
         description='Spectral filtering threshold (rejects artifacts)',
         category=SettingCategory.KICK,
         ui_control=UIControl.NUMBER,
         min_value=0.0,
-        max_value=200.0,
+        max_value=3000.0,
         step=1.0,
-        advanced=True,
         yaml_path=['kick', 'geomean_threshold'],
+        cli_flag='--kick-geomean',
     ),
-    
+
     SettingDefinition(
         key='kick_use_stereo',
         type=SettingType.BOOL,
@@ -496,23 +515,56 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         ui_control=UIControl.CHECKBOX,
         yaml_path=['kick', 'use_stereo'],
     ),
-    
+
     # Snare MIDI note
     SettingDefinition(
         key='snare_midi_note',
         type=SettingType.INT,
         default=38,
-        label='MIDI Note',
-        description='MIDI note number for snare drum',
+        label='MIDI Note (Snare)',
+        description='MIDI note number for snare drum hit (primary sub-type)',
         category=SettingCategory.SNARE,
         ui_control=UIControl.NUMBER,
         min_value=0,
         max_value=127,
         step=1,
         yaml_path=['snare', 'midi_note'],
+        cli_flag='--snare-midi-note',
         advanced=True,
     ),
-    
+
+    SettingDefinition(
+        key='snare_midi_note_rimshot',
+        type=SettingType.INT,
+        default=37,
+        label='MIDI Note (Rimshot)',
+        description='MIDI note number for snare rimshot / side-stick',
+        category=SettingCategory.SNARE,
+        ui_control=UIControl.NUMBER,
+        min_value=0,
+        max_value=127,
+        step=1,
+        yaml_path=['snare', 'midi_note_rimshot'],
+        cli_flag='--snare-midi-rimshot',
+        advanced=True,
+    ),
+
+    SettingDefinition(
+        key='snare_midi_note_clap',
+        type=SettingType.INT,
+        default=39,
+        label='MIDI Note (Clap)',
+        description='MIDI note number for hand clap detected from snare stem',
+        category=SettingCategory.SNARE,
+        ui_control=UIControl.NUMBER,
+        min_value=0,
+        max_value=127,
+        step=1,
+        yaml_path=['snare', 'midi_note_clap'],
+        cli_flag='--snare-midi-clap',
+        advanced=True,
+    ),
+
     SettingDefinition(
         key='snare_use_stereo',
         type=SettingType.BOOL,
@@ -522,6 +574,34 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         category=SettingCategory.SNARE,
         ui_control=UIControl.CHECKBOX,
         yaml_path=['snare', 'use_stereo'],
+    ),
+
+    SettingDefinition(
+        key='snare_geomean_threshold',
+        type=SettingType.FLOAT,
+        default=40.0,
+        label='GeoMean Threshold',
+        description='Snare spectral filtering threshold (rejects artifacts)',
+        category=SettingCategory.SNARE,
+        ui_control=UIControl.NUMBER,
+        min_value=0.0,
+        max_value=500.0,
+        step=1.0,
+        yaml_path=['snare', 'geomean_threshold'],
+        cli_flag='--snare-geomean',
+    ),
+
+    SettingDefinition(
+        key='snare_cluster_feature',
+        type=SettingType.CHOICE,
+        default='auto',
+        label='Cluster Feature',
+        description='Feature used for snare sub-type clustering (auto = stereo_width, then spectral_centroid_hz)',
+        category=SettingCategory.SNARE,
+        ui_control=UIControl.SELECT,
+        allowed_values=['auto', 'stereo_width', 'spectral_centroid_hz', 'pitch_hz', 'pan_confidence'],
+        yaml_path=['snare', 'cluster_feature'],
+        cli_flag='--snare-cluster-feature',
     ),
     
     # Toms MIDI notes
@@ -537,9 +617,10 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         max_value=127,
         step=1,
         yaml_path=['toms', 'midi_note_low'],
+        cli_flag='--toms-midi-low',
         advanced=True,
     ),
-    
+
     SettingDefinition(
         key='toms_midi_note_mid',
         type=SettingType.INT,
@@ -552,9 +633,10 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         max_value=127,
         step=1,
         yaml_path=['toms', 'midi_note_mid'],
+        cli_flag='--toms-midi-mid',
         advanced=True,
     ),
-    
+
     SettingDefinition(
         key='toms_midi_note_high',
         type=SettingType.INT,
@@ -567,9 +649,10 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         max_value=127,
         step=1,
         yaml_path=['toms', 'midi_note_high'],
+        cli_flag='--toms-midi-high',
         advanced=True,
     ),
-    
+
     SettingDefinition(
         key='toms_use_stereo',
         type=SettingType.BOOL,
@@ -580,7 +663,35 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         ui_control=UIControl.CHECKBOX,
         yaml_path=['toms', 'use_stereo'],
     ),
-    
+
+    SettingDefinition(
+        key='toms_geomean_threshold',
+        type=SettingType.FLOAT,
+        default=80.0,
+        label='GeoMean Threshold',
+        description='Toms spectral filtering threshold (rejects artifacts)',
+        category=SettingCategory.TOMS,
+        ui_control=UIControl.NUMBER,
+        min_value=0.0,
+        max_value=500.0,
+        step=1.0,
+        yaml_path=['toms', 'geomean_threshold'],
+        cli_flag='--toms-geomean',
+    ),
+
+    SettingDefinition(
+        key='toms_cluster_feature',
+        type=SettingType.CHOICE,
+        default='auto',
+        label='Cluster Feature',
+        description='Feature used for tom low/mid/high clustering (auto = pitch_hz, then spectral_centroid_hz)',
+        category=SettingCategory.TOMS,
+        ui_control=UIControl.SELECT,
+        allowed_values=['auto', 'pitch_hz', 'spectral_centroid_hz', 'stereo_width', 'pan_confidence'],
+        yaml_path=['toms', 'cluster_feature'],
+        cli_flag='--toms-cluster-feature',
+    ),
+
     # Hi-hat settings
     SettingDefinition(
         key='hihat_midi_note_closed',
@@ -594,9 +705,10 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         max_value=127,
         step=1,
         yaml_path=['hihat', 'midi_note_closed'],
+        cli_flag='--hihat-midi-closed',
         advanced=True,
     ),
-    
+
     SettingDefinition(
         key='hihat_midi_note_open',
         type=SettingType.INT,
@@ -609,9 +721,42 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         max_value=127,
         step=1,
         yaml_path=['hihat', 'midi_note_open'],
+        cli_flag='--hihat-midi-open',
         advanced=True,
     ),
-    
+
+    SettingDefinition(
+        key='hihat_midi_note_foot_close',
+        type=SettingType.INT,
+        default=44,
+        label='MIDI Note (Foot Close)',
+        description='MIDI note number for foot close (pedal closes open hihat)',
+        category=SettingCategory.HIHAT,
+        ui_control=UIControl.NUMBER,
+        min_value=0,
+        max_value=127,
+        step=1,
+        yaml_path=['hihat', 'midi_note_foot_close'],
+        cli_flag='--hihat-midi-foot-close',
+        advanced=True,
+    ),
+
+    SettingDefinition(
+        key='hihat_midi_note_handclap',
+        type=SettingType.INT,
+        default=39,
+        label='MIDI Note (Handclap)',
+        description='MIDI note number for hand clap detected from hihat bleed',
+        category=SettingCategory.HIHAT,
+        ui_control=UIControl.NUMBER,
+        min_value=0,
+        max_value=127,
+        step=1,
+        yaml_path=['hihat', 'midi_note_handclap'],
+        cli_flag='--hihat-midi-handclap',
+        advanced=True,
+    ),
+
     SettingDefinition(
         key='hihat_use_stereo',
         type=SettingType.BOOL,
@@ -622,7 +767,7 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         ui_control=UIControl.CHECKBOX,
         yaml_path=['hihat', 'use_stereo'],
     ),
-    
+
     SettingDefinition(
         key='hihat_open_geomean_min',
         type=SettingType.FLOAT,
@@ -635,14 +780,15 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         max_value=1000.0,
         step=10.0,
         yaml_path=['hihat', 'open_geomean_min'],
+        cli_flag='--hihat-open-geomean',
     ),
-    
+
     SettingDefinition(
         key='hihat_open_sustain_ms',
         type=SettingType.FLOAT,
-        default=150.0,
+        default=100.0,
         label='Open Hi-Hat Sustain Threshold',
-        description='Minimum sustain in milliseconds to classify a hi-hat hit as open (higher = stricter)',
+        description='Minimum sustain in milliseconds to classify a hi-hat hit as open (higher = stricter). Aligned with midiconfig.yaml default.',
         category=SettingCategory.HIHAT,
         ui_control=UIControl.SLIDER,
         min_value=20.0,
@@ -650,24 +796,89 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         step=5.0,
         unit='ms',
         yaml_path=['hihat', 'open_sustain_ms'],
+        cli_flag='--hihat-open-sustain-ms',
     ),
-    
+
+    SettingDefinition(
+        key='hihat_geomean_threshold',
+        type=SettingType.FLOAT,
+        default=8.0,
+        label='GeoMean Threshold',
+        description='Hi-hat spectral filtering threshold (rejects artifacts)',
+        category=SettingCategory.HIHAT,
+        ui_control=UIControl.NUMBER,
+        min_value=0.0,
+        max_value=200.0,
+        step=0.5,
+        yaml_path=['hihat', 'geomean_threshold'],
+        cli_flag='--hihat-geomean',
+    ),
+
     # Cymbals MIDI note
     SettingDefinition(
         key='cymbals_midi_note',
         type=SettingType.INT,
         default=57,
-        label='MIDI Note',
-        description='MIDI note number for crash/ride cymbals',
+        label='MIDI Note (Default)',
+        description='MIDI note number used as fallback when no sub-type classifier matches',
         category=SettingCategory.CYMBALS,
         ui_control=UIControl.NUMBER,
         min_value=0,
         max_value=127,
         step=1,
         yaml_path=['cymbals', 'midi_note'],
+        cli_flag='--cymbals-midi-note',
         advanced=True,
     ),
-    
+
+    SettingDefinition(
+        key='cymbals_midi_note_crash',
+        type=SettingType.INT,
+        default=49,
+        label='MIDI Note (Crash)',
+        description='MIDI note number for crash cymbal (sub-type 0)',
+        category=SettingCategory.CYMBALS,
+        ui_control=UIControl.NUMBER,
+        min_value=0,
+        max_value=127,
+        step=1,
+        yaml_path=['cymbals', 'midi_note_crash'],
+        cli_flag='--cymbals-midi-crash',
+        advanced=True,
+    ),
+
+    SettingDefinition(
+        key='cymbals_midi_note_ride',
+        type=SettingType.INT,
+        default=51,
+        label='MIDI Note (Ride)',
+        description='MIDI note number for ride cymbal (sub-type 1)',
+        category=SettingCategory.CYMBALS,
+        ui_control=UIControl.NUMBER,
+        min_value=0,
+        max_value=127,
+        step=1,
+        yaml_path=['cymbals', 'midi_note_ride'],
+        cli_flag='--cymbals-midi-ride',
+        advanced=True,
+    ),
+
+    SettingDefinition(
+        key='cymbals_midi_note_chinese',
+        type=SettingType.INT,
+        default=52,
+        label='MIDI Note (Chinese)',
+        description='MIDI note number for chinese cymbal (sub-type 2)',
+        category=SettingCategory.CYMBALS,
+        ui_control=UIControl.NUMBER,
+        min_value=0,
+        max_value=127,
+        step=1,
+        yaml_path=['cymbals', 'midi_note_chinese'],
+        cli_flag='--cymbals-midi-chinese',
+        advanced=True,
+    ),
+
     SettingDefinition(
         key='cymbals_use_stereo',
         type=SettingType.BOOL,
@@ -678,23 +889,36 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         ui_control=UIControl.CHECKBOX,
         yaml_path=['cymbals', 'use_stereo'],
     ),
-    
-    # Kick Clustering
+
     SettingDefinition(
-        key='kick_onset_merge_window_ms',
-        type=SettingType.INT,
-        default=100,
-        label='Onset Merge Window (ms)',
-        description='Merge L/R channel onsets within this time window (milliseconds)',
-        category=SettingCategory.KICK,
+        key='cymbals_geomean_threshold',
+        type=SettingType.FLOAT,
+        default=100.0,
+        label='GeoMean Threshold',
+        description='Cymbals spectral filtering threshold (rejects artifacts)',
+        category=SettingCategory.CYMBALS,
         ui_control=UIControl.NUMBER,
-        min_value=10,
-        max_value=500,
-        step=10,
-        yaml_path=['kick', 'onset_merge_window_ms'],
-        advanced=True,
+        min_value=0.0,
+        max_value=1000.0,
+        step=5.0,
+        yaml_path=['cymbals', 'geomean_threshold'],
+        cli_flag='--cymbals-geomean',
+    ),
+
+    SettingDefinition(
+        key='cymbals_cluster_feature',
+        type=SettingType.CHOICE,
+        default='auto',
+        label='Cluster Feature',
+        description='Feature used for cymbal sub-type clustering (auto = spectral_centroid_hz, then stereo_width)',
+        category=SettingCategory.CYMBALS,
+        ui_control=UIControl.SELECT,
+        allowed_values=['auto', 'spectral_centroid_hz', 'stereo_width', 'pitch_hz', 'pan_confidence'],
+        yaml_path=['cymbals', 'cluster_feature'],
+        cli_flag='--cymbals-cluster-feature',
     ),
     
+    # Kick Clustering
     SettingDefinition(
         key='kick_expected_clusters',
         type=SettingType.INT,
@@ -707,25 +931,11 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         max_value=5,
         step=1,
         yaml_path=['kick', 'expected_clusters'],
+        cli_flag='--kick-clusters',
         advanced=True,
     ),
-    
+
     # Snare Clustering
-    SettingDefinition(
-        key='snare_onset_merge_window_ms',
-        type=SettingType.INT,
-        default=100,
-        label='Onset Merge Window (ms)',
-        description='Merge L/R channel onsets within this time window (milliseconds)',
-        category=SettingCategory.SNARE,
-        ui_control=UIControl.NUMBER,
-        min_value=10,
-        max_value=500,
-        step=10,
-        yaml_path=['snare', 'onset_merge_window_ms'],
-        advanced=True,
-    ),
-    
     SettingDefinition(
         key='snare_expected_clusters',
         type=SettingType.INT,
@@ -738,41 +948,28 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         max_value=5,
         step=1,
         yaml_path=['snare', 'expected_clusters'],
+        cli_flag='--snare-clusters',
         advanced=True,
     ),
-    
+
     # Toms Clustering
     SettingDefinition(
-        key='toms_onset_merge_window_ms',
+        key='toms_expected_clusters',
         type=SettingType.INT,
-        default=100,
-        label='Onset Merge Window (ms)',
-        description='Merge L/R channel onsets within this time window (milliseconds)',
+        default=3,
+        label='Expected Clusters',
+        description='Expected number of distinct tom sounds (3 = low/mid/high)',
         category=SettingCategory.TOMS,
         ui_control=UIControl.NUMBER,
-        min_value=10,
-        max_value=500,
-        step=10,
-        yaml_path=['toms', 'onset_merge_window_ms'],
+        min_value=1,
+        max_value=5,
+        step=1,
+        yaml_path=['toms', 'expected_clusters'],
+        cli_flag='--toms-clusters',
         advanced=True,
     ),
-    
+
     # Hihat Clustering
-    SettingDefinition(
-        key='hihat_onset_merge_window_ms',
-        type=SettingType.INT,
-        default=100,
-        label='Onset Merge Window (ms)',
-        description='Merge L/R channel onsets within this time window (milliseconds)',
-        category=SettingCategory.HIHAT,
-        ui_control=UIControl.NUMBER,
-        min_value=10,
-        max_value=500,
-        step=10,
-        yaml_path=['hihat', 'onset_merge_window_ms'],
-        advanced=True,
-    ),
-    
     SettingDefinition(
         key='hihat_expected_clusters',
         type=SettingType.INT,
@@ -785,25 +982,11 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         max_value=5,
         step=1,
         yaml_path=['hihat', 'expected_clusters'],
+        cli_flag='--hihat-clusters',
         advanced=True,
     ),
-    
+
     # Cymbals Clustering
-    SettingDefinition(
-        key='cymbals_onset_merge_window_ms',
-        type=SettingType.INT,
-        default=100,
-        label='Onset Merge Window (ms)',
-        description='Merge L/R channel onsets within this time window (milliseconds)',
-        category=SettingCategory.CYMBALS,
-        ui_control=UIControl.NUMBER,
-        min_value=10,
-        max_value=500,
-        step=10,
-        yaml_path=['cymbals', 'onset_merge_window_ms'],
-        advanced=True,
-    ),
-    
     SettingDefinition(
         key='cymbals_expected_clusters',
         type=SettingType.INT,
@@ -816,6 +999,7 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         max_value=5,
         step=1,
         yaml_path=['cymbals', 'expected_clusters'],
+        cli_flag='--cymbals-clusters',
         advanced=True,
     ),
     

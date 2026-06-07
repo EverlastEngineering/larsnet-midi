@@ -410,7 +410,10 @@ def _detect_snare_pitches(
         return None
     
     snare_config = config.get('snare', {})
-    enable_pitch = snare_config.get('enable_pitch_detection', True)
+    # Aligned with midiconfig.yaml (false default). Snare pitch detection
+    # is experimental; previous code default of True produced a silent drift
+    # when the key was missing from a user's config.
+    enable_pitch = snare_config.get('enable_pitch_detection', False)
     
     if not enable_pitch:
         return None
@@ -1162,7 +1165,7 @@ def process_stem_to_midi(
     # Always run classification using config thresholds (open_geomean_min, open_sustain_ms)
     if stem_type == 'hihat':
         hihat_config = config.get('hihat', {})
-        open_sustain_threshold = hihat_config.get('open_sustain_ms', 150)
+        open_sustain_threshold = hihat_config.get('open_sustain_ms', 100)
         hihat_states = detect_hihat_state(
             audio_mono, sr, onset_times,
             sustain_durations=sustain_durations,

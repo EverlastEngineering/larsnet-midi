@@ -224,27 +224,34 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 - **Actual Behavior**: Entire track is rendered at full width with no zoom capability.
 
 ### 5 code default mismatches with midiconfig.yaml values
-- **Status**: Open
+- **Status**: Fixed
 - **Priority**: Medium
 - **Description**: Five settings have YAML values that differ from the code's `.get()` fallback default. The YAML value wins at runtime, but if a key is ever missing from a user's config, they get unexpected behavior.
 - **Details**:
   1. `reverb_continuation_attack_threshold`: YAML=0.4, code default=0.2
   2. `kick.statistical_badness_threshold`: YAML=0.3, code default=0.6
-  3. `hihat.detect_open`: YAML=true, code default=False
+  3. `hihat.detect_open`: YAML=true, code default=False (no longer read in code; effectively auto-resolved by the rewrite of `stems_to_midi_cli.py` which removed the `detect_hihat_open` parameter path)
   4. `hihat.open_sustain_ms`: YAML=100, code default=150
   5. `snare.enable_pitch_detection`: YAML=false, code default=True
 - **Expected Behavior**: Code fallback defaults match the documented YAML values
 - **Actual Behavior**: Code fallbacks differ, creating silent behavioral drift
 - **Suggested Fix**: Align all code `.get()` fallbacks to match YAML values. See [midi-yaml-settings-suggestions.md](../docs/midi-yaml-settings-suggestions.md).
+- **Fixed**: 2026-06-06 (T1 drift-fix)
+  - `reverb_continuation_attack_threshold` default raised 0.2 → 0.4 in `stems_to_midi/rebuild_core.py` and `stems_to_midi/analysis_core/onset_filtering.py`
+  - `statistical_badness_threshold` default lowered 0.6 → 0.3 in `stems_to_midi/analysis_core/onset_filtering.py`
+  - `hihat.open_sustain_ms` default lowered 150 → 100 in 6 files: `midi.py`, `note_classification_core.py`, `processing_shell.py`, `rebuild_core.py`, `analysis_core/spectral_utils.py`, `optimization/extract_features.py`, plus the schema
+  - `snare.enable_pitch_detection` default flipped True → False in `stems_to_midi/processing_shell.py`
+  - `hihat.detect_open` is no longer read by any production code (was only in the legacy `stems_to_midi_cli.py` arg-parser path, now removed). Effectively resolved.
 
 ### 11 dead config keys in midiconfig.yaml
-- **Status**: Open
+- **Status**: Fixed
 - **Priority**: Low
 - **Description**: Eleven settings in midiconfig.yaml are never read by the processing pipeline. They add confusion and maintenance burden.
 - **Details**: `onset_merge_window_ms` (5 stems), `hihat.enable_amplitude_refinement`, `hihat.decay_threshold`, `threshold_optimization.initial_threshold_step`, `threshold_optimization.convergence_patience`, `clustering.features`, plus 4 `learning_mode.*` settings.
 - **Expected Behavior**: All config keys should be consumed by code
 - **Actual Behavior**: These keys are silently ignored
 - **Suggested Fix**: Remove dead keys. See [deprecations.md](../docs/deprecations.md) for full list.
+- **Fixed**: 2026-06-06 (T1 drift-fix). All listed keys removed from `midiconfig.yaml` and (where present) from `webui/settings_schema.py`. Removal log added to `docs/deprecations.md`. No production code referenced any of these keys; `grep` confirmed pre-removal. The 6 schema entries for `onset_merge_window_ms` were also removed.
 
 ### Missing MIDI note mappings in config for multi-type classification
 - **Status**: Open
@@ -386,3 +393,39 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 ### Broken import after file rename - render_midi_video_shell.py
 - **Fixed**: 2026-01-18
 - **Root Cause**: Missing test coverage for `render_project_video()` with `use_moderngl=True`
+
+### Schema-YAML drift in per-stem `geomean_threshold` defaults
+- **Status**: Fixed
+- **Priority**: Medium
+- **Date Found**: 2026-06-06 (T1 drift-fix)
+- **Description**: `webui/settings_schema.py` had `kick_geomean_threshold` with default=70.0 (an old doc-only value) while `midiconfig.yaml` had `kick.geomean_threshold: 800.0`. The per-stem `snare/toms/hihat/cymbals.geomean_threshold` settings were missing from the schema entirely.
+- **Impact**: Anyone using `--schema` or the WebUI form would see the wrong default for kick. The `stem_section.get('geomean_threshold')` calls in the pipeline use the YAML value, so behavior was correct, but the schema lied about defaults — a soft drift signal.
+- **Root Cause**: Schema was never fully synchronized with `midiconfig.yaml`. The kick entry was inherited from an earlier docs-only spec; the others were never added when the YAML gained them.
+- **Fix**: Added/aligned in `webui/settings_schema.py`:
+  - `kick_geomean_threshold`: default 70.0 → 800.0
+  - `snare_geomean_threshold`: added, default 40.0
+  - `toms_geomean_threshold`: added, default 80.0
+  - `hihat_geomean_threshold`: added, default 8.0
+  - `cymbals_geomean_threshold`: added, default 100.0
+  All five also exposed as CLI flags (`--kick-geomean`, `--snare-geomean`, `--toms-geomean`, `--hihat-geomean`, `--cymbals-geomean`).
+- **Files**: `webui/settings_schema.py`
+
+### DrumMapping.handclap hardcoded note (39)
+- **Status**: Fixed
+- **Priority**: Low
+- **Date Found**: 2026-06-06 (T1 drift-fix)
+- **Description**: `stems_to_midi/config.py::DrumMapping.handclap` was a property that hardcoded `return 39` rather than reading `hihat.midi_note_handclap` from config. Other sub-type notes (snare rimshot/clap, cymbals crash/ride/chinese) already had explicit fields populated via `from_config()`.
+- **Impact**: Users could not customize the handclap note via YAML. Changing `hihat.midi_note_handclap` in `midiconfig.yaml` was silently ignored.
+- **Root Cause**: Property was added in an early pass before the YAML gained `midi_note_handclap`. The YAML value existed but no code path read it for the handclap note.
+- **Fix**: Replaced the `handclap` property with a dataclass field `hihat_handclap` populated by `from_config()` from `config['hihat']['midi_note_handclap']`. The `handclap` property now reads from the field, preserving the existing API. Schema entry `hihat_midi_note_handclap` already existed; verified it now flows through to the MIDI file.
+- **Files**: `stems_to_midi/config.py`
+
+### argparse dest defaults diverge from schema key names
+- **Status**: Fixed
+- **Priority**: Low
+- **Date Found**: 2026-06-06 (T1 drift-fix)
+- **Description**: When mapping schema `SettingDefinition` entries to `argparse` flags, the auto-generated `dest` name is the flag (e.g. `--kick-geomean` → `kick_geomean`), not the schema key (`kick_geomean_threshold`). The first pass of the CLI builder tried to look up values by `definition.cli_flag.lstrip('-').replace('-', '_')` which would return `kick_geomean` instead of `kick_geomean_threshold`. This silently dropped all overrides at write-back time.
+- **Impact**: All 5 per-stem geomean flags and others would have been silently ignored by `apply_cli_overrides()` if not caught.
+- **Root Cause**: `argparse` derives `dest` from the flag name unless an explicit `dest=` is passed. Generic schema→CLI mappers must explicitly set `dest=definition.key` (or maintain a name map).
+- **Fix**: `_add_one_flag()` in `webui/cli_builder.py` now passes `dest=definition.key` to `parser.add_argument()`. `apply_cli_overrides()` and `validate_args()` use `definition.key` to look up the value on the Namespace.
+- **Files**: `webui/cli_builder.py`

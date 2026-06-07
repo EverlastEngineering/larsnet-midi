@@ -455,8 +455,10 @@ def filter_onsets_by_spectral(
             # This gives us the population statistics to compare against
             statistical_params = calculate_statistical_params(all_onset_data)
             
-            # Get thresholds from config
-            badness_threshold = stem_config_section.get('statistical_badness_threshold', 0.6)
+            # Get thresholds from config (default 0.3 matches midiconfig.yaml;
+            # previously defaulted to 0.6 which masked snare bleed differently
+            # when the key was missing from a user's config).
+            badness_threshold = stem_config_section.get('statistical_badness_threshold', 0.3)
             ratio_weight = stem_config_section.get('statistical_ratio_weight', 0.7)
             total_weight = stem_config_section.get('statistical_total_weight', 0.3)
             
@@ -520,8 +522,11 @@ def filter_onsets_by_spectral(
     
     # Mark reverb continuation events (peak-hold detection artifact filtering)
     # These are kept in the data but marked so MIDI export can filter them
-    # Uses attack_sharpness to distinguish real hits from reverb tails
-    attack_threshold = config.get('filtering', {}).get('reverb_continuation_attack_threshold', 0.2)
+    # Uses attack_sharpness to distinguish real hits from reverb tails.
+    # Default 0.4 matches midiconfig.yaml; previously defaulted to 0.2 which
+    # was a silent drift — the YAML value always won at runtime but missing
+    # keys got a different value.
+    attack_threshold = config.get('filtering', {}).get('reverb_continuation_attack_threshold', 0.4)
     all_onset_data = mark_reverb_continuations(
         all_onset_data,
         time_margin_ms=5.0,

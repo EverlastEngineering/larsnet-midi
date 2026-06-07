@@ -419,7 +419,9 @@ class TestReclassifySettingsSchema:
         from webui.settings_schema import get_setting_by_key
         setting = get_setting_by_key('hihat_open_sustain_ms')
         assert setting is not None
-        assert setting.default == 150.0
+        # Aligned with midiconfig.yaml default (100.0); previously was 150.0
+        # but YAML always overrode, so this fix removes silent drift.
+        assert setting.default == 100.0
         assert setting.yaml_path == ['hihat', 'open_sustain_ms']
 
     def test_open_geomean_min_validation(self):

@@ -56,18 +56,24 @@ class DrumMapping:
     tom_high: int = 50      # D2 - High Tom
     hihat_closed: int = 42  # F#1 - Closed Hi-Hat
     hihat_open: int = 46    # A#1 - Open Hi-Hat
+    hihat_handclap: int = 39  # D#1 - Hand Clap (from hihat bleed)
     crash: int = 49         # C#2 - Crash Cymbal 1
     ride: int = 51          # D#2 - Ride Cymbal 1
     chinese: int = 52       # E2 - Chinese Cymbal
-    
+
     @classmethod
     def from_config(cls, config: Dict) -> 'DrumMapping':
         """
         Create DrumMapping from configuration dictionary.
-        
+
+        All MIDI note values are now read from config — there are no
+        hardcoded notes in this class. The class-level defaults above
+        match the midiconfig.yaml values, so even a missing key
+        produces the documented General MIDI standard mapping.
+
         Args:
             config: Configuration dictionary with stem settings
-        
+
         Returns:
             DrumMapping instance with values from config
         """
@@ -81,28 +87,29 @@ class DrumMapping:
             tom_high=config.get('toms', {}).get('midi_note_high', 50),
             hihat_closed=config.get('hihat', {}).get('midi_note_closed', 42),
             hihat_open=config.get('hihat', {}).get('midi_note_open', 46),
+            hihat_handclap=config.get('hihat', {}).get('midi_note_handclap', 39),
             crash=config.get('cymbals', {}).get('midi_note_crash', 49),
             ride=config.get('cymbals', {}).get('midi_note_ride', 51),
             chinese=config.get('cymbals', {}).get('midi_note_chinese', 52)
         )
-    
+
     # Aliases for convenience
     @property
     def hihat(self) -> int:
         """Alias for closed hi-hat (default)."""
         return self.hihat_closed
-    
+
     @property
     def cymbals(self) -> int:
         """Alias for crash cymbal (default cymbal)."""
         return self.crash
-    
+
     @property
     def toms(self) -> int:
         """Alias for mid tom (default tom)."""
         return self.tom_mid
-    
+
     @property
     def handclap(self) -> int:
-        """Handclap detected from hihat bleed."""
-        return 39  # D#1 - Hand Clap
+        """Handclap detected from hihat bleed. Reads from hihat.midi_note_handclap."""
+        return self.hihat_handclap

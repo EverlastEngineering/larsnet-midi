@@ -175,7 +175,7 @@ def extract_features_from_stem(project_number: int, stem_type: str, output_dir: 
         ]
         
         # Get open threshold from config
-        open_sustain_threshold = config.get('hihat', {}).get('open_sustain_ms', 150)
+        open_sustain_threshold = config.get('hihat', {}).get('open_sustain_ms', 100)
         
         # Classify using the actual production logic
         hihat_states = detect_hihat_state(

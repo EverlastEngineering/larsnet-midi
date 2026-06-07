@@ -43,7 +43,6 @@ energy_detection:
   min_absolute_energy: 0.01     # energy: noise floor threshold
   merge_window_ms: 150.0        # energy: L/R merge window for stereo
   use_stereo: true              # energy: detect in stereo and calculate pan
-  onset_merge_window_ms: 100    # energy: merge nearby onsets within this window
   energy_method: 'peak_hold'    # energy: envelope method ('rms', 'spectral', 'peak_hold')
   peak_hold_ms: 3.0             # energy: peak-hold smoothing window (2-5ms typical, DAW waveform)
 
@@ -63,12 +62,11 @@ filtering:
 kick:
   # Kick drum (bass drum) settings
   midi_note: 36
-  
+
   # Stereo processing
   use_stereo: false  # Kick is typically centered, no benefit from stereo analysis
-  
+
   # Clustering configuration
-  onset_merge_window_ms: 100  # Merge L/R onsets within this window (ms)
   expected_clusters: 1        # Expected number of distinct kick sounds (usually 1)
   
   # Detection method selection (NEW: energy-based is default)
@@ -131,9 +129,8 @@ snare:
   
   # Stereo processing
   use_stereo: true  # Ghost notes and rimshots may be panned, use stereo analysis
-  
+
   # Clustering configuration
-  onset_merge_window_ms: 100  # Merge L/R onsets within this window (ms)
   expected_clusters: 2        # Expected number of distinct snare sounds (2=snare+clap, 1=all snare)
   
   # Detection method selection (NEW: energy-based is default)
@@ -176,9 +173,8 @@ toms:
   
   # Stereo processing
   use_stereo: true  # Toms are often panned left to right, use stereo for identification
-  
+
   # Clustering configuration
-  onset_merge_window_ms: 100  # Merge L/R onsets within this window (ms)
   expected_clusters: 3        # Expected number of distinct tom sounds (3=high/mid/low)
   
   # Detection method selection (NEW: energy-based is default)
@@ -225,29 +221,26 @@ hihat:
   normalize_stereo_balance: true   # Equalize L/R channels
   
   # Clustering configuration
-  onset_merge_window_ms: 20   # Merge onsets within this window (faster patterns)
   expected_clusters: 2        # Expected number of distinct hihat sounds (open + closed)
-  
+
   # Foot close generation
   generate_foot_close: false  # Generate foot-close events at end of open hihat sustain
-  
+
   # Energy-based detection parameters (calibrated for sensitive detection)
   threshold_db: 6.0               # Lower threshold to catch quiet hits
   min_peak_spacing_ms: 20.0       # Hi-hats can be VERY fast (16th notes, 32nd notes)
   min_absolute_energy: 0.008      # Lower noise floor (hi-hats are quieter)
   merge_window_ms: 40.0           # Tighter L/R merge window for fast patterns
-  enable_amplitude_refinement: false  # Hihat has clean transients, doesn't need two-pass
   energy_method: 'peak_hold'      # Envelope calculation method
   peak_hold_ms: 3.0               # Peak-hold smoothing window
-  
+
   # Onset detection (LEGACY - only used if use_librosa_detection: true)
   # Very sensitive settings optimized through testing
   onset_threshold: 0.003    # Very sensitive to catch quiet hits
   onset_delta: 0.005        # Low threshold for peak picking
   onset_wait: 3             # ~33ms min spacing (allows fast 16th notes)
-  
+
   # Open/Closed hi-hat classification - always enabled using threshold parameters below
-  decay_threshold: 0.65      # Threshold for open detection (higher = fewer open detections)
   open_sustain_ms: 100       # Open hi-hat sustain threshold (ms): >=100ms = open
   open_geomean_min: 262.0    # Open hi-hat GeoMean threshold: >=262 = open
   min_sustain_ms: 25         # Minimum sustain for artifact filtering (handclaps ~20ms, real hihats >25ms)
@@ -276,9 +269,8 @@ cymbals:
   
   # Stereo processing
   use_stereo: true  # Cymbals are often panned left/right, use stereo for crash/ride distinction
-  
+
   # Clustering configuration
-  onset_merge_window_ms: 100  # Merge L/R onsets within this window (ms)
   expected_clusters: 2        # Expected number of distinct cymbals (e.g., 2=left crash + right crash)
   
   # Energy-based detection parameters (validated - cleaner than librosa)
@@ -326,19 +318,12 @@ cymbals:
 # Clustering Configuration (for adaptive threshold discovery)
 clustering:
   method: 'dbscan'           # Clustering algorithm: 'dbscan' (density-based) or 'kmeans' (centroid-based)
-  features:                  # Features to include in clustering (order matters for weighting)
-    - 'pan_confidence'       # Primary: (R-L)/(R+L) strength differential between channels
-    - 'spectral_centroid'    # Secondary: Brightness/timbre of onset
-    - 'pitch'                # Secondary: Detected fundamental frequency
-    - 'timing_delta'         # Secondary: Time since previous onset
 
 # Threshold Optimization (iterative adjustment to match expected cluster count)
 threshold_optimization:
   enabled: false             # Enable adaptive threshold discovery (opt-in)
   max_iterations: 20         # Maximum optimization iterations before giving up
   tolerance: 0               # Stop when cluster_count within ±N of expected (0 = exact match)
-  initial_threshold_step: 0.05  # Initial step size for threshold adjustments
-  convergence_patience: 3    # Stop if no improvement for N iterations
 
 # MIDI Output Settings
 midi:
@@ -356,15 +341,11 @@ debug:
 # This workflow helps calibrate thresholds for your specific drum recordings
 learning_mode:
   enabled: false                    # Enable learning mode
-  export_all_detections: true       # Export ALL detected onsets (even rejected ones)
-  rejected_velocity: 1               # Velocity for rejected hits (so you can see them)
-  kept_velocity_normal: true         # Use normal velocity calculation for kept hits
-  
+
   # In learning mode, use very sensitive detection to catch everything
   learning_onset_threshold: 0.0001    # Very low threshold to catch all possible hits
   learning_delta: 0.002              # Very sensitive peak picking
   learning_wait: 1                   # Allow very close hits
-  
+
   # Output locations for learning workflow
   learning_midi_suffix: "_learning"  # Suffix for learning MIDI files
-  calibrated_config_output: "midiconfig_calibrated.yaml"  # Where to save learned config
