@@ -112,6 +112,11 @@ def rebuild_midi_for_project(
             'elapsed_ms': 0,
         }
 
+    # Capture any data integrity warnings from the loader (bug C) so the
+    # API response can surface them to the WebUI. These are warnings, not
+    # errors — rebuild proceeds regardless.
+    integrity_warnings = analysis_data.pop('data_integrity_warnings', [])
+
     # Load config
     if config_path is None:
         config_path = project_dir / 'midiconfig.yaml'
@@ -166,4 +171,5 @@ def rebuild_midi_for_project(
         'elapsed_ms': elapsed_ms,
         'analysis_data': updated_analysis,
         'events_by_stem': midi_events_by_stem,
+        'data_integrity_warnings': integrity_warnings,
     }

@@ -17,6 +17,7 @@ import pytest
 from stems_to_midi.midi import (
     _serialize_onset_events,
     save_analysis_sidecar,
+    load_analysis_sidecar,
 )
 
 
@@ -218,6 +219,161 @@ class TestSaveAnalysisSidecarAlwaysPresentFields:
             assert 'pan_confidence' in sensitive[0]
             assert 'stereo_width' in sensitive[0]
             assert 'pitch_hz' in sensitive[0]
+        finally:
+            midi_path.unlink(missing_ok=True)
+            midi_path.with_suffix('.analysis.json').unlink(missing_ok=True)
+
+
+# ============================================================================
+# load_analysis_sidecar: subset validation (bug C)
+# ============================================================================
+
+
+class TestLoadAnalysisSidecarValidation:
+    """Bug C: events_configured must be a subset of events_sensitive by time."""
+
+    def _write_sidecar(self, midi_path, data):
+        sidecar_path = midi_path.with_suffix('.analysis.json')
+        with open(sidecar_path, 'w') as f:
+            json.dump(data, f)
+        return sidecar_path
+
+    def _make_midi_path(self):
+        tmp = tempfile.NamedTemporaryFile(suffix='.mid', delete=False)
+        tmp.close()
+        return Path(tmp.name)
+
+    def test_valid_subset_no_warnings(self):
+        """All configured events have a matching sensitive time → no warning."""
+        midi_path = self._make_midi_path()
+        try:
+            sidecar = {
+                'version': '3.0',
+                'stems': {
+                    'kick': {
+                        'events_configured': [
+                            {'time': 1.0, 'status': 'KEPT'},
+                            {'time': 2.0, 'status': 'KEPT'},
+                        ],
+                        'events_sensitive': [
+                            {'time': 1.0, 'status': 'KEPT'},
+                            {'time': 1.5, 'status': 'KEPT'},
+                            {'time': 2.0, 'status': 'KEPT'},
+                        ],
+                    }
+                }
+            }
+            self._write_sidecar(midi_path, sidecar)
+            data = load_analysis_sidecar(midi_path)
+            assert 'data_integrity_warnings' not in data or not data['data_integrity_warnings']
+        finally:
+            midi_path.unlink(missing_ok=True)
+            midi_path.with_suffix('.analysis.json').unlink(missing_ok=True)
+
+    def test_missing_event_emits_warning(self):
+        """Configured event with no matching sensitive time → warning."""
+        midi_path = self._make_midi_path()
+        try:
+            sidecar = {
+                'version': '3.0',
+                'stems': {
+                    'snare': {
+                        'events_configured': [
+                            {'time': 1.0, 'status': 'KEPT'},
+                            {'time': 5.0, 'status': 'KEPT'},  # Not in sensitive
+                        ],
+                        'events_sensitive': [
+                            {'time': 1.0, 'status': 'KEPT'},
+                        ],
+                    }
+                }
+            }
+            self._write_sidecar(midi_path, sidecar)
+            data = load_analysis_sidecar(midi_path)
+            warnings = data.get('data_integrity_warnings', [])
+            assert len(warnings) == 1
+            assert "snare" in warnings[0]
+            assert "1" in warnings[0]  # one missing
+        finally:
+            midi_path.unlink(missing_ok=True)
+            midi_path.with_suffix('.analysis.json').unlink(missing_ok=True)
+
+    def test_time_tolerance_within_1ms(self):
+        """Two events within 1ms are considered the same."""
+        midi_path = self._make_midi_path()
+        try:
+            sidecar = {
+                'version': '3.0',
+                'stems': {
+                    'hihat': {
+                        'events_configured': [{'time': 1.0, 'status': 'KEPT'}],
+                        'events_sensitive': [{'time': 1.0005, 'status': 'KEPT'}],
+                    }
+                }
+            }
+            self._write_sidecar(midi_path, sidecar)
+            data = load_analysis_sidecar(midi_path)
+            warnings = data.get('data_integrity_warnings', [])
+            assert warnings == []
+        finally:
+            midi_path.unlink(missing_ok=True)
+            midi_path.with_suffix('.analysis.json').unlink(missing_ok=True)
+
+    def test_empty_sensitive_with_nonempty_configured_warns(self):
+        """Edge case: events_configured present, events_sensitive missing."""
+        midi_path = self._make_midi_path()
+        try:
+            sidecar = {
+                'version': '3.0',
+                'stems': {
+                    'kick': {
+                        'events_configured': [{'time': 1.0, 'status': 'KEPT'}],
+                        'events_sensitive': [],
+                    }
+                }
+            }
+            self._write_sidecar(midi_path, sidecar)
+            data = load_analysis_sidecar(midi_path)
+            warnings = data.get('data_integrity_warnings', [])
+            assert len(warnings) == 1
+            assert "no events_sensitive" in warnings[0]
+        finally:
+            midi_path.unlink(missing_ok=True)
+            midi_path.with_suffix('.analysis.json').unlink(missing_ok=True)
+
+    def test_returns_none_when_sidecar_missing(self):
+        """Missing sidecar → None (not an empty dict)."""
+        midi_path = self._make_midi_path()
+        try:
+            data = load_analysis_sidecar(midi_path)
+            assert data is None
+        finally:
+            midi_path.unlink(missing_ok=True)
+
+    def test_warning_per_stem(self):
+        """Multiple stems with violations → one warning per stem."""
+        midi_path = self._make_midi_path()
+        try:
+            sidecar = {
+                'version': '3.0',
+                'stems': {
+                    'kick': {
+                        'events_configured': [{'time': 99.0, 'status': 'KEPT'}],
+                        'events_sensitive': [{'time': 1.0, 'status': 'KEPT'}],
+                    },
+                    'snare': {
+                        'events_configured': [{'time': 88.0, 'status': 'KEPT'}],
+                        'events_sensitive': [{'time': 2.0, 'status': 'KEPT'}],
+                    },
+                }
+            }
+            self._write_sidecar(midi_path, sidecar)
+            data = load_analysis_sidecar(midi_path)
+            warnings = data.get('data_integrity_warnings', [])
+            assert len(warnings) == 2
+            joined = ' '.join(warnings)
+            assert 'kick' in joined
+            assert 'snare' in joined
         finally:
             midi_path.unlink(missing_ok=True)
             midi_path.with_suffix('.analysis.json').unlink(missing_ok=True)

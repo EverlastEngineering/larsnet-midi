@@ -386,21 +386,107 @@ def save_analysis_sidecar(
 def load_analysis_sidecar(midi_path: Union[str, Path]) -> Optional[Dict]:
     """
     Load spectral analysis data from JSON sidecar file.
-    
+
+    Validates that every event in events_configured has a time within
+    1ms of an event in events_sensitive (bug C — events_configured
+    must be a subset of events_sensitive by time, since the configured
+    detection is a stricter subset of the max-sensitivity detection).
+    If any event violates this invariant, a warning is attached to
+    the returned data so the WebUI can surface a toast notification.
+    We do NOT silently fix the data — the user may have hand-edited
+    the MIDI or YAML and we should not lose information.
+
     Args:
         midi_path: Path to MIDI file (will look for .analysis.json sidecar)
-    
+
     Returns:
-        Sidecar data dict, or None if not found
+        Sidecar data dict, or None if not found. The dict may have a
+        'data_integrity_warnings' top-level list with string messages
+        when invariant violations are detected.
     """
     midi_path = Path(midi_path)
     sidecar_path = midi_path.with_suffix('.analysis.json')
-    
+
     if not sidecar_path.exists():
         return None
-    
+
     with open(sidecar_path, 'r') as f:
-        return json.load(f)
+        data = json.load(f)
+
+    # Validate events_configured ⊆ events_sensitive by time (within 1ms).
+    warnings = _validate_events_subset(data)
+    if warnings:
+        data.setdefault('data_integrity_warnings', []).extend(warnings)
+
+    return data
+
+
+def _validate_events_subset(data: Dict, time_tolerance_sec: float = 0.001) -> List[str]:
+    """
+    Check that every event in events_configured has a matching time
+    (within ``time_tolerance_sec``) in events_sensitive for the same stem.
+
+    This is a structural invariant: the configured detection runs at
+    the user's chosen thresholds, while the sensitive detection runs
+    at maximum sensitivity. If an event appears in events_configured
+    but not in events_sensitive, it suggests the data was edited by
+    hand or written by a buggy code path. Bug C — surface the
+    inconsistency as a warning the WebUI can toast, don't silently
+    fix it.
+
+    Args:
+        data: Parsed analysis.json dict (v3 format).
+        time_tolerance_sec: Maximum allowed time difference (default 1ms).
+
+    Returns:
+        List of human-readable warning strings. Empty when the data
+        passes the check.
+    """
+    warnings: List[str] = []
+    stems = data.get('stems', {})
+    if not stems:
+        return warnings
+
+    for stem_type, stem_data in stems.items():
+        configured = stem_data.get('events_configured', [])
+        sensitive = stem_data.get('events_sensitive', [])
+
+        if not configured or not sensitive:
+            # If one is empty we can't validate the subset relationship
+            # but the case itself is suspicious enough to note when the
+            # other side is non-empty.
+            if configured and not sensitive:
+                warnings.append(
+                    f"data integrity: stem '{stem_type}' has "
+                    f"{len(configured)} events_configured but no "
+                    f"events_sensitive — re-run full detection to "
+                    f"regenerate the sensitive pool."
+                )
+            continue
+
+        # Build a quick lookup of sensitive times
+        sensitive_times = [e.get('time', 0.0) for e in sensitive]
+
+        missing = []
+        for ev in configured:
+            t = ev.get('time', 0.0)
+            if not any(abs(t - st) <= time_tolerance_sec for st in sensitive_times):
+                missing.append(t)
+
+        if missing:
+            n = len(missing)
+            sample = ', '.join(f"{t:.4f}" for t in missing[:3])
+            warnings.append(
+                f"data integrity: stem '{stem_type}' has {n} "
+                f"event(s) in events_configured with no matching time "
+                f"in events_sensitive (samples: {sample}). "
+                f"This usually means the analysis was edited by hand "
+                f"or a bug wrote events to the wrong array. The WebUI "
+                f"will display this as a toast. Use the tuning panel "
+                f"to filter or rerun detection to regenerate."
+            )
+
+    return warnings
 
 
 def save_envelope_data(

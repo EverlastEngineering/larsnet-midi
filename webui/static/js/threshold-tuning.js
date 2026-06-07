@@ -837,6 +837,15 @@ async function saveTuningAndReconvert() {
                     'success'
                 );
 
+                // Bug C: surface any data-integrity warnings from the loader
+                // (e.g. events_configured has events not in events_sensitive).
+                if (Array.isArray(result.data_integrity_warnings) &&
+                    result.data_integrity_warnings.length > 0) {
+                    for (const warning of result.data_integrity_warnings) {
+                        showToast(warning, 'warning');
+                    }
+                }
+
                 // Re-render waveform with updated analysis data
                 const stemData = waveformAnalysisData?.stems?.[stemType];
                 if (stemData) {

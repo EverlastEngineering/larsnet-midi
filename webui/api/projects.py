@@ -258,6 +258,10 @@ def get_project_analysis(project_number):
     Get analysis sidecar data (onset events, filtering decisions, spectral features).
     Supports both v2 (events) and v3 (events_configured/events_sensitive) formats.
 
+    Bug C: also runs the events_configured ⊆ events_sensitive subset check
+    on load and returns a ``data_integrity_warnings`` array when violations
+    are detected, so the WebUI can surface them as toasts.
+
     Returns:
         200: Analysis JSON data
         404: Project or analysis file not found
@@ -286,6 +290,17 @@ def get_project_analysis(project_number):
 
         with open(analysis_files[0], 'r') as f:
             analysis_data = json.load(f)
+
+        # Run the bug C subset validation. The loader is the canonical
+        # place for this check (called from both the API and the rebuild
+        # shell), but a second pass here ensures GETs that bypass the
+        # loader (e.g. direct file read) also surface warnings.
+        from stems_to_midi.midi import _validate_events_subset
+        integrity_warnings = _validate_events_subset(analysis_data)
+        if integrity_warnings:
+            analysis_data = dict(analysis_data)
+            existing = analysis_data.get('data_integrity_warnings', [])
+            analysis_data['data_integrity_warnings'] = list(existing) + integrity_warnings
 
         return jsonify(analysis_data), 200
 

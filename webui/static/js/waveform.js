@@ -183,6 +183,22 @@ async function initWaveformViewer(project) {
         return;
     }
 
+    // Bug C: surface any data-integrity warnings from the loader so the
+    // user is told when events_configured contains events not in
+    // events_sensitive. Loaded fresh on every project open, so this also
+    // catches warnings for projects opened without going through the
+    // rebuild path.
+    if (Array.isArray(waveformAnalysisData.data_integrity_warnings) &&
+        waveformAnalysisData.data_integrity_warnings.length > 0) {
+        for (const warning of waveformAnalysisData.data_integrity_warnings) {
+            if (typeof showToast === 'function') {
+                showToast(warning, 'warning');
+            } else {
+                console.warn('Data integrity warning:', warning);
+            }
+        }
+    }
+
     updateWaveformLoading('Loading overrides…', 40);
     await loadEventOverrides();
 
