@@ -429,3 +429,27 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 - **Root Cause**: `argparse` derives `dest` from the flag name unless an explicit `dest=` is passed. Generic schema→CLI mappers must explicitly set `dest=definition.key` (or maintain a name map).
 - **Fix**: `_add_one_flag()` in `webui/cli_builder.py` now passes `dest=definition.key` to `parser.add_argument()`. `apply_cli_overrides()` and `validate_args()` use `definition.key` to look up the value on the Namespace.
 - **Files**: `webui/cli_builder.py`
+
+### /api/rebuild-midi endpoint silently dropped all WebUI slider overrides
+- **Status**: Fixed
+- **Priority**: High
+- **Date Found**: 2026-06-06 (T2 bug-fixes)
+- **Description**: When the user moved any threshold slider in the WebUI tuning panel and clicked "Save & Reconvert", the server-side rebuild produced MIDI that did not reflect the new thresholds. The UI's client-side `applyTuningFilter()` would re-filter the local snapshot so the waveform visualization looked correct, but the actual saved MIDI was filtered with the YAML defaults.
+- **Root Cause**: The `/api/rebuild-midi` endpoint (`webui/api/operations.py`) only read `project_number`, `stem_types`, and `honor_overrides` from the request body — it did not accept any `config_overrides`. `rebuild_midi_for_project()` in `stems_to_midi/rebuild_shell.py` then loaded the YAML config and used it directly, so the slider values in `tuningSliderValues[stemType]` on the client side were never sent to the server and never applied. This was the same symptom as the "Reverb filter adds/removes events differently in UI vs actual filter" bug (also labeled D) but with a different fix scope — that bug was about reverb specifically; this one is the general case.
+- **Impact**: The user-visible effect was that any slider move (geomean threshold, reverb_continuation_attack_threshold, expected_clusters, open_geomean_min, etc.) appeared to work in the tuning panel but was silently discarded on Save & Reconvert. The user would then see the tuning panel "reset" to the YAML values after the rebuild.
+- **Fix**: 
+  - `rebuild_shell.py`: added `config_overrides` kwarg to `rebuild_midi_for_project()` and a `_apply_config_overrides()` helper that writes dotted-path overrides (e.g. `filtering.reverb_continuation_attack_threshold`, `kick.geomean_threshold`, `hihat.open_geomean_min`) into the loaded config dict.
+  - `webui/api/operations.py`: `/api/rebuild-midi` now reads `config_overrides` from the request body and forwards it.
+  - `webui/static/js/threshold-tuning.js`: `Save & Reconvert` builds the overrides dict from `tuningSliderValues[stemType]` via a new `_buildConfigOverrides()` helper, which maps the slider keys to their dotted YAML paths (per-stem keys nest under the stem name; the global `reverb_continuation_attack_threshold` lives under `filtering`).
+- **Files**: `stems_to_midi/rebuild_shell.py`, `webui/api/operations.py`, `webui/static/js/threshold-tuning.js`
+- **Fix Commit**: 72e28ac
+
+### Cymbal pitch_hz never computed (only toms in onset_filtering.py)
+- **Status**: Open (partially mitigated)
+- **Priority**: Medium
+- **Date Found**: 2026-06-06 (T2 bug-fixes)
+- **Description**: The bug B spec lists `pitch_hz` in the per-stem output for cymbals (and snare when pitch detection is on), but the pipeline's `pitch_hz` field is only populated for toms in `stems_to_midi/analysis_core/onset_filtering.py:258-261` (an `if stem_type == 'toms': ... else: detected_pitch = None` branch). Cymbals have a `detect_cymbal_pitch` function in `stems_to_midi/processing_shell.py:300` but its output is used for crash/ride/chinese classification, never written into the onset data that ends up in `analysis.json`.
+- **Impact**: `analysis.json` events for cymbals (and snare with pitch detection on) have `pitch_hz: null` even when the audio would support it. The T2 fix (B) ensures the JSON key is always present with `null` when missing, but does not compute the value for these stems. A future T could extend `onset_filtering.py` to also run pitch detection for cymbals and snare-with-pitch-enabled.
+- **Suggested Fix**: In `onset_filtering.py` line 258, add branches for cymbals and snare-pitch-enabled that call `detect_cymbal_pitch()` / `detect_snare_pitch()` with the right frequency ranges from the YAML config. The `detected_pitch` value should be written to `onset_data['pitch_hz']` the same way the tom path does.
+- **Files**: `stems_to_midi/analysis_core/onset_filtering.py`, possibly `stems_to_midi/processing_shell.py`
+
