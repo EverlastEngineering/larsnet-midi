@@ -455,6 +455,8 @@ const STEM_FEATURE_CHOICES = {
 
 /**
  * Available MIDI note choices per stem for the cluster note dropdowns.
+ * Hihat uses the standard General MIDI mapping; users with custom
+ * drum maps can pick from the same choices the other stems offer.
  */
 const STEM_NOTE_CHOICES = {
     snare: [
@@ -471,6 +473,10 @@ const STEM_NOTE_CHOICES = {
         { note: 49, label: 'Crash' },
         { note: 51, label: 'Ride' },
         { note: 52, label: 'Chinese' },
+    ],
+    hihat: [
+        { note: 42, label: 'Closed' },
+        { note: 46, label: 'Open' },
     ],
 };
 

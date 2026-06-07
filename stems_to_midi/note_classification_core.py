@@ -523,9 +523,16 @@ def analyze_clusters(
     Examines which features best distinguish each cluster and provides
     statistics for the UI to display meaningful cluster descriptions.
 
+    For hihat specifically, events are grouped by ``hihat_state`` (open /
+    closed) instead of the integer ``classification`` field — the hihat
+    pipeline does threshold-based open/closed detection, not k-means
+    clustering, so its cluster info must reflect the binary state
+    (bug A3, part 3 — hihat cluster visualization).
+
     Args:
         events: KEPT events that have already been classified (have
-            'classification' and 'note' fields set).
+            'classification' and 'note' fields set, or for hihat a
+            'hihat_state' field set to 'open' or 'closed').
         stem_type: Stem type for feature priority lookup.
         drum_mapping: DrumMapping instance for note labels.
 
@@ -548,9 +555,18 @@ def analyze_clusters(
             },
             ...
         ]
+
+        For hihat, ``classification`` is replaced with a string state
+        ('open' or 'closed') and ``note_label`` is 'Open' or 'Closed'.
     """
     if not events:
         return []
+
+    # Hihat groups by hihat_state, not by integer classification. The
+    # other stems continue to use the integer field (set by k-means
+    # clustering).
+    if stem_type == 'hihat':
+        return _analyze_hihat_clusters(events, drum_mapping)
 
     # Group events by classification
     clusters: Dict[int, List[Dict]] = {}
@@ -592,6 +608,79 @@ def analyze_clusters(
     # Find the feature that best distinguishes the clusters
     _annotate_distinguishing_features(cluster_infos, features_to_check)
 
+    return cluster_infos
+
+
+def _analyze_hihat_clusters(
+    events: List[Dict],
+    drum_mapping,
+) -> List[Dict]:
+    """
+    Build cluster info dicts for hihat events grouped by hihat_state.
+
+    Hihat classification is binary (open vs closed) and uses stored
+    spectral features (geomean, sustain_ms) rather than k-means. This
+    helper produces the same cluster_info shape as the k-means path so
+    the WebUI can render the cluster cards uniformly.
+
+    Args:
+        events: KEPT hihat events with hihat_state in {'open', 'closed'}.
+        drum_mapping: DrumMapping for note lookup.
+
+    Returns:
+        List of cluster info dicts (one per state that has at least one
+        event). Each dict has integer ``classification`` 0 or 1
+        (preserving the rest of the schema's typing contract) plus a
+        ``state`` field with the string ('open' or 'closed') for any
+        downstream consumer that prefers strings.
+    """
+    if not events:
+        return []
+
+    # Map hihat_state -> integer classification (mirrors _NOTE_MAP for hihat)
+    state_to_cls = {'closed': 0, 'open': 1}
+    state_to_attr = {'closed': 'hihat_closed', 'open': 'hihat_open'}
+
+    clusters: Dict[str, List[Dict]] = {}
+    for event in events:
+        state = event.get('hihat_state', 'closed')
+        clusters.setdefault(state, []).append(event)
+
+    features_to_check = _CLUSTER_FEATURES.get('hihat', ['geomean', 'duration_sec'])
+
+    cluster_infos = []
+    for state in ('closed', 'open'):  # Fixed order: closed first, then open
+        if state not in clusters:
+            continue
+        cluster_events = clusters[state]
+        note_attr = state_to_attr[state]
+        note_num = getattr(drum_mapping, note_attr, None)
+
+        feature_stats = {}
+        for feat in features_to_check:
+            vals = [
+                e[feat] for e in cluster_events
+                if feat in e and e[feat] is not None
+            ]
+            if vals:
+                feature_stats[feat] = {
+                    'mean': round(float(np.mean(vals)), 4),
+                    'min': round(float(np.min(vals)), 4),
+                    'max': round(float(np.max(vals)), 4),
+                }
+
+        cluster_infos.append({
+            'classification': state_to_cls[state],
+            'state': state,  # String for WebUI convenience
+            'note': note_num,
+            'note_label': state.title(),  # 'Open' / 'Closed'
+            'count': len(cluster_events),
+            'features': feature_stats,
+        })
+
+    # Annotate distinguishing features (works on integer classification
+    # like the k-means path; pass features list directly).
+    _annotate_distinguishing_features(cluster_infos, features_to_check)
     return cluster_infos
 
 

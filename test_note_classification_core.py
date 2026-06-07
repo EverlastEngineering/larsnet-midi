@@ -283,6 +283,93 @@ class TestClassifyHihatNotes:
         # 'handclap' is not in the ('open', 'closed') truth set → reclassify
         assert events[0]['hihat_state'] == 'open'
 
+
+# ============================================================================
+# Hihat cluster info tests (bug A3, part 3)
+# ============================================================================
+
+
+class TestAnalyzeHihatClusters:
+    """analyze_clusters() must handle hihat's binary open/closed grouping."""
+
+    def test_hihat_groups_by_hihat_state(self, drum_mapping):
+        """Hihat cluster info is built from hihat_state, not classification."""
+        events = [
+            _make_event(geomean=500.0, sustain_ms=200.0, hihat_state='open',
+                        note=drum_mapping.hihat_open),
+            _make_event(geomean=10.0, sustain_ms=10.0, hihat_state='closed',
+                        note=drum_mapping.hihat_closed),
+            _make_event(geomean=520.0, sustain_ms=220.0, hihat_state='open',
+                        note=drum_mapping.hihat_open),
+        ]
+        result = analyze_clusters(events, 'hihat', drum_mapping)
+
+        # Two clusters: closed (cls 0) and open (cls 1)
+        assert len(result) == 2
+        states_by_cls = {info['classification']: info['state'] for info in result}
+        assert states_by_cls[0] == 'closed'
+        assert states_by_cls[1] == 'open'
+
+        # Counts are correct
+        counts_by_cls = {info['classification']: info['count'] for info in result}
+        assert counts_by_cls[0] == 1
+        assert counts_by_cls[1] == 2
+
+    def test_hihat_cluster_feature_stats_use_geomean(self, drum_mapping):
+        """Hihat cluster stats use geomean, not stereo_width."""
+        events = [
+            _make_event(geomean=500.0, sustain_ms=200.0, hihat_state='open',
+                        note=46),
+            _make_event(geomean=10.0, sustain_ms=10.0, hihat_state='closed',
+                        note=42),
+        ]
+        result = analyze_clusters(events, 'hihat', drum_mapping)
+        # Every cluster info should have geomean stats (hihat cluster feature)
+        for info in result:
+            assert 'geomean' in info['features']
+            assert info['features']['geomean']['mean'] > 0
+
+    def test_hihat_note_label_is_titlecase(self, drum_mapping):
+        """Hihat cluster info has 'Open' / 'Closed' note_label."""
+        events = [
+            _make_event(hihat_state='open', note=46),
+            _make_event(hihat_state='closed', note=42),
+        ]
+        result = analyze_clusters(events, 'hihat', drum_mapping)
+        labels_by_state = {info['state']: info['note_label'] for info in result}
+        assert labels_by_state['open'] == 'Open'
+        assert labels_by_state['closed'] == 'Closed'
+
+    def test_hihat_empty_returns_empty(self, drum_mapping):
+        """No events → empty cluster info."""
+        result = analyze_clusters([], 'hihat', drum_mapping)
+        assert result == []
+
+    def test_hihat_only_closed_returns_single_cluster(self, drum_mapping):
+        """All events have the same hihat_state — single cluster, not two."""
+        events = [
+            _make_event(hihat_state='closed', note=42),
+            _make_event(hihat_state='closed', note=42),
+        ]
+        result = analyze_clusters(events, 'hihat', drum_mapping)
+        assert len(result) == 1
+        assert result[0]['state'] == 'closed'
+        assert result[0]['count'] == 2
+
+    def test_other_stems_still_use_classification_field(self, drum_mapping):
+        """Snare/toms/cymbals still group by integer classification (regression)."""
+        events = [
+            _make_event(stereo_width=0.05, classification=0, note=38),
+            _make_event(stereo_width=0.5, classification=1, note=39),
+        ]
+        result = analyze_clusters(events, 'snare', drum_mapping)
+        assert len(result) == 2
+        # Snare has no hihat_state, so no 'state' field
+        assert all('state' not in info for info in result)
+        # Integer classification preserved
+        classifications = sorted(info['classification'] for info in result)
+        assert classifications == [0, 1]
+
     def test_none_sustain_treated_as_zero(self, default_config):
         """None sustain_ms should not crash, treat as 0."""
         events = [_make_event(geomean=500.0, sustain_ms=None)]
