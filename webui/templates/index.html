@@ -833,6 +833,17 @@
                                 
                                 <!-- Basic Settings -->
                                 <div class="space-y-3 md:space-y-4 mb-4 md:mb-6">
+                                    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                                        <div class="flex-1">
+                                            <label class="text-sm text-gray-300" for="setting-detection-method">Detection Method</label>
+                                            <p class="text-xs text-gray-500">Which detector's events become MIDI output (energy and spectral both run, this chooses which list is promoted)</p>
+                                        </div>
+                                        <select id="setting-detection-method" class="bg-gray-700 text-gray-200 rounded px-3 py-2 text-sm w-full md:w-auto" data-default="both">
+                                            <option value="energy">Energy only</option>
+                                            <option value="spectral">Spectral only</option>
+                                            <option value="both" selected>Both (recommended)</option>
+                                        </select>
+                                    </div>
                                     <div>
                                         <label class="text-sm text-gray-300 block mb-2">Onset Threshold</label>
                                         <p class="text-xs text-gray-500 mb-2">Detection sensitivity (0-1, lower = more sensitive)</p>

@@ -68,7 +68,17 @@ async function startMidi() {
     try {
         // Get settings from SettingsManager
         const settings = window.settingsManager.getSettingsForOperation('midi');
-        
+
+        // detection_method is a nested YAML setting (yaml_path =
+        // ['onset_detection', 'detection_method']) so it goes through the
+        // dotted-path config_overrides channel, not the legacy top-level
+        // onset_* fields. The backend's _apply_cli_overrides_to_config
+        // walks the dots and writes into the loaded config dict.
+        const configOverrides = {};
+        if (settings.detection_method) {
+            configOverrides['onset_detection.detection_method'] = settings.detection_method;
+        }
+
         const result = await api.stemsToMidi(currentProject.number, {
             onset_threshold: settings.onset_threshold,
             onset_delta: settings.onset_delta,
@@ -76,7 +86,8 @@ async function startMidi() {
             hop_length: null, // Not exposed in basic UI
             min_velocity: settings.min_velocity,
             max_velocity: settings.max_velocity,
-            tempo: settings.tempo
+            tempo: settings.tempo,
+            config_overrides: configOverrides
         });
         
         showToast('MIDI conversion started', 'success');

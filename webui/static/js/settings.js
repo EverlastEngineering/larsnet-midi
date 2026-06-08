@@ -199,6 +199,11 @@ class SettingsManager {
                 settings.min_velocity = this.settings['min-velocity'] || 40;
                 settings.max_velocity = this.settings['max-velocity'] || 127;
                 settings.tempo = this.settings['tempo'] || null;
+                // detection_method: which detector's events become events_configured
+                // (energy / spectral / both). 'both' is the schema default and the
+                // recommended choice — it keeps every energy hit and adds the
+                // spectral candidates that energy missed.
+                settings.detection_method = this.settings['detection-method'] || 'both';
                 break;
                 
             case 'video':
@@ -258,7 +263,8 @@ class SettingsManager {
                     'min-velocity': 80,
                     'max-velocity': 110,
                     'tempo': null,
-                    'detect-hihat-open': false
+                    'detect-hihat-open': false,
+                    'detection-method': 'both'
                 },
                 'video': {
                     'fps': 60,
