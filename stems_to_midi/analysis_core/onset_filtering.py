@@ -13,7 +13,7 @@ Functions:
 """
 
 import numpy as np
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from .audio_utils import (
     time_to_sample,
@@ -122,6 +122,90 @@ def mark_reverb_continuations(
             curr['status'] = 'REVERB_CONTINUATION'
     
     return onset_data_list
+
+
+# Default pitch-detection frequency ranges per stem (Hz).
+# Used when the stem's config doesn't specify min/max.
+# Toms: 40-500 (legacy range, captures the full tom fundamental range)
+# Snare: 100-500 (snare fundamentals are higher than toms)
+# Cymbals: 200-1000 (cymbals have higher partials)
+_PITCH_DETECT_DEFAULTS = {
+    'toms':    (40.0,  500.0),
+    'snare':   (100.0, 500.0),
+    'cymbals': (200.0, 1000.0),
+}
+
+
+def _should_detect_pitch(
+    stem_type: str,
+    config: Dict,
+) -> Optional[Tuple[float, float]]:
+    """
+    Decide whether the onset filter should run pitch detection for a
+    given stem, and return the (fmin, fmax) Hz bounds to use.
+
+    Returns:
+        (fmin, fmax) tuple if pitch detection should run for this
+        stem, with the frequency bounds to pass to detect_pitch().
+        None if pitch detection should be skipped (no time wasted
+        on a stem that doesn't have it, or that has it disabled).
+
+    Contract (locked by stems_to_midi/test_pitch_detection_gating.py):
+
+    - **toms**: always detect. Legacy behavior from before the
+      per-stem ``enable_pitch_detection`` flag existed. Toms' pitch
+      detection is the original feature this whole module was
+      written for; the rest are opt-in.
+    - **snare**: detect iff ``config['snare']['enable_pitch_detection']``
+      is True. The schema exposes this flag, the WebUI modal
+      surfaces it, but the old code hardcoded
+      ``if stem_type == 'toms':`` which silently skipped snare
+      even when the flag was True. That was the bug surfaced in
+      round 4 of the T2 follow-up (2026-06-08): picking 'Pitch' in
+      the snare Cluster By dropdown did nothing because pitch_hz
+      was never computed.
+    - **cymbals**: detect iff ``config['cymbals']['enable_pitch_detection']``
+      is True. Same reasoning as snare.
+    - **kick, hihat, and any unknown stem**: never detect. Hihat
+      uses threshold-based open/closed detection (not pitch).
+      Kick has no pitch-detection implementation. Unknown stems
+      are a defensive default — they get no detection until the
+      schema + implementation are added.
+
+    Args:
+        stem_type: One of 'kick', 'snare', 'toms', 'hihat',
+            'cymbals'. (Unknown values return None.)
+        config: Full config dict. Reads
+            ``config[stem_type]['enable_pitch_detection']`` and,
+            if the flag is True, optionally
+            ``config[stem_type]['min_pitch_hz']`` /
+            ``max_pitch_hz`` for tighter bounds. Missing
+            min/max fall back to ``_PITCH_DETECT_DEFAULTS[stem_type]``.
+    """
+    # Toms: legacy always-detect. The schema's default for toms
+    # is enable_pitch_detection: True, so honoring the flag would
+    # also work — but keeping the unconditional behavior is safer
+    # (no risk of a user with enable_pitch_detection: false in
+    # their YAML suddenly losing toms pitch detection).
+    if stem_type == 'toms':
+        defaults = _PITCH_DETECT_DEFAULTS['toms']
+        stem_cfg = config.get('toms', {}) if isinstance(config, dict) else {}
+        fmin = stem_cfg.get('min_pitch_hz', defaults[0])
+        fmax = stem_cfg.get('max_pitch_hz', defaults[1])
+        return (float(fmin), float(fmax))
+
+    # Snare and cymbals: gated on enable_pitch_detection.
+    if stem_type in ('snare', 'cymbals'):
+        stem_cfg = config.get(stem_type, {}) if isinstance(config, dict) else {}
+        if not stem_cfg.get('enable_pitch_detection', False):
+            return None
+        defaults = _PITCH_DETECT_DEFAULTS[stem_type]
+        fmin = stem_cfg.get('min_pitch_hz', defaults[0])
+        fmax = stem_cfg.get('max_pitch_hz', defaults[1])
+        return (float(fmin), float(fmax))
+
+    # Kick, hihat, and unknown stems: no pitch detection.
+    return None
 
 
 def filter_onsets_by_spectral(
@@ -251,12 +335,20 @@ def filter_onsets_by_spectral(
             # Spectral features
             spectral_centroid_hz = calculate_spectral_centroid(audio, onset_time, sr)
             spectral_flux_value = calculate_spectral_flux(audio, onset_time, sr)
-            
-            # Pitch detection - enabled for toms (fundamental is strong, good for clustering)
-            # Disabled for other stems (too slow, spectral_centroid_hz is sufficient)
-            # Note: Tom fundamental is typically 40-250Hz, using 40-500 range to capture fundamentals
-            if stem_type == 'toms':
-                detected_pitch = detect_pitch(audio, onset_time, sr, fmin=40.0, fmax=500.0)
+
+            # Pitch detection — gated by stem type and per-stem
+            # ``enable_pitch_detection`` config. The previous code
+            # hardcoded ``if stem_type == 'toms':`` which silently
+            # skipped snare/cymbals even when the user had enabled
+            # pitch detection (round 4 of the T2 follow-up, 2026-06-08).
+            # The helper centralizes the gating and the (fmin, fmax)
+            # bounds so they're easy to test and modify. See
+            # _should_detect_pitch() and the test in
+            # test_pitch_detection_gating.py for the contract.
+            pitch_bounds = _should_detect_pitch(stem_type, config)
+            if pitch_bounds is not None:
+                fmin, fmax = pitch_bounds
+                detected_pitch = detect_pitch(audio, onset_time, sr, fmin=fmin, fmax=fmax)
             else:
                 detected_pitch = None
             

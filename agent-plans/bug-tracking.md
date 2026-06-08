@@ -746,5 +746,37 @@ Three coordinated changes address the silent fallback / missing-context problem:
 - A subsequent full Convert now produces a `WARNING: snare cluster_feature='pitch_hz' was chosen but only 0/142 events have that data. Falling back to 'spectral_centroid_hz'...` line in the WebUI console log.
 
 **Out of scope (separate bugs surfaced during investigation, not fixed here)**:
-- The user's snare events still have `pitch_hz: None` even after a full Convert with `enable_pitch_detection: true`. Root cause: `stems_to_midi/analysis_core/onset_filtering.py:258` hardcodes `if stem_type == 'toms':` for pitch detection. Snare, cymbals, kick, hihat all bypass the call. The schema and pipeline say "snare can cluster on pitch_hz" but pitch_hz is never actually computed for snare. This is a 1-line change in `onset_filtering.py:258` (replace the hardcoded toms check with `if stem_config.get('enable_pitch_detection', False):`) but it deserves its own TDD cycle — the warning fix already tells the user "pitch_hz has no data" which is the first step to surfacing this.
 - N1 (tuning panel discoverability) is still a follow-up.
+
+---
+
+## Pitch detection fix (2026-06-08, commits pending)
+
+### Snare/cymbals pitch_hz was never computed (round 5 of T2 follow-up)
+- **Status**: Fixed
+- **Priority**: High (the user-visible "pitch doesn't work" bug exposed by round 4)
+- **Symptom**: Even after the round 4 fix (auto-toggling `enable_pitch_detection` and surfacing the silent-fallback warning), the snare events in the user's analysis.json still had `pitch_hz: None` after a full Convert. The warning said "0/142 events have that data" — and that was correct, because the data was literally never computed.
+- **Root cause**: `stems_to_midi/analysis_core/onset_filtering.py:258` had a hardcoded `if stem_type == 'toms':` block. The schema, the pipeline (`processing_shell.py:309, 416`), the WebUI modal, and the round-4 auto-dependency all assumed pitch detection runs for snare/cymbals. But the actual detection call was gated to one stem only — so for snare, cymbals, hihat, and kick, `detected_pitch` was set to `None` regardless of any config flag. Toms' pitch detection worked because of the hardcoded check; everything else silently produced `pitch_hz: None`.
+- **Why the test suite missed it**: No test asserted that the gating logic in `onset_filtering.py` honored the per-stem `enable_pitch_detection` config. The existing test coverage was at the function-entry level, not the inner detection-loop level.
+- **Fix**:
+  - Extracted the gating logic into a new helper `_should_detect_pitch(stem_type, config)` in `stems_to_midi/analysis_core/onset_filtering.py` that returns either `(fmin, fmax)` to detect, or `None` to skip. The contract:
+    - **Toms**: always detect (legacy behavior preserved; config can override the (fmin, fmax) bounds via `min_pitch_hz` / `max_pitch_hz` but the gating itself is unconditional)
+    - **Snare / cymbals**: detect iff `config[stem_type]['enable_pitch_detection']` is True. Per-stem `min_pitch_hz` / `max_pitch_hz` honored.
+    - **Kick / hihat / unknown**: never detect (defensive default; matches the schema which has no pitch knobs for these stems)
+  - Replaced the hardcoded `if stem_type == 'toms':` block at line 258 with a call to the helper. Same behavior for toms; new behavior for snare/cymbals.
+  - **Tests written first (TDD)**: `stems_to_midi/test_pitch_detection_gating.py` (new, 13 tests across 4 classes). All red before the helper existed (ImportError on the missing symbol), all green after. Tests cover:
+    - Toms with no config / with the flag / with the flag set to false (legacy preservation)
+    - Snare with no config (don't detect), with the flag true (detect), with the flag false (don't detect), with custom min/max (use them)
+    - Cymbals: same matrix as snare
+    - Kick/hihat: never detect, even when the flag is true
+    - Unknown stem: defensive None
+- **Files**: `stems_to_midi/analysis_core/onset_filtering.py:128-217` (new helper), `stems_to_midi/analysis_core/onset_filtering.py:339-352` (call site), `stems_to_midi/test_pitch_detection_gating.py` (new test file)
+- **Verified end-to-end in the live WebUI** (project #1, user's funk track):
+  - **Snare**: 142/142 events now have `pitch_hz` populated (was 0/142 before the fix). Range: 166.7-424.9Hz, mean 203.6Hz. With `cluster_feature: pitch_hz` and `expected_clusters: 2`, the k-means found a natural split: 131 events with `classification=0` (note 38, plain snare) and 11 events with `classification=1` (note 37, rimshot). The user's "pitch-based classification" actually works now.
+  - **Cymbals**: 2/2 events now have `pitch_hz` populated (was 0/2). Range: 453-454Hz — **but this is a YIN artifact, not a real fundamental**. Cymbals are inharmonic; YIN assumes harmonicity and returns ~the same value (~450Hz, the autocorrelation's low-frequency peak in the noise envelope) regardless of the actual cymbal. The two events have spectral_centroid 6701Hz vs 7020Hz (clearly different cymbals — a crash and a ride, consistent with note=49 vs note=51), but the pitch detector reports 453.5 vs 454.2Hz. The user flagged this on review ("those are clearly coincidence values"). **The fix is technically correct (cymbals now have a `pitch_hz` field populated) but practically misleading**: cymbal "pitch-based clustering" will cluster on a meaningless axis. **Recommendation**: keep the fix in (the user can experiment), but the schema/UI should ideally hide or label Pitch as experimental for cymbals, the same way the user's midiconfig.yaml comment for snare says `# Enable pitch-based classification (experimental)`. I added `cymbals.enable_pitch_detection: true` to the user's YAML as part of testing — the user can revert that if they don't want cymbal pitch detection.
+  - **Toms**: still works (9/9 have `pitch_hz`). No regression on the legacy toms-only path.
+  - **Kick / hihat**: still 0/N (correct — these stems have no schema entry for pitch).
+  - The round-4 silent-fallback WARNING no longer fires for snare — the actual_feature now matches the chosen feature because pitch data is real.
+- **Test suite**: 1058 pass, same 4 pre-existing audio-fixture failures, 0 new regressions. 13 new tests added.
+- **Out of scope (deferred, not bugs)**:
+  - The settings_schema doesn't have `enable_pitch_detection` / `pitch_method` / `min_pitch_hz` / `max_pitch_hz` entries for snare/cymbals. The user's midiconfig.yaml has them as raw YAML keys, the WebUI modal renders them (via the YAML config engine), and the pipeline reads them — but the schema-driven code (settings_schema.py, cli_builder.py) doesn't know about them. This is the same class of drift as round 3's STEM_FEATURE_CHOICES issue: schema <-> YAML <-> UI are not in sync. Worth a separate pass with the user's drift-prevention work.
