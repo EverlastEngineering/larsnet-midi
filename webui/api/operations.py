@@ -110,40 +110,7 @@ def run_stems_to_midi(
     return {'project_number': project_number, 'midi_created': True}
 
 
-def _load_project_config_for_project(project):
-    """Load the project's midiconfig.yaml (per-project first, then root)."""
-    import yaml
-    from project_manager import get_project_config
-    config_path = get_project_config(project["path"], "midiconfig.yaml")
-    if config_path is None:
-        # Fall back to empty config — let the pipeline's per-stem defaults apply
-        return {}
-    with open(config_path, 'r') as f:
-        return yaml.safe_load(f) or {}
-
-
-def _apply_cli_overrides_to_config(config, overrides):
-    """Apply dotted-YAML-path overrides to a config dict.
-
-    Mirrors webui.cli_builder.apply_cli_overrides but without requiring
-    the full schema SettingDefinition machinery. The route path
-    doesn't need schema validation — the values come from the JS,
-    which already validated against the schema when the form was
-    built.
-    """
-    for path, value in overrides.items():
-        if value is None:
-            continue
-        parts = path.split('.')
-        d = config
-        for part in parts[:-1]:
-            if part not in d or not isinstance(d[part], dict):
-                d[part] = {}
-            d = d[part]
-        d[parts[-1]] = value
-
-
-def run_render_video(project_number: int, fps: int = 60, width: int = 1920, height: int = 1080, 
+def run_render_video(project_number: int, fps: int = 60, width: int = 1920, height: int = 1080,
                      audio_source: str = 'original', include_audio: bool = None, fall_speed_multiplier: float = 1.0,
                      use_moderngl: bool = None):
     """

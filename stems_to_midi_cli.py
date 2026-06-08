@@ -417,3 +417,49 @@ if __name__ == '__main__':
         max_duration=args.maxtime,
         learning_mode=args.learn,
     )
+
+
+def _load_project_config_for_project(project):
+    """Load the project's midiconfig.yaml (per-project first, then root).
+
+    Lives in stems_to_midi_cli.py (not webui.api.operations) because
+    the /api/stems-to-midi work function loads this file via importlib
+    util.spec_from_file_location and accesses helpers through the
+    loaded module's namespace — see webui/api/operations.py:run_stems_to_midi.
+    A helper defined in webui.api.operations is invisible to that
+    importlib-loaded module, which crashed the WebUI Convert button
+    with 'module stems_to_midi_cli has no attribute _load_project_config_for_project'
+    on 2026-06-08.
+    """
+    config_path = get_project_config(project["path"], "midiconfig.yaml")
+    if config_path is None:
+        # Fall back to empty config — let the pipeline's per-stem defaults apply
+        return {}
+    import yaml
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f) or {}
+
+
+def _apply_cli_overrides_to_config(config, overrides):
+    """Apply dotted-YAML-path overrides to a config dict.
+
+    Mirrors webui.cli_builder.apply_cli_overrides but without requiring
+    the full schema SettingDefinition machinery. The route path
+    doesn't need schema validation — the values come from the JS,
+    which already validated against the schema when the form was
+    built.
+
+    Lives in stems_to_midi_cli.py for the same reason as
+    _load_project_config_for_project above — the importlib-loaded
+    module is the namespace the WebUI work function uses.
+    """
+    for path, value in overrides.items():
+        if value is None:
+            continue
+        parts = path.split('.')
+        d = config
+        for part in parts[:-1]:
+            if part not in d or not isinstance(d[part], dict):
+                d[part] = {}
+            d = d[part]
+        d[parts[-1]] = value

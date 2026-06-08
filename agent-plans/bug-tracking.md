@@ -648,3 +648,20 @@ User reported a TypeError toast: `stems_to_midi_for_project() got an unexpected 
   - Both "No midi directory" and "No MIDI file found" early returns now set `requires_full_pipeline=True`. The route maps that to 409.
   - **Test written first**: `webui/test_rebuild_api.py::TestRebuildMidiErrors::test_missing_analysis_returns_409_or_404` (extended to 404/409; the 409 is the documented contract).
 - **Files**: `stems_to_midi/rebuild_shell.py:125-141`
+
+### /api/stems-to-midi 500s with "module 'stems_to_midi_cli' has no attribute '_load_project_config_for_project'" (T2 follow-up round 2)
+- **Status**: Fixed
+- **Priority**: High (WebUI Convert button non-functional — every stems-to-midi click crashed)
+- **Description**: After T2 round 1, clicking the WebUI Convert button still 500'd. The route's work function `run_stems_to_midi` calls `stems_to_midi_cli._load_project_config_for_project(project)` and `stems_to_midi_cli._apply_cli_overrides_to_config(config, overrides)`, but those helpers were defined in `webui/api/operations.py` — not in the file that the importlib loader actually loaded (`stems_to_midi_cli.py`).
+- **Root Cause**: `webui/api/operations.py:87` does `importlib.util.spec_from_file_location("stems_to_midi_cli", stems_to_midi_path)` then `spec.loader.exec_module(stems_to_midi_cli)`. The resulting module only has attributes defined in the loaded file. The two helpers I added in T2 round 1 (commit 1b2a348) live in `webui/api/operations.py`, so the loaded module doesn't see them — every WebUI Convert click crashes with `AttributeError: module 'stems_to_midi_cli' has no attribute '_load_project_config_for_project'`.
+- **Why the test suite missed it**: My T2 round 1 tests mocked at the work-function level (or at the queue level) — they never invoked the importlib loader with the real work function, so the missing attribute never surfaced. The "Mock-at-the-job-queue hides real call-site bugs" memory entry describes the queue-mock gap; this bug is the same shape but for the importlib-loader attribute lookup.
+- **Fix**:
+  - Moved both helpers (`_load_project_config_for_project`, `_apply_cli_overrides_to_config`) into `stems_to_midi_cli.py`. The work function's `stems_to_midi_cli._load_project_config_for_project(...)` and `stems_to_midi_cli._apply_cli_overrides_to_config(...)` calls now resolve correctly because the helpers are on the loaded module's namespace.
+  - Removed the duplicate helper definitions from `webui/api/operations.py`.
+  - **Tests written first** (TDD):
+    - `webui/test_api.py::TestStemsToMidiImportlibContract::test_loaded_module_exposes_config_loader` — asserts the importlib-loaded module has `_load_project_config_for_project`. (Was: red with the exact `AttributeError` the user hit. Now: green.)
+    - `test_loaded_module_exposes_override_applier` — same shape for `_apply_cli_overrides_to_config`.
+    - `test_run_stems_to_midi_loads_config_via_loaded_module` — end-to-end through the loaded module: invokes both helpers via the importlib-loaded namespace, asserts empty config when no midiconfig.yaml, asserts override applier merges dotted paths correctly.
+- **Files**: `stems_to_midi_cli.py:421-465`, `webui/api/operations.py:60-110` (helpers removed)
+- **Verified end-to-end**: User's funk project #1, WebUI Convert button click, full pipeline runs to `Completed successfully!` with 367 + 2 + … MIDI events per stem. Old behavior: instant crash. New behavior: full conversion.
+- **Lesson for future code**: When a work function uses `importlib.util.spec_from_file_location(...)` to load a module, every helper it calls on the loaded module must be defined in the loaded file. Use direct `from x import y` for helpers that don't need the importlib indirection.

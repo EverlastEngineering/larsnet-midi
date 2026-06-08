@@ -942,6 +942,127 @@ def _routes_match(rule_str: str, js_path: str) -> bool:
     return bool(re.fullmatch(pattern, js_path))
 
 
+# ============================================================================
+# Stems-to-Midi importlib loader contract (T2 follow-up #2, 2026-06-08)
+# ============================================================================
+
+
+class TestStemsToMidiImportlibContract:
+    """T2 follow-up (round 2, 2026-06-08): the /api/stems-to-midi work
+    function uses importlib.util.spec_from_file_location to load
+    stems_to_midi_cli.py into a fresh module namespace, then calls
+    helpers on that loaded module. If the helpers live in
+    webui.api.operations instead of in the loaded file, the route
+    crashes with `module 'stems_to_midi_cli' has no attribute
+    '_load_project_config_for_project'` — which is exactly the 500
+    toast the user saw in the WebUI.
+
+    These tests mirror the production importlib load and assert the
+    loaded module exposes everything the work function needs.
+    """
+
+    def test_loaded_module_exposes_config_loader(self):
+        """The work function calls `stems_to_midi_cli._load_project_config_for_project(project)`.
+        That helper must be defined in stems_to_midi_cli.py so the
+        importlib-loaded module can see it."""
+        import importlib.util
+        from pathlib import Path
+
+        cli_path = Path(__file__).parent.parent / 'stems_to_midi_cli.py'
+        spec = importlib.util.spec_from_file_location('stems_to_midi_cli', cli_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        assert hasattr(module, '_load_project_config_for_project'), (
+            "stems_to_midi_cli.py is loaded via importlib in run_stems_to_midi "
+            "(webui/api/operations.py:87). The work function then calls "
+            "stems_to_midi_cli._load_project_config_for_project(project) — but "
+            "the helper is defined in webui.api.operations, not in the loaded "
+            "file, so the importlib-loaded module doesn't have it. Move the "
+            "helper into stems_to_midi_cli.py or call it via a normal import."
+        )
+
+    def test_loaded_module_exposes_override_applier(self):
+        """The work function calls `stems_to_midi_cli._apply_cli_overrides_to_config(config, overrides)`.
+        That helper must be defined in stems_to_midi_cli.py so the
+        importlib-loaded module can see it."""
+        import importlib.util
+        from pathlib import Path
+
+        cli_path = Path(__file__).parent.parent / 'stems_to_midi_cli.py'
+        spec = importlib.util.spec_from_file_location('stems_to_midi_cli', cli_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        assert hasattr(module, '_apply_cli_overrides_to_config'), (
+            "stems_to_midi_cli.py is loaded via importlib in run_stems_to_midi "
+            "(webui/api/operations.py:87). The work function then calls "
+            "stems_to_midi_cli._apply_cli_overrides_to_config(config, overrides) "
+            "— but the helper is defined in webui.api.operations, not in the "
+            "loaded file, so the importlib-loaded module doesn't have it. Move "
+            "the helper into stems_to_midi_cli.py or call it via a normal import."
+        )
+
+    def test_run_stems_to_midi_loads_config_via_loaded_module(self, tmp_path, monkeypatch):
+        """End-to-end via the loaded module: the helpers
+        _load_project_config_for_project and
+        _apply_cli_overrides_to_config must work when invoked
+        through the importlib-loaded stems_to_midi_cli module —
+        because that's the only access path run_stems_to_midi uses.
+
+        We invoke the helpers on the importlib-loaded module
+        directly (no run_stems_to_midi) so we don't have to fake
+        the entire audio pipeline. This still proves the fix:
+        the helpers must be reachable from the loaded module, with
+        the right behavior, and the override applier must merge
+        dotted paths into nested dicts.
+        """
+        import importlib.util
+        from pathlib import Path
+
+        cli_path = Path(__file__).parent.parent / 'stems_to_midi_cli.py'
+        spec = importlib.util.spec_from_file_location('stems_to_midi_cli', cli_path)
+        loaded = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(loaded)
+
+        project_dir = tmp_path / 'fake_project'
+        project_dir.mkdir(exist_ok=True)
+        # No midiconfig.yaml in project — should return empty config
+        # (we monkeypatch get_project_config below to return None)
+        fake_project = {
+            'number': 99,
+            'name': 'Test',
+            'path': project_dir,
+            'created': datetime.now(),
+            'metadata': {},
+        }
+
+        # Force the loaded module's get_project_config to return None
+        # so the helper takes the empty-config branch. (Without this
+        # it would fall back to the larsnet root's midiconfig.yaml.)
+        monkeypatch.setattr(loaded, 'get_project_config', lambda *a, **kw: None)
+
+        # Call the helper through the loaded module — the exact
+        # access pattern run_stems_to_midi uses.
+        config = loaded._load_project_config_for_project(fake_project)
+        assert config == {}, (
+            f"Expected empty config when no midiconfig.yaml, got: {config!r}. "
+            f"Check that _load_project_config_for_project is defined in "
+            f"stems_to_midi_cli.py and returns {{}} when get_project_config "
+            f"returns None."
+        )
+
+        # Now exercise the override applier — same access pattern.
+        loaded._apply_cli_overrides_to_config(
+            config,
+            {'kick.onset_threshold': 0.42, 'snare.onset_delta': 0.01},
+        )
+        assert config == {
+            'kick': {'onset_threshold': 0.42},
+            'snare': {'onset_delta': 0.01},
+        }, f"Override applier did not merge dotted paths: {config!r}"
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
 
