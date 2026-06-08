@@ -195,26 +195,61 @@ def detect_transient_peaks(
     """
     if len(times) == 0 or len(energy) == 0:
         return []
-    
+
     # Calculate frame spacing
     frame_duration = times[1] - times[0] if len(times) > 1 else 0.01
     min_spacing_frames = int(min_peak_spacing_ms / 1000.0 / frame_duration)
-    
+
     # Convert prominence from dB to linear scale
     # prominence_db means how many dB above local minima
     # For RMS energy, we need to convert this appropriately
     # Using a simpler approach: find peaks with minimum height
-    
+
     # Use scipy's find_peaks - much more robust
     # Convert threshold from dB to linear prominence
     # threshold_db is relative to local minimum
     # Prominence in linear scale = height * (1 - 10^(-threshold_db/20))
     min_prominence_linear = min_absolute_energy * (10 ** (threshold_db / 20) - 1)
-    
+
+    # ===========================================================================
+    # 2026-06-08 — REMOVED min_peak_spacing_ms from the detector
+    # ===========================================================================
+    # Old behavior: ``distance=min_spacing_frames`` made find_peaks greedily
+    # keep the highest peak in any N-ms window, dropping the rest. That
+    # was wrong: a flam is a loud first hit + a quieter second hit 30-50ms
+    # later; the detector dropped the quieter one. The user (project 2,
+    # Taylor Swift — The Fate of Ophelia, 2026-06-08) reported a missing
+    # snare hit around 0.592s; investigation showed the hit was in the
+    # energy envelope and in find_peaks's raw candidate list, then dropped
+    # because the next hit at 0.662s (58ms later, within the user's
+    # min_peak_spacing_ms=80) was louder.
+    #
+    # New behavior: distance=1 (a no-op for find_peaks — peaks must be at
+    # least 1 sample apart, which is always true). The detector is now
+    # exhaustive: every peak above the absolute energy floor and the
+    # prominence threshold is a candidate. The classifier
+    # (spectral_utils.should_keep_onset, called in
+    # analysis_core/onset_filtering.py) is the right place for
+    # real-vs-fake filtering — it has geomean_threshold, min_sustain_ms,
+    # min_strength_threshold knobs the user can tune.
+    #
+    # DO NOT RE-ENABLE the min_peak_spacing filter at the detector stage.
+    # If a "cleanly spaced MIDI" knob is wanted, add it as a POST-CLASSIFIER
+    # filter (run after should_keep_onset, not before) so the classifier
+    # has the chance to use the candidate's full feature set to decide
+    # real-vs-fake. Filed in agent-plans/bug-tracking.md.
+    #
+    # The min_peak_spacing_ms parameter is still read from config (so
+    # existing YAML files still validate and the schema is unchanged),
+    # but it's no longer used at the find_peaks call site. Future
+    # maintainers: this is a deliberate architectural choice. If you
+    # need to revive spacing filtering, do it AFTER the classifier,
+    # not before.
+    # ===========================================================================
     peak_indices, properties = find_peaks(
         energy,
         height=min_absolute_energy,  # Minimum absolute height
-        distance=min_spacing_frames,  # Minimum spacing between peaks
+        distance=1,  # NO-OP: see comment block above. Detector is exhaustive.
         prominence=max(min_prominence_linear, min_absolute_energy * 0.1),  # Prominence threshold
         wlen=None,  # Use full signal for prominence calculation
     )

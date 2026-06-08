@@ -816,3 +816,41 @@ Three coordinated changes address the silent fallback / missing-context problem:
   - **Tests**: end-to-end test that a stereo source produces identical times (or at most one-hop apart) in both arrays for events that appear in both.
 - **Why this is a separate pass**: Touches the detection pipeline (peak detection, merge) which has its own test surface area. Worth a dedicated TDD cycle with thorough verification on the user's funk project. Current priority: let the user playtest the pitch cluster feature with the toaster noise reduced (2 toasts vs 22).
 - **Estimated scope**: 2-4 hours. Plus thorough regression testing on the user's funk project + several other e-gmd dataset tracks.
+
+---
+
+## Missing snare hit (2026-06-08, user report — project 2 snare ~0.592s)
+
+### Detector's find_peaks drops the quieter hit in a flam
+- **Status**: Fixed (architectural change: detector is now exhaustive; classifier is the right place for real-vs-fake filtering)
+- **Priority**: High (the user's reported bug — a real snare hit at 0.592s was being silently dropped from the analysis)
+- **Symptom**: User reported "the snare item around 0.592 is missing" in project 2 (Taylor Swift — The Fate of Ophelia). They had tried every advanced-modal slider; nothing brought the hit back. It didn't show up in "show sensitive" either.
+- **Root cause (confirmed)**: `stems_to_midi/energy_detection_core.py:214-220` had `find_peaks(..., distance=min_spacing_frames)`. `find_peaks(distance=N)` greedily keeps the **highest** peak in any N-ms window and drops the rest. With the user's `snare.min_peak_spacing_ms: 80`, the 0.604s (quieter, amp 0.40) and 0.662s (louder, amp 0.47) peaks are 58ms apart — `find_peaks` keeps the louder 0.662 and drops the 0.604. The user can HEAR the 0.592 hit, but the detector stages it out before the classifier even sees it.
+  - The hit IS in the energy envelope (peak at 0.604s with energy 0.40 — way above the absolute floor 0.015).
+  - The hit IS in `find_peaks`'s raw candidate list before the distance filter is applied.
+  - The classifier (`spectral_utils.should_keep_onset`) would have rejected it if it was a false positive — but the classifier never got a chance.
+- **Why the test suite missed it**: No test asserted that two close-together peaks both reach the classifier. The detector's spacing filter was an implementation detail that nobody realized was eating real hits.
+- **Fix**:
+  - Changed `distance=min_spacing_frames` to `distance=1` (a no-op for find_peaks — peaks must be at least 1 sample apart, which is always true). The detector is now **exhaustive**: every peak above the absolute energy floor and prominence threshold is a candidate. The classifier (geomean / sustain / strength) decides real-vs-fake.
+  - **Strong inline comment** in `energy_detection_core.py:200-248` explaining the architectural change and warning future maintainers not to re-enable the spacing filter at the detector stage. If a "cleanly spaced MIDI" knob is wanted, it should be added as a post-classifier filter (run after `should_keep_onset`, not before) so the classifier has the chance to use each candidate's full feature set to decide real-vs-fake. Filed as TODO below.
+  - The `min_peak_spacing_ms` parameter is still read from config (so existing YAML files still validate and the schema is unchanged), but it's no longer used at the find_peaks call site.
+  - **Tests written first (TDD)** in `stems_to_midi/test_detector_exhaustive.py` (new, 4 tests):
+    - `test_per_channel_detector_finds_both_flam_hits` — directly tests `detect_transient_peaks` (the function I fixed), 60ms-spaced flam, both channels. **Was red, now green.**
+    - `test_synthetic_flam_stereo_detector` — end-to-end through `detect_onsets_energy_based`, asserts the loud hit at minimum. Green.
+    - `test_onset_strengths_match_onset_count` — sanity check that the detector returns the right shape of data. Green.
+    - `test_user_real_audio_finds_missing_hit` — verifies against the user's actual project 2 snare. **Passed once on 2026-06-08 (5 onsets with 0.5805 in the list, was 4 before fix). User accidentally deleted the project later that day; test now skips with a reason explaining how to re-enable (re-run Separate + Convert on project 2).**
+- **Files**: `stems_to_midi/energy_detection_core.py:200-255` (the find_peaks call + the strong comment block), `stems_to_midi/test_detector_exhaustive.py` (new test file)
+- **Verified end-to-end in the live WebUI / on real audio** (project 2 snare, first 2 seconds):
+  - Before fix: 4 detected onsets at 0.3367, 0.6618, 0.7430, 0.8359. The 0.5805s hit (the user's reported missing hit) is absent.
+  - After fix: 5 detected onsets at 0.3367, **0.5805**, 0.6618, 0.7430, 0.8359. The 0.5805s hit is now present.
+- **Test suite**: 1066 pass (was 1063, +3 new), 1 skipped (the real-audio test that needs the user to re-run the pipeline), same 4 pre-existing audio-fixture failures, 0 regressions.
+
+### TODO (post-classifier spacing filter, not yet implemented)
+- **Status**: Filed, not yet started
+- **Priority**: Low (the user's reported bug is fixed; this is for users who want a "cleanly spaced MIDI" knob)
+- **Description**: The fix in this commit removed the detector's `min_peak_spacing_ms` filter. Some users may want their MIDI events to be cleanly spaced (e.g. 16th-note minimum, no flam collisions) — the opposite of what the user here wanted, but a legitimate use case. If we add this back, it MUST be a post-classifier filter (run after `should_keep_onset`, not before), so the classifier has the chance to use each candidate's full feature set to decide real-vs-fake. Filing here so the architectural choice is remembered; not in scope for this commit.
+- **Plan** (not yet implemented):
+  - Add a `*_post_classifier_min_spacing_ms` setting per stem (optional, default off).
+  - In `analysis_core/onset_filtering.py`, after `should_keep_onset`, if the setting is set, drop the lower-energy of any two KEPT events that are within the spacing window.
+  - The setting would be opt-in (default 0 = no post-classifier spacing) so the detector's exhaustive behavior is preserved for users who don't opt in.
+- **Estimated scope**: 1-2 hours. Schema addition (1 field per stem = 5 fields), the post-classifier filter, regression tests.
