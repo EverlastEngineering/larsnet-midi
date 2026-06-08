@@ -715,6 +715,15 @@ def _run_sensitive_detection(
 
     sensitive_onset_data = filter_result.get('all_onset_data', [])
 
+    # Stamp the energy method on every sensitive-detected onset so the
+    # WebUI waveform viewer can tell energy candidates apart from
+    # spectral candidates (see the parallel stamp in
+    # process_stem_to_midi below). Without this, the sensitive
+    # background layer would not carry a method key, and downstream
+    # consumers could not key on it.
+    for onset_d in sensitive_onset_data:
+        onset_d['method'] = energy_method
+
     # Attach stereo features for any stereo stem (bug B: kick included)
     if is_stereo and len(sensitive_onset_data) > 0:
         sens_times = np.array([d['time'] for d in sensitive_onset_data])
@@ -1161,6 +1170,20 @@ def process_stem_to_midi(
         spectral_data = filter_result['filtered_spectral'] if spectral_config.get('has_spectral_data') else None
         all_onset_data = filter_result['all_onset_data']
         filtered_onset_data = filter_result.get('filtered_onset_data', [])
+
+        # Stamp the detection method on every energy-detected onset so
+        # the WebUI waveform viewer can color energy vs spectral events
+        # differently. filter_onsets_by_spectral() doesn't know which
+        # underlying energy method was used (rms/peak_hold/spectral_flux);
+        # we read it from per-stem config here and attach it to each
+        # onset dict. The serializer in midi.py carries it through to
+        # the sidecar JSON. Without this stamp, every energy event
+        # would render as "method-unknown" on the canvas and the
+        # spectral overlay could not tell them apart from spectral
+        # survivors (which carry method='spectral' from
+        # _build_events_configured).
+        for onset_d in all_onset_data:
+            onset_d['method'] = energy_method
 
         # Attach stereo features (pan_confidence, stereo_width) for any
         # stereo stem (including kick — the bug B spec says kick should

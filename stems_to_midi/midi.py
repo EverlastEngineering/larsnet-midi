@@ -181,7 +181,14 @@ def _serialize_onset_events(
     # JSON (with null when missing). Bug B: pan_confidence/pitch_hz/
     # stereo_width are computed in the pipeline and must surface in the
     # sidecar even when the value happens to be 0.0 or None.
-    ALWAYS_PRESENT_FIELDS = ('pan_confidence', 'stereo_width', 'pitch_hz')
+    # ``method`` is also always-present: it carries 'rms' / 'peak_hold' /
+    # 'spectral_flux' (energy-detected) or 'spectral' (spectral-detected
+    # survivor in method='both' or full method='spectral' projects). The
+    # WebUI waveform viewer reads this key to color spectral survivors
+    # magenta for the A/B-comparison overlay; the key MUST be present on
+    # every event (with null when the pipeline didn't stamp it) so the
+    # viewer doesn't have to feature-detect the field per record.
+    ALWAYS_PRESENT_FIELDS = ('pan_confidence', 'stereo_width', 'pitch_hz', 'method')
 
     # Fields that are present-or-absent (older analyses may lack them).
     OPTIONAL_PHASE2_FIELDS = (

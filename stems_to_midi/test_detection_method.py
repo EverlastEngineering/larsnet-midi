@@ -307,13 +307,18 @@ class TestDetectionMethodBoth:
         method='spectral' so the WebUI can color them differently."""
         both = _run_with_method(wav_path, base_config, drum_mapping, 'both')
         configured = both['events_configured']
+        # The allowed ``method`` values on a configured event are:
+        #   - 'spectral'  : spectral-transient detector survivor
+        #   - 'rms' / 'peak_hold' / 'spectral_flux' : energy-detected,
+        #     per per-stem config (webui-rendering, 2026-06-08)
+        #   - None / missing : legacy sidecar that hasn't been
+        #     re-serialized since the method stamp was added
+        energy_method_values = ('rms', 'peak_hold', 'spectral_flux', 'energy')
         for event in configured:
-            # Either it's an energy event (no method='spectral' marker,
-            # or explicit method='energy') or it's a spectral survivor
-            # (method='spectral').
             method = event.get('method')
-            assert method in ('energy', 'spectral', None), (
-                f"unexpected method={method!r} on event: {event}"
+            assert method in energy_method_values + ('spectral', None), (
+                f"unexpected method={method!r} on event: {event}. "
+                f"Allowed: {energy_method_values + ('spectral', None)}."
             )
 
     def test_both_count_is_at_least_energy_count(
