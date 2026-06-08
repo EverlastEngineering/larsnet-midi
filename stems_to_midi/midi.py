@@ -433,7 +433,7 @@ def load_analysis_sidecar(midi_path: Union[str, Path]) -> Optional[Dict]:
     return data
 
 
-def _validate_events_subset(data: Dict, time_tolerance_sec: float = 0.001) -> List[str]:
+def _validate_events_subset(data: Dict, time_tolerance_sec: float = 0.012) -> List[str]:
     """
     Check that every event in events_configured has a matching time
     (within ``time_tolerance_sec``) in events_sensitive for the same stem.
@@ -445,6 +445,31 @@ def _validate_events_subset(data: Dict, time_tolerance_sec: float = 0.001) -> Li
     hand or written by a buggy code path. Bug C — surface the
     inconsistency as a warning the WebUI can toast, don't silently
     fix it.
+
+    Tolerance rationale (round 2 of bug C, 2026-06-08):
+        The configured and sensitive passes are two separate calls to
+        ``detect_onsets_energy_based()`` with different thresholds. For
+        stereo stems, the L/R peak merge
+        (``stems_to_midi/energy_detection_core.py:507``) picks
+        ``min(left_peak_time, right_peak_time)``. The two passes can
+        find different sets of L/R peaks (sensitive catches quieter
+        hits the configured pass missed), so the merged onset time
+        can land on a different hop for the same physical hit.
+
+        At hop_length=512 / sr=44100, the hop duration is 11.61ms.
+        So the maximum legitimate gap between the two arrays is
+        ~12ms. The old 1ms tolerance was tighter than the actual
+        quantization step and produced false-positive toasters for
+        every stereo Convert run.
+
+        The proper architectural fix is to make the merge
+        deterministic (TODO in agent-plans/bug-tracking.md) so
+        events_configured is a true subset of events_sensitive by
+        time. Until that lands, this wider tolerance matches the
+        pipeline's actual behavior. Real data-integrity issues
+        (hand-edited analysis.json, events written to the wrong
+        array) still trigger warnings — those gaps are at least
+        hundreds of ms.
 
     Args:
         data: Parsed analysis.json dict (v3 format).

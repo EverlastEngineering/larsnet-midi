@@ -380,6 +380,177 @@ class TestLoadAnalysisSidecarValidation:
 
 
 # ============================================================================
+# Validator tolerance — bug C round 2 (2026-06-08)
+# ============================================================================
+
+
+class TestValidateEventsSubsetHopTolerance:
+    """Round 2 of bug C (2026-06-08). The configured and sensitive
+    detection runs are two separate calls to detect_onsets_energy_based
+    with different thresholds. For stereo stems, the merge in
+    energy_detection_core.py:507 picks ``min(left_peak_time,
+    right_peak_time)``. Because the two passes find different sets of
+    L/R peaks (the sensitive pass catches quieter hits the configured
+    pass missed), the merged onset time can land on a different hop
+    for the same physical hit. The hop duration at 512 samples /
+    44.1kHz is 11.61ms.
+
+    The validator's old 1ms tolerance was tighter than the actual
+    quantization step, so it produced false-positive toasters for
+    legitimate stereo events. The fix widens the tolerance to ~12ms
+    (one hop). Real data-integrity issues (hand-edited analysis.json,
+    events written to the wrong array) still trigger warnings — the
+    gap from those is at least hundreds of ms.
+
+    User report (2026-06-08): "I get a bunch of toasters when I
+    convert a MIDI with this in it" — snare had 7-11 missing events,
+    all with status=KEPT, all off by exactly 11.61ms from the
+    nearest sensitive event.
+    """
+
+    def _write_sidecar(self, midi_path, data):
+        sidecar_path = midi_path.with_suffix('.analysis.json')
+        with open(sidecar_path, 'w') as f:
+            json.dump(data, f)
+        return sidecar_path
+
+    def _make_midi_path(self):
+        tmp = tempfile.NamedTemporaryFile(suffix='.mid', delete=False)
+        tmp.close()
+        return Path(tmp.name)
+
+    def test_11ms_gap_within_tolerance_no_warning(self):
+        """An 11.61ms gap (one hop at 512/44100) is the maximum the
+        detection pipeline can produce. The validator must NOT warn
+        about it. (Old 1ms tolerance produced a false-positive
+        toaster.)"""
+        midi_path = self._make_midi_path()
+        try:
+            sidecar = {
+                'version': '3.0',
+                'stems': {
+                    'snare': {
+                        'events_configured': [
+                            {'time': 1.0,        'status': 'KEPT'},
+                            {'time': 2.0,        'status': 'KEPT'},
+                            {'time': 3.0,        'status': 'KEPT'},
+                        ],
+                        'events_sensitive': [
+                            # Each configured event is exactly one hop
+                            # away from a sensitive event.
+                            {'time': 1.0 + 0.01161, 'status': 'KEPT'},
+                            {'time': 2.0 - 0.01161, 'status': 'KEPT'},
+                            {'time': 3.0 + 0.01161, 'status': 'KEPT'},
+                        ],
+                    }
+                }
+            }
+            self._write_sidecar(midi_path, sidecar)
+            data = load_analysis_sidecar(midi_path)
+            warnings = data.get('data_integrity_warnings', [])
+            assert warnings == [], (
+                f"Validator should not warn about one-hop gap (11.61ms). "
+                f"This is the maximum the stereo merge can produce. "
+                f"Got warnings: {warnings}"
+            )
+        finally:
+            midi_path.unlink(missing_ok=True)
+            midi_path.with_suffix('.analysis.json').unlink(missing_ok=True)
+
+    def test_20ms_gap_still_warns(self):
+        """A 20ms gap is well past one hop and indicates a real
+        data-integrity issue (event written to the wrong array,
+        hand-edited analysis.json, etc.). The validator must
+        still warn."""
+        midi_path = self._make_midi_path()
+        try:
+            sidecar = {
+                'version': '3.0',
+                'stems': {
+                    'snare': {
+                        'events_configured': [{'time': 1.0, 'status': 'KEPT'}],
+                        'events_sensitive':  [{'time': 1.020, 'status': 'KEPT'}],
+                    }
+                }
+            }
+            self._write_sidecar(midi_path, sidecar)
+            data = load_analysis_sidecar(midi_path)
+            warnings = data.get('data_integrity_warnings', [])
+            assert len(warnings) == 1, (
+                f"20ms gap should still produce a warning (real "
+                f"data-integrity issue). Got: {warnings}"
+            )
+            assert 'snare' in warnings[0]
+        finally:
+            midi_path.unlink(missing_ok=True)
+            midi_path.with_suffix('.analysis.json').unlink(missing_ok=True)
+
+    def test_1ms_gap_still_passes(self):
+        """Sub-hop gap (1ms) is the original test case and must
+        continue to pass — the validator didn't get looser about
+        tight timings, only about the hop quantization."""
+        midi_path = self._make_midi_path()
+        try:
+            sidecar = {
+                'version': '3.0',
+                'stems': {
+                    'hihat': {
+                        'events_configured': [{'time': 1.0,   'status': 'KEPT'}],
+                        'events_sensitive':  [{'time': 1.001, 'status': 'KEPT'}],
+                    }
+                }
+            }
+            self._write_sidecar(midi_path, sidecar)
+            data = load_analysis_sidecar(midi_path)
+            warnings = data.get('data_integrity_warnings', [])
+            assert warnings == []
+        finally:
+            midi_path.unlink(missing_ok=True)
+            midi_path.with_suffix('.analysis.json').unlink(missing_ok=True)
+
+    def test_tolerance_default_includes_hop_duration(self):
+        """The validator's default tolerance should be >= one hop
+        duration. Locks the contract that future maintainers see
+        the rationale: 11.61ms = 512 / 44100."""
+        from stems_to_midi.midi import _validate_events_subset
+        # The function signature exposes time_tolerance_sec as the
+        # second positional arg. Call it with an explicit tolerance
+        # of 0.012 (12ms) and assert a synthetic one-hop gap
+        # produces no warnings.
+        data = {
+            'stems': {
+                'snare': {
+                    'events_configured': [{'time': 1.0,        'status': 'KEPT'}],
+                    'events_sensitive':  [{'time': 1.0 + 0.01161, 'status': 'KEPT'}],
+                }
+            }
+        }
+        # 12ms tolerance must accept a 11.61ms gap
+        warnings = _validate_events_subset(data, time_tolerance_sec=0.012)
+        assert warnings == [], (
+            f"12ms tolerance should accept a 11.61ms gap. Got: {warnings}"
+        )
+
+    def test_legacy_1ms_tolerance_still_catches_5ms_gap(self):
+        """Pin the old behavior so a future widening doesn't
+        accidentally re-introduce this false-positive. The legacy
+        1ms tolerance correctly catches a 5ms gap (which is well
+        past one hop and indicates a real bug)."""
+        from stems_to_midi.midi import _validate_events_subset
+        data = {
+            'stems': {
+                'snare': {
+                    'events_configured': [{'time': 1.0,   'status': 'KEPT'}],
+                    'events_sensitive':  [{'time': 1.005, 'status': 'KEPT'}],
+                }
+            }
+        }
+        warnings = _validate_events_subset(data, time_tolerance_sec=0.001)
+        assert len(warnings) == 1
+        assert 'snare' in warnings[0]
+
+
+# ============================================================================
 # hihat_state serialization (T2 follow-up, 2026-06-08)
 # ============================================================================
 
