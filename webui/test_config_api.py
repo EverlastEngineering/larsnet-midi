@@ -241,3 +241,99 @@ kick:
         content = config_file.read_text()
         assert '# Sample rate' in content
         assert '# MIDI note' in content
+
+
+class TestPitchDependencyApiContract:
+    """T2 follow-up round 4 (2026-06-08): when the JS auto-toggles
+    ``enable_pitch_detection=true`` into the same save payload as
+    ``cluster_feature=pitch_hz``, the server must accept the
+    multi-update payload atomically and persist both changes.
+
+    These tests mock ``project_manager.get_project_by_number`` to
+    point at a tmp_path project so they don't mutate the user's
+    real midiconfig.yaml.
+    """
+
+    @pytest.fixture
+    def tmp_project(self, tmp_path):
+        """Create a tmp project dir with a snare section that has
+        enable_pitch_detection: false and cluster_feature: stereo_width
+        — matching the user's real funk project state when the bug
+        was reported."""
+        import yaml
+        from unittest.mock import patch
+        project_dir = tmp_path / '1 - test_pitch_project'
+        project_dir.mkdir()
+        config_path = project_dir / 'midiconfig.yaml'
+        config_path.write_text(yaml.safe_dump({
+            'snare': {
+                'midi_note': 38,
+                'enable_pitch_detection': False,
+                'cluster_feature': 'stereo_width',
+            },
+        }))
+
+        fake_project = {
+            'number': 1,
+            'name': 'test_pitch_project',
+            'path': project_dir,
+        }
+
+        # yaml_config_core.get_config_engine does
+        #   from project_manager import get_project_by_number, USER_FILES_DIR
+        # Patch at the source module so both get_config_engine
+        # and any direct callers see the fake.
+        p = patch('project_manager.get_project_by_number',
+                  return_value=fake_project)
+        p.start()
+        yield project_dir, config_path
+        p.stop()
+
+    def test_save_accepts_simultaneous_pitch_hz_and_enable_true(
+        self, client, tmp_project,
+    ):
+        """JS pre-bundles both updates into one payload. The server
+        must apply both atomically and persist them to the YAML."""
+        project_dir, config_path = tmp_project
+        response = client.post(
+            '/api/config/1/midiconfig',
+            json={'updates': [
+                {'path': ['snare', 'cluster_feature'], 'value': 'pitch_hz'},
+                {'path': ['snare', 'enable_pitch_detection'], 'value': True},
+            ]},
+        )
+        assert response.status_code == 200, response.data
+        data = json.loads(response.data)
+        assert data['success'] is True
+        assert data['updated_count'] == 2
+
+        # Reload the YAML and verify both fields are persisted
+        import yaml
+        with open(config_path) as f:
+            saved = yaml.safe_load(f)
+        assert saved['snare']['cluster_feature'] == 'pitch_hz'
+        assert saved['snare']['enable_pitch_detection'] is True
+
+    def test_save_with_only_pitch_hz_does_not_toggle_detection(
+        self, client, tmp_project,
+    ):
+        """Sanity check: the SERVER does not auto-toggle. The JS does
+        that. If only ``cluster_feature`` is in the payload, the
+        server must save it without touching ``enable_pitch_detection``.
+        This is the contract that lets the JS do the auto-toggle
+        safely — the server is dumb, the JS is smart."""
+        project_dir, config_path = tmp_project
+        response = client.post(
+            '/api/config/1/midiconfig',
+            json={'updates': [
+                {'path': ['snare', 'cluster_feature'], 'value': 'pitch_hz'},
+            ]},
+        )
+        assert response.status_code == 200, response.data
+
+        import yaml
+        with open(config_path) as f:
+            saved = yaml.safe_load(f)
+        assert saved['snare']['cluster_feature'] == 'pitch_hz'
+        # enable_pitch_detection was false in the fixture, must stay false
+        assert saved['snare']['enable_pitch_detection'] is False

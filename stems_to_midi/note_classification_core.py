@@ -129,7 +129,7 @@ def _resolve_cluster_feature(
     events: List[Dict],
     stem_type: str,
     config: Dict,
-) -> Tuple[np.ndarray, List[int]]:
+) -> Tuple[np.ndarray, List[int], Optional[str]]:
     """
     Resolve which feature to cluster on and extract its values.
 
@@ -138,13 +138,28 @@ def _resolve_cluster_feature(
     sufficient data. When a specific feature is named, tries it first
     then falls back to the priority chain.
 
+    The 3rd return element (``actual_feature``) tells the caller which
+    feature was *actually* used — which may differ from the user's
+    explicit choice if their choice has no data. This makes the
+    silent fallback observable: callers can log a warning when
+    ``actual_feature != chosen``, which the user sees in the WebUI
+    console log.
+
+    User report (2026-06-08): picking "Pitch" in the snare Cluster
+    By dropdown did nothing visible. Root cause: pitch detection was
+    disabled, so no ``pitch_hz`` data existed; the resolver fell
+    back to ``stereo_width`` silently. Same result as the default —
+    looked like "doesn't work."
+
     Args:
         events: Event dicts with feature data.
         stem_type: Stem type for priority lookup.
         config: Full config dict.
 
     Returns:
-        Tuple of (values array, valid indices list).
+        Tuple of (values array, valid indices list, actual_feature).
+        ``actual_feature`` is the feature whose values are in
+        ``values``, or None if no feature had any data.
     """
     stem_config = config.get(stem_type, {})
     chosen = stem_config.get('cluster_feature', 'auto')
@@ -162,9 +177,69 @@ def _resolve_cluster_feature(
             events, feat, allow_zero=allow_zero,
         )
         if len(values) > 0:
-            return values, valid_indices
+            return values, valid_indices, feat
 
-    return np.array([]), []
+    return np.array([]), [], None
+
+
+def _warn_on_cluster_feature_fallback(
+    stem_type: str,
+    config: Dict,
+    actual_feature: Optional[str],
+    events: List[Dict],
+) -> None:
+    """
+    Log a warning when the resolver had to fall back from the user's
+    explicit cluster_feature choice because their choice had no data.
+
+    User report (2026-06-08): picking "Pitch" in the snare Cluster
+    By dropdown did nothing visible. Root cause: pitch detection was
+    disabled, no ``pitch_hz`` data existed, the resolver fell back
+    to ``stereo_width`` silently. This warning makes the fallback
+    visible in the WebUI console log so the user can see why their
+    selection didn't take effect.
+
+    Args:
+        stem_type: Stem type (snare, toms, cymbals, etc.).
+        config: Full config dict — used to read the user's chosen
+            cluster feature.
+        actual_feature: The feature the resolver actually used (may
+            be None if no feature had data at all).
+        events: Event list — used to count how many events had the
+            chosen feature (informational, so the user knows the
+            scope of the problem).
+    """
+    chosen = config.get(stem_type, {}).get('cluster_feature', 'auto')
+    if chosen == 'auto' or chosen == actual_feature:
+        # No explicit choice, or no fallback — nothing to warn about.
+        return
+
+    if actual_feature is None:
+        # Resolver found no feature with any data at all. Different
+        # problem (no detection ran); the classification functions
+        # already default every event to index 0. Skip the warning
+        # to keep this message focused on the fallback case.
+        return
+
+    # Count events that had the chosen feature, so the user can
+    # see "0 of 140 events had pitch_hz" rather than just "fell back".
+    n_chosen = sum(
+        1 for e in events if e.get(chosen) is not None
+    )
+
+    stem_label = {
+        'snare': 'snare',
+        'toms': 'tom',
+        'cymbals': 'cymbal',
+    }.get(stem_type, stem_type)
+
+    print(
+        f"WARNING: {stem_label} cluster_feature='{chosen}' was chosen "
+        f"but only {n_chosen}/{len(events)} events have that data. "
+        f"Falling back to '{actual_feature}'. "
+        f"For pitch: enable {stem_type}.enable_pitch_detection AND "
+        f"run a full Convert (rebuild alone does not re-detect features)."
+    )
 
 
 def _cluster_values(
@@ -282,8 +357,11 @@ def classify_tom_notes(
             event['classification'] = 0
         return events
 
-    values, valid_indices = _resolve_cluster_feature(
+    values, valid_indices, actual_feature = _resolve_cluster_feature(
         events, 'toms', config,
+    )
+    _warn_on_cluster_feature_fallback(
+        'toms', config, actual_feature, events,
     )
 
     if len(values) == 0:
@@ -349,8 +427,11 @@ def classify_cymbal_notes(
             event['classification'] = 0
         return events
 
-    values, valid_indices = _resolve_cluster_feature(
+    values, valid_indices, actual_feature = _resolve_cluster_feature(
         events, 'cymbals', config,
+    )
+    _warn_on_cluster_feature_fallback(
+        'cymbals', config, actual_feature, events,
     )
 
     if len(values) == 0:
@@ -431,8 +512,11 @@ def classify_snare_notes(
             event['classification'] = 0
         return events
 
-    values, valid_indices = _resolve_cluster_feature(
+    values, valid_indices, actual_feature = _resolve_cluster_feature(
         events, 'snare', config,
+    )
+    _warn_on_cluster_feature_fallback(
+        'snare', config, actual_feature, events,
     )
 
     if len(values) == 0:

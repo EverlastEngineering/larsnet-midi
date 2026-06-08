@@ -613,7 +613,7 @@ class TestResolveClusterFeature:
             _make_event(stereo_width=0.1, spectral_centroid_hz=300.0),
             _make_event(stereo_width=0.4, spectral_centroid_hz=5000.0),
         ]
-        values, indices = _resolve_cluster_feature(events, 'snare', {})
+        values, indices, actual_feature = _resolve_cluster_feature(events, 'snare', {})
         assert len(values) == 2
         # Should be stereo_width values
         assert np.isclose(values[0], 0.1)
@@ -625,7 +625,7 @@ class TestResolveClusterFeature:
             _make_event(spectral_centroid_hz=200.0, stereo_width=0.1),
             _make_event(spectral_centroid_hz=800.0, stereo_width=0.3),
         ]
-        values, indices = _resolve_cluster_feature(events, 'toms', {})
+        values, indices, actual_feature = _resolve_cluster_feature(events, 'toms', {})
         assert len(values) == 2
         assert np.isclose(values[0], 200.0)
         assert np.isclose(values[1], 800.0)
@@ -637,7 +637,7 @@ class TestResolveClusterFeature:
             _make_event(stereo_width=0.4, spectral_centroid_hz=5000.0),
         ]
         config = {'toms': {'cluster_feature': 'stereo_width'}}
-        values, indices = _resolve_cluster_feature(events, 'toms', config)
+        values, indices, actual_feature = _resolve_cluster_feature(events, 'toms', config)
         # Should use stereo_width despite toms default being centroid
         assert np.isclose(values[0], 0.1)
         assert np.isclose(values[1], 0.4)
@@ -650,14 +650,14 @@ class TestResolveClusterFeature:
         ]
         # Request stereo_width but events don't have it → falls back to centroid
         config = {'snare': {'cluster_feature': 'stereo_width'}}
-        values, indices = _resolve_cluster_feature(events, 'snare', config)
+        values, indices, actual_feature = _resolve_cluster_feature(events, 'snare', config)
         assert len(values) == 2
         assert np.isclose(values[0], 300.0)
 
     def test_auto_with_no_data_returns_empty(self):
         """No feature data available → empty arrays."""
         events = [_make_event(), _make_event()]
-        values, indices = _resolve_cluster_feature(events, 'snare', {})
+        values, indices, actual_feature = _resolve_cluster_feature(events, 'snare', {})
         assert len(values) == 0
         assert len(indices) == 0
 
@@ -667,7 +667,7 @@ class TestResolveClusterFeature:
             _make_event(stereo_width=0.0),
             _make_event(stereo_width=0.3),
         ]
-        values, indices = _resolve_cluster_feature(events, 'snare', {})
+        values, indices, actual_feature = _resolve_cluster_feature(events, 'snare', {})
         assert len(values) == 2
         assert np.isclose(values[0], 0.0)
 
@@ -678,7 +678,7 @@ class TestResolveClusterFeature:
             _make_event(stereo_width=0.1),
             _make_event(stereo_width=0.5),
         ]
-        values, indices = _resolve_cluster_feature(events, 'cymbals', {})
+        values, indices, actual_feature = _resolve_cluster_feature(events, 'cymbals', {})
         assert len(values) == 2
         # Fell back to stereo_width since centroid missing
         assert np.isclose(values[0], 0.1)

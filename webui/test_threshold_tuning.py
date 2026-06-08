@@ -450,3 +450,147 @@ class TestCombinedFilterPipeline:
         apply_reverb_continuation_filter_py(events, attack_threshold=0.4)
         assert events[0]['status'] == 'KEPT'
         assert events[1]['status'] == 'REVERB_CONTINUATION'
+
+
+# ─── STEM_FEATURE_CHOICES ↔ schema drift prevention ─────────────────────────
+
+
+class TestStemFeatureChoicesSchemaParity:
+    """T2 follow-up (round 3, 2026-06-08): the JS ``STEM_FEATURE_CHOICES``
+    registry (in webui/static/js/threshold-tuning.js) and the Python
+    ``webui/settings_schema.py`` ``*_cluster_feature.allowed_values``
+    were drifting — the user reported that the WebUI "Cluster By"
+    dropdown didn't show "Pitch" for snare or cymbals, even though
+    the schema and the Python pipeline both support ``pitch_hz`` for
+    those stems.
+
+    Root cause: nothing linked the two registries. Adding a new value
+    to the schema silently left the JS dropdown stale, with no test
+    failure. The JS list is a UI surface for a schema contract; it
+    must be at least a superset of the schema's allowed values so
+    the user can pick every valid option.
+
+    These tests lock the JS list to the schema list per stem. Adding
+    a new value to the schema (e.g. ``duration_sec`` for snare) will
+    require the JS to expose it too, or this test fails. Future drift
+    prevention (auto-generating the JS from the schema) is a separate
+    task; for now this test is the tripwire.
+    """
+
+    @pytest.fixture
+    def js_content(self):
+        """The full text of webui/static/js/threshold-tuning.js."""
+        return (Path(__file__).parent / 'static' / 'js' / 'threshold-tuning.js').read_text()
+
+    @pytest.fixture
+    def stem_feature_choices(self, js_content):
+        """Parse STEM_FEATURE_CHOICES out of the JS file.
+
+        The registry is declared as:
+
+            const STEM_FEATURE_CHOICES = {
+                snare: [
+                    { value: 'auto', label: 'Auto' },
+                    ...
+                ],
+                ...
+            };
+
+        We use a small AST-shaped parser (regex over the literal text)
+        because the file is a static asset — we don't have a JS
+        runtime in pytest. This is the same approach the other
+        test_threshold_tuning.py tests use to assert JS structure.
+        """
+        import re
+        # Grab the top-level STEM_FEATURE_CHOICES object literal
+        match = re.search(
+            r'const\s+STEM_FEATURE_CHOICES\s*=\s*\{(.+?)\n\};',
+            js_content,
+            re.DOTALL,
+        )
+        assert match, (
+            "Could not locate STEM_FEATURE_CHOICES in threshold-tuning.js. "
+            "Has the registry been renamed or removed?"
+        )
+        body = match.group(1)
+        # Each stem block: stem_name: [ ... items ... ],
+        result = {}
+        for stem_match in re.finditer(
+            r"(\w+):\s*\[\s*(?P<items>(?:\s*\{[^}]+\},?)+)\s*\]",
+            body,
+        ):
+            stem = stem_match.group(1)
+            items_text = stem_match.group('items')
+            values = re.findall(r"value:\s*'([^']+)'", items_text)
+            result[stem] = values
+        return result
+
+    @pytest.fixture
+    def schema_cluster_features(self):
+        """Map stem_type → allowed cluster_feature values from the
+        settings schema. Only stems that have a *-cluster-feature
+        setting are included (kick/hihat are intentionally absent)."""
+        from webui.settings_schema import SETTINGS_REGISTRY
+        result = {}
+        for d in SETTINGS_REGISTRY:
+            if d.key.endswith('_cluster_feature'):
+                # d.yaml_path[0] is the stem name (e.g. 'snare')
+                stem = d.yaml_path[0]
+                result[stem] = list(d.allowed_values)
+        return result
+
+    def test_registry_exists_in_js(self, stem_feature_choices):
+        """Belt-and-braces: the registry itself must still be present."""
+        assert 'snare' in stem_feature_choices
+        assert 'toms' in stem_feature_choices
+        assert 'cymbals' in stem_feature_choices
+
+    def test_auto_present_in_every_stem(self, stem_feature_choices):
+        """The 'auto' choice is the schema default and must be
+        present in every stem that has a cluster_feature dropdown."""
+        for stem, values in stem_feature_choices.items():
+            assert 'auto' in values, (
+                f"STEM_FEATURE_CHOICES.{stem} is missing 'auto'. "
+                f"The default is 'auto' in the schema; users need it "
+                f"as a dropdown option. Got: {values}"
+            )
+
+    @pytest.mark.parametrize("stem", ['snare', 'toms', 'cymbals'])
+    def test_js_list_is_superset_of_schema(
+        self, stem, stem_feature_choices, schema_cluster_features,
+    ):
+        """For every cluster_feature value the schema allows for a
+        stem, the JS dropdown must also offer it. If a new value
+        is added to the schema (e.g. 'duration_sec'), this test
+        fails until the JS is updated to expose it — that's the
+        tripwire that prevents the silent drift the user reported."""
+        schema_values = schema_cluster_features.get(stem, [])
+        js_values = stem_feature_choices.get(stem, [])
+
+        missing = [v for v in schema_values if v not in js_values]
+        assert not missing, (
+            f"STEM_FEATURE_CHOICES.{stem} is missing values that the "
+            f"settings schema ({stem}_cluster_feature.allowed_values) "
+            f"allows: {missing}. The Python pipeline already supports "
+            f"these — the WebUI dropdown just doesn't expose them. Add "
+            f"the missing values to STEM_FEATURE_CHOICES in "
+            f"webui/static/js/threshold-tuning.js with the matching label."
+        )
+
+    def test_js_list_contains_no_unknown_features(
+        self, stem_feature_choices, schema_cluster_features,
+    ):
+        """The reverse direction: every value the JS offers should
+        also be valid in the schema. Catches the case where someone
+        adds a value to the JS that the pipeline doesn't know about
+        (which would silently no-op via _resolve_cluster_feature's
+        fallback chain — the dropdown would do nothing)."""
+        for stem, js_values in stem_feature_choices.items():
+            schema_values = schema_cluster_features.get(stem, [])
+            unknown = [v for v in js_values if v not in schema_values]
+            assert not unknown, (
+                f"STEM_FEATURE_CHOICES.{stem} has values that the "
+                f"settings schema doesn't know about: {unknown}. "
+                f"Either the JS value is stale (remove it) or it's a "
+                f"new feature that needs a schema entry first."
+            )

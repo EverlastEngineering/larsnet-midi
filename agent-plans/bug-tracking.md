@@ -665,3 +665,86 @@ User reported a TypeError toast: `stems_to_midi_for_project() got an unexpected 
 - **Files**: `stems_to_midi_cli.py:421-465`, `webui/api/operations.py:60-110` (helpers removed)
 - **Verified end-to-end**: User's funk project #1, WebUI Convert button click, full pipeline runs to `Completed successfully!` with 367 + 2 + … MIDI events per stem. Old behavior: instant crash. New behavior: full conversion.
 - **Lesson for future code**: When a work function uses `importlib.util.spec_from_file_location(...)` to load a module, every helper it calls on the loaded module must be defined in the loaded file. Use direct `from x import y` for helpers that don't need the importlib indirection.
+
+### WebUI "Cluster By" dropdown missing Pitch for snare/cymbals (T2 follow-up round 3)
+- **Status**: Fixed
+- **Priority**: Medium (UI regression — a valid pipeline option was silently hidden from users)
+- **Description**: User noticed the "Cluster By" dropdown in the WebUI tuning panel didn't show "Pitch" for snare or cymbals, even though the Python pipeline (`stems_to_midi/processing_shell.py:309, 416`) computes `pitch_hz` for both stems, the settings schema (`webui/settings_schema.py:602, 916`) lists `pitch_hz` in `allowed_values`, and `_resolve_cluster_feature` would happily use it.
+- **Root Cause**: `STEM_FEATURE_CHOICES` in `webui/static/js/threshold-tuning.js:476-496` is a hand-maintained JS registry that mirrored the schema for toms (5 options including Pitch) but had drifted — snare was missing `pitch_hz` (4 options, no Pitch), cymbals was missing `pitch_hz` (4 options, no Pitch). No test linked the JS list to the schema list, so the drift was silent.
+- **Why the test suite missed it**: No test in `webui/test_threshold_tuning.py` or `webui/test_settings_schema.py` asserted parity between the JS dropdown and the schema `allowed_values`. Adding a new schema value didn't fail any test.
+- **Fix**:
+  - Added `{ value: 'pitch_hz', label: 'Pitch' }` to `STEM_FEATURE_CHOICES.snare` and `STEM_FEATURE_CHOICES.cymbals` in `webui/static/js/threshold-tuning.js`. Toms was already complete — left as-is.
+  - **Tests written first** (TDD) in `webui/test_threshold_tuning.py::TestStemFeatureChoicesSchemaParity`:
+    - `test_registry_exists_in_js` — belt-and-braces assertion the registry is present.
+    - `test_auto_present_in_every_stem` — `'auto'` must be in every stem's list (it's the schema default).
+    - `test_js_list_is_superset_of_schema[snare|toms|cymbals]` (parametrized) — the tripwire. Asserts the JS list contains every value the schema allows. Was red for snare and cymbals (missing `pitch_hz`), green after the fix.
+    - `test_js_list_contains_no_unknown_features` — reverse direction: JS shouldn't offer values the schema doesn't know about (would silently no-op via `_resolve_cluster_feature`'s fallback chain).
+  - The JS list is parsed via a small regex over the literal text in the file (no JS runtime in pytest) — same pattern as the other `TestThresholdTuningJS` tests in the same file.
+- **Files**: `webui/static/js/threshold-tuning.js:476-501`, `webui/test_threshold_tuning.py:455-585`
+- **Verified end-to-end**: Live WebUI, snare tuning panel: dropdown now shows `Auto, Stereo Width, Pan Position, Brightness, Pitch`. Cymbals: `Auto, Brightness, Stereo Width, Pan Position, Pitch`. Toms unchanged (was already complete).
+- **Lesson / next step (deferred)**: This test is a tripwire, not a prevention. The right long-term fix is to auto-generate the JS list from the schema (Python is the source of truth) or fail CI if they ever drift. The user opted to ship this fix first and shore up drift prevention before further changes — that's the right call, but the auto-sync mechanism is the architectural answer.
+
+---
+
+## Playtest Notes (2026-06-08, after commit a2cf78e)
+
+User feedback from real WebUI playtesting the new Pitch option in the Cluster By dropdowns:
+
+### N1 — Tuning panel has no visible stem selector (discoverability, low)
+- **Symptom**: After opening the Tune panel, the user has to click a stem's waveform on the events panel to switch stems. There's no dropdown, tab bar, or button row inside the Tune panel itself saying "you're editing snare" — the user has to know to click the waveform.
+- **Workaround I used via Playwright**: directly call `onTuningStemChanged('snare')` from the console. A real user can't do that.
+- **Impact**: Discoverability — once you know, you know; before that, the panel looks empty.
+- **Possible fix**: Add a small stem tab row at the top of `#tuning-panel` (kick / snare / toms / hihat / cymbals as buttons). The active stem is already tracked in `waveformActiveStem` (`webui/static/js/waveform.js:76`).
+- **Priority**: Low. Document for a follow-up; not blocking.
+
+### N2/N3 — Setting `cluster_feature: pitch_hz` silently falls back to a different feature (real bug, high)
+- **Symptom**: User reports that picking "Pitch" in the snare Cluster By dropdown "doesn't work" — saving the change and clicking Save & Reconvert produces no change in the resulting MIDI classifications. User also reported "pan options still appear" — that was a misremembering (the modal correctly shows `Cluster Feature: pitch_hz` in the dropdown, no pan fields are present in the snare section). The pan reference was likely from the tuning-panel Cluster By dropdown which has "Pan Position" as an option for snare.
+- **Root cause (confirmed)**: Two-step silent failure:
+  1. **Pitch is a detection-time feature.** The user's `midiconfig.yaml` has `snare.enable_pitch_detection: false`. The pipeline never computes `pitch_hz` for snare onsets. Verified in `user_files/1 - 2_funk_80_beat_4-4_4/midi/2_funk_80_beat_4-4_4.analysis.json`: 0/140 snare KEPT events have `pitch_hz`; 140/140 have `stereo_width`, `spectral_centroid_hz`, and `pan_confidence`.
+  2. **`_resolve_cluster_feature()` falls back silently.** In `stems_to_midi/note_classification_core.py:154-167`, when the chosen feature (`pitch_hz`) has no data, the function walks the priority chain and uses the first feature with data. For snare, the priority is `['stereo_width', 'spectral_centroid_hz']` (line 119), so it silently clusters on `stereo_width` — the same as the `auto` default would have done. No warning, no error.
+  3. **The WebUI doesn't tell the user.** The advanced MIDI modal's save flow just sends the config change. The "Cluster By" tuning-panel dropdown changes the value but doesn't auto-toggle `enable_pitch_detection` (which lives in a different field in the same modal) or warn that the feature needs to be re-detected.
+- **Net effect**: User thinks they're clustering on pitch, but they're actually still clustering on stereo_width. The result is the same as the default — hence "doesn't work."
+- **Why the test suite missed it**: No test asserts the contract between `cluster_feature` and `enable_pitch_detection`. The `_resolve_cluster_feature` fallback chain was designed to be helpful ("if your preferred feature has no data, try the next one") but it produces silent data loss when the user explicitly chose a feature that needs detection.
+- **Plan (not yet implemented, awaiting user go-ahead)**:
+  - **B1 (server-side safety net)**: In `classify_snare_notes` / `classify_tom_notes` / `classify_cymbal_notes`, when `_resolve_cluster_feature` falls back from the user's explicit choice to a different feature, log a `WARNING` to the console (the user sees this in the WebUI's log panel) and write a `classification_warning` field into the analysis.json. This makes the silent fallback visible.
+  - **B2 (JS auto-dependency)**: In `webui/static/js/advanced-midi.js::save()`, when the changes include `*.cluster_feature` set to `pitch_hz` on a stem where `*.enable_pitch_detection` is `false`, auto-add `{ path: ['<stem>', 'enable_pitch_detection'], value: true }` to the same save payload. Show a `showToast` info notice: "Pitch selected for snare — pitch detection enabled. A full Convert is required to compute pitch data; Save & Reconvert alone won't update the analysis." This is one click instead of two.
+  - **B3 (rebuild vs convert hint)**: When the user saves and the diff includes a detection-time key (any `*.enable_pitch_detection`, `*.pitch_method`, `*.min_pitch_hz`, `*.max_pitch_hz`, or `*.cluster_feature` set to a feature that needs detection), show a second toast suggesting: "These changes require a full Convert (not just Save & Reconvert) to take effect on the analysis." Don't auto-trigger — that would be a surprise — but make the requirement explicit.
+  - **Tests**:
+    - Unit: regex-parse `advanced-midi.js` to assert there's a function that handles the pitch→enable-detection dependency (the same JS-static-asset pattern as `TestThresholdTuningJS`).
+    - Integration: assert that POSTing `{ updates: [{ path: ['snare', 'cluster_feature'], value: 'pitch_hz' }] }` to `/api/config/<id>/midiconfig` (when `enable_pitch_detection: false`) results in `enable_pitch_detection: true` on the next GET.
+- **Status**: Fixed. Plan executed end-to-end (B1, B2, B3 all done). See fix details below.
+- **Priority**: High. This is the actual user-visible bug exposed by the round-3 fix.
+
+### N2/N3 fix details (commits pending)
+
+Three coordinated changes address the silent fallback / missing-context problem:
+
+1. **Server-side warning (B1)** — `stems_to_midi/note_classification_core.py`
+   - `_resolve_cluster_feature()` now returns a 3-tuple: `(values, valid_indices, actual_feature)`. The third element is the feature actually used, which may differ from the user's explicit choice if their choice had no data.
+   - New helper `_warn_on_cluster_feature_fallback()` logs a `WARNING:` line to the pipeline output (visible in the WebUI's console log panel) when the resolver falls back from the user's choice. The message names the stem, the chosen feature, the actual feature, the number of events that had the chosen feature, and the corrective action: "For pitch: enable `<stem>.enable_pitch_detection` AND run a full Convert (rebuild alone does not re-detect features)."
+   - The 3 call sites in `classify_snare_notes` / `classify_tom_notes` / `classify_cymbal_notes` updated to destructure 3 values and call the warning helper.
+
+2. **JS auto-dependency (B2)** — `webui/static/js/advanced-midi.js`
+   - New method `_applyClusterFeatureDependencies(updates)` walks the updates list, finds any `cluster_feature: 'pitch_hz'` save on snare/toms/cymbals, and if the stem's `enable_pitch_detection` is currently false (looking at `this.configData` plus the user's pending `this.changes`), pushes `{ path: [stem, 'enable_pitch_detection'], value: true }` into the same updates array. The server applies both atomically.
+   - The save flow calls this method before bundling the POST body. If any dependency was added, the method returns a string that's shown as an info toast: "Pitch selected for snare — pitch detection enabled automatically. A full Convert is required to compute pitch data; Save & Reconvert alone won't update the analysis."
+   - Edge cases handled: the dependency is NOT added if `enable_pitch_detection` is already true (avoids spurious changes); the modal reloads `configData` after a successful save so subsequent saves in the same modal session see fresh state.
+
+3. **JS Convert-hint toast (B3)** — same file
+   - New method `_requiresFullConvert(updates)` returns true if any update touches a detection-time key (`enable_pitch_detection`, `pitch_method`, `*_pitch_hz`, `*_freq_min`, `*_freq_max`, or any `cluster_feature` change).
+   - When true, the save flow shows a second info toast: "These changes require a full Convert (not just Save & Reconvert) to take effect. Save & Reconvert reuses the stored analysis.json; Convert re-runs detection."
+
+**Tests written first (TDD)**:
+- `stems_to_midi/test_resolve_cluster_feature.py` (new, 6 tests, all red before the fix, all green after) — locks the 3-tuple shape, the actual_feature value in auto mode, the explicit-chosen case, the fallback-revealed case, and the no-data case.
+- `test_note_classification_core.py::TestResolveClusterFeature` (existing, 7 tests) — updated 2-tuple destructures to 3-tuple. They were already green; the update keeps them green.
+- `webui/test_advanced_midi_save.py` (new, 8 tests, all red before the fix, all green after) — locks the JS file structure, the save method's coupling to the dependency helper, the "don't re-toggle if already true" check via configData/changes overlay, and the Convert-hint toast.
+- `webui/test_config_api.py::TestPitchDependencyApiContract` (new, 2 tests, both green) — characterization tests: the server accepts a multi-update payload atomically, and the server does NOT auto-toggle on its own (it must be told via the payload). Locks the JS-driven contract.
+
+**Verified end-to-end in the live WebUI** (project #1, user's funk track):
+- Reproduced the bug: with `enable_pitch_detection: false` and `cluster_feature: pitch_hz`, the pipeline ran without visible warnings.
+- After the fix, setting `cluster_feature: pitch_hz` in the modal and saving produces 3 toasts: "saved successfully", "Pitch selected for snare — pitch detection enabled automatically. A full Convert is required...", "These changes require a full Convert...".
+- The user's `midiconfig.yaml` was atomically updated: `enable_pitch_detection: false → true` in the same save as the cluster_feature change.
+- A subsequent full Convert now produces a `WARNING: snare cluster_feature='pitch_hz' was chosen but only 0/142 events have that data. Falling back to 'spectral_centroid_hz'...` line in the WebUI console log.
+
+**Out of scope (separate bugs surfaced during investigation, not fixed here)**:
+- The user's snare events still have `pitch_hz: None` even after a full Convert with `enable_pitch_detection: true`. Root cause: `stems_to_midi/analysis_core/onset_filtering.py:258` hardcodes `if stem_type == 'toms':` for pitch detection. Snare, cymbals, kick, hihat all bypass the call. The schema and pipeline say "snare can cluster on pitch_hz" but pitch_hz is never actually computed for snare. This is a 1-line change in `onset_filtering.py:258` (replace the hardcoded toms check with `if stem_config.get('enable_pitch_detection', False):`) but it deserves its own TDD cycle — the warning fix already tells the user "pitch_hz has no data" which is the first step to surfacing this.
+- N1 (tuning panel discoverability) is still a follow-up.

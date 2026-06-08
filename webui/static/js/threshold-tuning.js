@@ -479,6 +479,7 @@ const STEM_FEATURE_CHOICES = {
         { value: 'stereo_width', label: 'Stereo Width' },
         { value: 'pan_confidence', label: 'Pan Position' },
         { value: 'spectral_centroid_hz', label: 'Brightness' },
+        { value: 'pitch_hz', label: 'Pitch' },
     ],
     toms: [
         { value: 'auto', label: 'Auto' },
@@ -492,6 +493,7 @@ const STEM_FEATURE_CHOICES = {
         { value: 'spectral_centroid_hz', label: 'Brightness' },
         { value: 'stereo_width', label: 'Stereo Width' },
         { value: 'pan_confidence', label: 'Pan Position' },
+        { value: 'pitch_hz', label: 'Pitch' },
     ],
 };
 
