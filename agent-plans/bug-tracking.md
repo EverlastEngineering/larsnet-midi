@@ -854,3 +854,29 @@ Three coordinated changes address the silent fallback / missing-context problem:
   - In `analysis_core/onset_filtering.py`, after `should_keep_onset`, if the setting is set, drop the lower-energy of any two KEPT events that are within the spacing window.
   - The setting would be opt-in (default 0 = no post-classifier spacing) so the detector's exhaustive behavior is preserved for users who don't opt in.
 - **Estimated scope**: 1-2 hours. Schema addition (1 field per stem = 5 fields), the post-classifier filter, regression tests.
+
+---
+
+## Near-duplicate event filter (2026-06-08, user feedback after re-running project 2)
+
+### Add a shape-similarity duplicate filter for very-close events
+- **Status**: Feature request, not yet implemented
+- **Priority**: Medium (the user says the existing reverb filter "catches" them eventually but they're not actually reverb — false positives on the reverb path. Adds noise to the analysis without breaking the MIDI output.)
+- **Symptom**: After re-running project 2 with the detector-exhaustive fix, the user observed "very close duplicate events" — pairs of KEPT events that are <20ms apart and have nearly identical event shape. These don't match the reverb filter criteria (they have attack sharpness — they're "real" hits, not smooth reverb tails), so they survive all the way through to events_configured and show up as two MIDI events. The user describes them as "eventually caught by the reverb filter but aren't reverb artifacts."
+- **Distinguishing this from the existing reverb filter**:
+  - **Reverb filter** (`mark_reverb_continuations` in `stems_to_midi/analysis_core/onset_filtering.py:42`) catches events with: time margin ≤5ms, amplitude continuity (smooth envelope handoff), low attack sharpness (<0.2). Designed for reverb/echo tails.
+  - **Near-duplicate filter** (this TODO) would catch events that are: <20ms apart (wider window than reverb), but otherwise look like the same physical hit (similar amplitude, similar spectral features, similar geomean). Designed for the case where the detector finds the same hit twice in close succession — e.g. a single hit whose envelope is detected at two adjacent hops because the peak-hold smoothing makes the envelope plateau.
+- **Proposed approach**:
+  - Add a `mark_near_duplicate_events` function in `stems_to_midi/analysis_core/onset_filtering.py` that runs AFTER `should_keep_onset` (the classifier) and AFTER `mark_reverb_continuations` (the existing reverb filter).
+  - Compare consecutive KEPT events within a configurable time window (default 20ms, opt-in via config).
+  - Compute a shape-similarity score using available features: amplitude (peak), geomean, spectral_centroid_hz, body_energy, wire_energy, sustain_ms, pitch_hz (when present). A cosine similarity or normalized L2 distance over the feature vector would work.
+  - If similarity > threshold (e.g. 0.95 cosine similarity), mark the lower-strength of the two as `NEAR_DUPLICATE` and remove from filtered output.
+  - Schema addition: `*_near_duplicate_max_gap_ms` (default 0 = off) per stem, and `*_near_duplicate_min_similarity` (default 0.95) for the shape threshold.
+- **Why not at the detector stage**: Same reason as the spacing filter — the detector should be exhaustive, the classifier should filter. The classifier already has access to all the shape features via the per-event dict (`amplitude`, `geomean`, `spectral_centroid_hz`, etc.); a shape-similarity check is a natural extension.
+- **Why not at the rebuild/MIDI stage**: Too late — the events have already been serialized. Better to drop the duplicate at the filter stage so the rebuild sees a clean input.
+- **Tests**:
+  - Synthetic: two events at 5ms apart with identical amplitude/geomean → marked as near-duplicate, lower-strength dropped.
+  - Synthetic: two events at 5ms apart with very different spectral features (e.g. one is bright, one is dark) → NOT marked as duplicate, both kept.
+  - User's real audio: confirm the very-close duplicate events the user described are correctly identified.
+- **Estimated scope**: 2-3 hours. New function (~80 lines), schema addition (10 fields), the test class (~5 tests), and integration with `onset_filtering.py:621` chain. Plus a quick UI check that the new setting shows up in the advanced modal.
+- **Files touched** (planned): `stems_to_midi/analysis_core/onset_filtering.py` (new function + integration), `webui/settings_schema.py` (new settings per stem), `stems_to_midi/test_onset_filtering.py` (new test class).
