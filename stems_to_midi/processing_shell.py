@@ -41,7 +41,8 @@ from .config import DrumMapping
 from .note_classification_core import classify_notes
 
 __all__ = [
-    'process_stem_to_midi'
+    'process_stem_to_midi',
+    '_run_spectral_detection',
 ]
 
 
@@ -726,6 +727,110 @@ def _run_sensitive_detection(
     return sensitive_onset_data
 
 
+def _run_spectral_detection(
+    audio: np.ndarray,
+    audio_mono: np.ndarray,
+    sr: int,
+    is_stereo: bool,
+    stem_type: str,
+    config: "Optional[SpectralTransientConfig]" = None,
+) -> list:
+    """
+    Run the spectral-transient detector on a stem.
+
+    This is a complementary signal to the energy detector — it always
+    runs alongside the configured / sensitive detection. Its candidates
+    are written to ``events_spectral`` in the analysis.json sidecar so
+    that the WebUI / offline scripts can compare the two detectors and
+    surface events that one of them missed.
+
+    The detector looks at broadband high-frequency content (800-8000Hz
+    by default) per STFT frame, counts how many bins exceed the noise
+    floor (-50dB default), and peak-picks that count signal. See
+    ``stems_to_midi/spectral_transient_core.py`` for the algorithm.
+
+    Args:
+        audio: Original audio (stereo or mono). Stereo is averaged to
+               mono internally by the detector.
+        audio_mono: Mono-mixed audio. Used when ``is_stereo`` is False,
+                    or as a fallback.
+        sr: Sample rate.
+        is_stereo: Whether the original audio is stereo. (Currently the
+                   detector only needs mono, so this is informational —
+                   kept for symmetry with _run_sensitive_detection.)
+        stem_type: Stem type (e.g. 'kick', 'toms'). Used for per-stem
+                   config lookup. Not yet wired to a per-stem override;
+                   a future change can add ``spectral.f_lo_hz`` etc. to
+                   the schema.
+        config: Optional ``SpectralTransientConfig`` override. Defaults
+                to the module's defaults (calibrated for tom-like
+                signals at 44.1kHz).
+
+    Returns:
+        List of dicts with the shape::
+
+            {
+                'time': float,             # seconds
+                'strength': float,         # bins_above_floor / 167, in [0, 1]
+                'bins_above_floor': int,   # raw count signal value
+                'max_db': float,           # max dB across high-freq band
+                'method': 'spectral',
+            }
+
+        Empty list on error or no events.
+    """
+    # Local import — kept inside the function so importing this module
+    # doesn't pull numpy.fft machinery into the cold path.
+    from .spectral_transient_core import (
+        SpectralTransientConfig,
+        detect_spectral_transients,
+    )
+
+    # The detector is mono-only; use audio_mono regardless of is_stereo
+    # (audio_mono is guaranteed to exist by the caller). We keep
+    # `audio` and `is_stereo` in the signature for future per-stem
+    # tuning (e.g. kick might want a different f_lo) and for symmetry
+    # with _run_sensitive_detection.
+    signal = audio_mono
+
+    # Use the explicit override, otherwise use module defaults.
+    # (Per-stem spectral-transient overrides are a future schema task.)
+    if config is None:
+        cfg = SpectralTransientConfig()
+    else:
+        cfg = config
+
+    # Refuse to crash on too-short audio — return [] so the pipeline
+    # can continue (the energy detector may still find events).
+    if len(signal) < cfg.n_fft:
+        return []
+
+    try:
+        events, _debug = detect_spectral_transients(signal, sr, config=cfg)
+    except Exception as e:  # pragma: no cover - safety net
+        print(f"    Spectral detection error on {stem_type}: {e}")
+        return []
+
+    if not events:
+        return []
+
+    # The 167 denominator matches the high-freq band (800-8000Hz at
+    # n_fft=1024 / sr=44100) — the count signal can never exceed this.
+    # See spectral_transient_core.py:compute_stft_db for bin math.
+    BAND_BIN_COUNT = 167
+
+    return [
+        {
+            'time': float(e.time_sec),
+            'strength': float(e.bins_above_floor) / BAND_BIN_COUNT,
+            'bins_above_floor': int(e.bins_above_floor),
+            'max_db': float(e.max_db),
+            'method': 'spectral',
+        }
+        for e in events
+    ]
+
+
 def process_stem_to_midi(
     audio_path: Union[str, Path],
     stem_type: str,
@@ -762,12 +867,18 @@ def process_stem_to_midi(
         Dict with:
             'events': List of MIDI events
             'all_onset_data': List of all detected onsets (kept + filtered)
+            'sensitive_onset_data': Onsets from max-sensitivity energy
+                                     detection (interactive tuning)
+            'spectral_onset_data': Onsets from the spectral-transient
+                                    detector (complementary signal,
+                                    always present even if empty)
             'spectral_config': Spectral config used for this stem
+            'envelope_data': Energy envelope for waveform visualization
     """
     # Step 1: Load and validate audio
     audio, sr = _load_and_validate_audio(audio_path, config, stem_type, max_duration)
     if audio is None:
-        return {'events': [], 'all_onset_data': [], 'sensitive_onset_data': [], 'spectral_config': None, 'envelope_data': None}
+        return {'events': [], 'all_onset_data': [], 'sensitive_onset_data': [], 'spectral_onset_data': [], 'spectral_config': None, 'envelope_data': None}
     
     # Envelope data for waveform visualization (populated by energy-based detection)
     envelope_data = None
@@ -896,7 +1007,7 @@ def process_stem_to_midi(
     print(f"    Found {len(onset_times)} hits (before filtering) -> MIDI note {getattr(drum_mapping, stem_type)}")
     
     if len(onset_times) == 0:
-        return {'events': [], 'all_onset_data': [], 'sensitive_onset_data': [], 'spectral_config': None, 'envelope_data': envelope_data}
+        return {'events': [], 'all_onset_data': [], 'sensitive_onset_data': [], 'spectral_onset_data': [], 'spectral_config': None, 'envelope_data': envelope_data}
     
     # Step 3: Calculate event durations (NEW)
     from .analysis_core import calculate_event_durations
@@ -1158,7 +1269,7 @@ def process_stem_to_midi(
             print(f"        Pass 2 Rejected (retriggering): {rejected_count}")
     
     if len(onset_times) == 0:
-        return {'events': [], 'all_onset_data': all_onset_data, 'sensitive_onset_data': [], 'spectral_config': spectral_config, 'envelope_data': envelope_data}
+        return {'events': [], 'all_onset_data': all_onset_data, 'sensitive_onset_data': [], 'spectral_onset_data': [], 'spectral_config': spectral_config, 'envelope_data': envelope_data}
     
     # Step 5: Get MIDI note number (default for stem type)
     note = getattr(drum_mapping, stem_type)
@@ -1235,12 +1346,29 @@ def process_stem_to_midi(
             stem_type=stem_type,
             config=config,
         )
-    
+
+    # Step 11: Run spectral-transient detection as a complementary
+    # signal. This always runs on every stem regardless of detection
+    # method — the configured method only controls which candidate list
+    # becomes events_configured, not whether the spectral detector runs.
+    # See stems_to_midi/spectral_transient_core.py for the algorithm.
+    spectral_onset_data = _run_spectral_detection(
+        audio=audio,
+        audio_mono=audio_mono,
+        sr=sr,
+        is_stereo=is_stereo,
+        stem_type=stem_type,
+        config=None,  # Use module defaults (calibrated for tom-like signals)
+    )
+    if spectral_onset_data:
+        print(f"    Spectral detection: {len(spectral_onset_data)} candidate onsets")
+
     # Return dict with events and analysis data
     return {
         'events': events,
         'all_onset_data': all_onset_data,
         'sensitive_onset_data': sensitive_onset_data,
+        'spectral_onset_data': spectral_onset_data,
         'spectral_config': spectral_config,
         'envelope_data': envelope_data
     }

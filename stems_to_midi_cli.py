@@ -244,10 +244,15 @@ def _process_stems_to_midi(
 
             if result and result.get('events'):
                 events_by_stem[stem_type] = result['events']
-                # Store analysis data for sidecar v3 (configured + sensitive)
+                # Store analysis data for sidecar v3
+                # (configured + sensitive + spectral-transient).
+                # The spectral detector runs on every stem regardless
+                # of detection_method; its candidates are written to
+                # stems.<stem>.events_spectral in the sidecar.
                 analysis_by_stem[stem_type] = {
                     'all_onset_data': result.get('all_onset_data', []),
                     'sensitive_onset_data': result.get('sensitive_onset_data', []),
+                    'spectral_onset_data': result.get('spectral_onset_data', []),
                     'spectral_config': result.get('spectral_config')
                 }
                 # Store envelope data for waveform visualization

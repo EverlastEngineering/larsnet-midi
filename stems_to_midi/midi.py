@@ -246,6 +246,47 @@ def _serialize_onset_events(
     return events
 
 
+def _serialize_spectral_events(spectral_events: list) -> list:
+    """
+    Serialize spectral-transient events for the analysis.json sidecar.
+
+    The spectral detector produces a different event shape than the
+    energy detector (no geomean, no sustain_ms, no pan), so it gets its
+    own minimal serializer. Each event has at least::
+
+        {
+            'time': float,
+            'strength': float,         # in [0, 1]
+            'bins_above_floor': int,
+            'max_db': float,
+            'method': 'spectral',
+        }
+
+    Extra fields (e.g. ``prominence_bins``) are preserved with 2-decimal
+    rounding when present.
+
+    Args:
+        spectral_events: List of spectral event dicts from
+                         ``_run_spectral_detection``.
+
+    Returns:
+        List of JSON-ready event dicts with rounded numeric values.
+    """
+    out = []
+    for ev in spectral_events:
+        # Required fields with rounding. ``time`` uses 4-decimal
+        # precision to match the other event lists in the sidecar
+        # (see _serialize_onset_events); the rest use 2 decimals.
+        out.append({
+            'time': _round_value(ev.get('time'), 4),
+            'strength': _round_value(ev.get('strength'), 4),
+            'bins_above_floor': ev.get('bins_above_floor'),
+            'max_db': _round_value(ev.get('max_db'), 2),
+            'method': ev.get('method', 'spectral'),
+        })
+    return out
+
+
 def save_analysis_sidecar(
     events_by_stem: Dict[str, List[Dict]],
     midi_path: Union[str, Path],
@@ -260,13 +301,17 @@ def save_analysis_sidecar(
         - Logic block per stem (thresholds, passes)
         - events_configured: All onsets from configured detection (KEPT + FILTERED)
         - events_sensitive: All onsets from max-sensitivity detection (for interactive tuning)
+        - events_spectral: All onsets from the spectral-transient detector
+          (complementary signal, always computed alongside the energy
+          detector so the WebUI can compare both candidate lists)
         - Numeric precision: times=4 decimals, features=2 decimals
 
     Args:
         events_by_stem: Dictionary mapping stem names to lists of MIDI events
         midi_path: Path to corresponding MIDI file (sidecar uses same name + .analysis.json)
         tempo: Tempo in BPM (for reference)
-        analysis_by_stem: Dict with all_onset_data, sensitive_onset_data, and spectral_config per stem
+        analysis_by_stem: Dict with all_onset_data, sensitive_onset_data,
+                          spectral_onset_data, and spectral_config per stem
 
     Returns:
         Path to created sidecar file
@@ -372,6 +417,12 @@ def save_analysis_sidecar(
         # Serialize sensitive events (all from max-sensitivity detection)
         sensitive_events = _serialize_onset_events(sensitive_onset_data) if sensitive_onset_data else []
 
+        # Serialize spectral-transient events (complementary detector).
+        # These have a different shape from the energy-detector events:
+        # only time / strength / bins_above_floor / max_db / method.
+        spectral_onset_data = analysis.get('spectral_onset_data', [])
+        spectral_events = _serialize_spectral_events(spectral_onset_data) if spectral_onset_data else []
+
         # Count totals
         total_configured += len(configured_events)
         total_filtered += sum(1 for e in configured_events if e.get('status') == 'FILTERED')
@@ -382,6 +433,7 @@ def save_analysis_sidecar(
             'logic': logic,
             'events_configured': configured_events,
             'events_sensitive': sensitive_events,
+            'events_spectral': spectral_events,
         }
 
     # Write JSON
