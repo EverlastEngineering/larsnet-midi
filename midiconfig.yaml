@@ -33,6 +33,11 @@ onset_detection:
   delta: 0.01          # librosa: peak picking sensitivity
   wait: 3              # librosa: minimum frames between peaks
   hop_length: 512      # BOTH: samples between frames (affects time resolution)
+  detection_method: both  # Which detector's events become events_configured:
+                          #   'energy'  = current behavior (energy-detector list)
+                          #   'spectral'= spectral-transient list (with method='spectral' tag)
+                          #   'both'    = union, deduped within 12ms (energy wins collisions)
+                          # Both detectors always run; this only chooses the promotion target.
   # Per-stem overrides: onset_threshold, onset_delta, onset_wait
   
 # === ENERGY-BASED DETECTION (NEW METHOD - DEFAULT) ===

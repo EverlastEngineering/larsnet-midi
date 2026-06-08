@@ -140,6 +140,7 @@ midi:
   min_velocity: 80
 onset_detection:
   delta: 0.01
+  detection_method: both
   hop_length: 512
   threshold: 0.3
   wait: 3

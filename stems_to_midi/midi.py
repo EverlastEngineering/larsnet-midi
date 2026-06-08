@@ -386,7 +386,23 @@ def save_analysis_sidecar(
                 logic['cluster_feature'] = stem_config.get('cluster_feature', 'auto')
 
         # Serialize configured events (KEPT + FILTERED from configured detection)
-        if all_onset_data:
+        # The processing_shell pipeline may have already prebuilt
+        # events_configured based on the configured detection_method
+        # (energy / spectral / both). When present, that list is the
+        # source of truth — the sidecar must reflect the user-chosen
+        # promotion (see webui/settings_schema.detection_method). When
+        # absent (older code paths that bypass process_stem_to_midi),
+        # fall back to building from all_onset_data + midi_events.
+        prebuilt_configured = analysis.get('events_configured')
+        if prebuilt_configured is not None:
+            # The prebuilt list is a flat list of onset-shaped dicts.
+            # KEPT events still need note/velocity from midi_events;
+            # the serializer handles that by KEPT-index.
+            midi_events = [e for e in events if e.get('note') != 44]  # Exclude foot-close
+            configured_events = _serialize_onset_events(
+                prebuilt_configured, midi_events=midi_events,
+            )
+        elif all_onset_data:
             midi_events = [e for e in events if e.get('note') != 44]  # Exclude foot-close
             configured_events = _serialize_onset_events(all_onset_data, midi_events=midi_events)
         else:

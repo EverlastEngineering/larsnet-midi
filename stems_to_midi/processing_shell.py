@@ -831,6 +831,106 @@ def _run_spectral_detection(
     ]
 
 
+def _build_events_configured(
+    all_onset_data: list,
+    spectral_onset_data: list,
+    midi_events: list,
+    detection_method: str,
+) -> list:
+    """
+    Build the ``events_configured`` list for the analysis.json sidecar.
+
+    The energy detector and the spectral-transient detector BOTH always
+    run (see :func:`process_stem_to_midi`); this function only chooses
+    which candidate list is promoted to ``events_configured`` for the
+    MIDI output. The three modes are:
+
+    - ``"energy"`` (legacy default, equivalent to the pre-detection_method
+      behavior): pass ``all_onset_data`` through unchanged. The
+      serializer tags KEPT events with note/velocity from ``midi_events``
+      and leaves FILTERED events as-is.
+    - ``"spectral"``: replace the energy list with the spectral
+      candidates. Each surviving spectral event is stamped with
+      ``status='KEPT'`` and ``method='spectral'`` so the WebUI can
+      color it differently. They are appended at the end of the
+      KEPT list; no pitch/classification metadata is available for
+      these (the spectral detector does not compute it), so the
+      serializer writes ``null`` for those fields.
+    - ``"both"`` (current default per the schema): the union of energy
+      + spectral, deduplicated within 12ms (matches the validator
+      tolerance in ``midi._validate_events_subset``). On a collision
+      the energy event wins (it has richer metadata); surviving
+      spectral events keep ``method='spectral'``.
+
+    Args:
+        all_onset_data: Energy-detector output (KEPT + FILTERED onsets
+            from ``filter_onsets_by_spectral``). Must already include
+            ``pan_confidence``/``stereo_width``/``pitch_hz`` if those
+            apply.
+        spectral_onset_data: Spectral-transient detector output from
+            :func:`_run_spectral_detection`. Each item has the shape
+            ``{time, strength, bins_above_floor, max_db, method}``.
+        midi_events: MIDI events produced by :func:`_create_midi_events`
+            for the energy-filtered onsets, in time order. Used to
+            attach note/velocity to KEPT energy events.
+        detection_method: One of ``"energy"``, ``"spectral"``, ``"both"``.
+            Unknown values fall back to ``"energy"`` (defensive: never
+            silently drop the energy list).
+
+    Returns:
+        A list of "onset-like" dicts suitable for
+        :func:`stems_to_midi.midi._serialize_onset_events`. Each item
+        has at least ``time`` and ``status``; spectral-origin items
+        also carry ``method='spectral'`` so the WebUI can distinguish
+        them. ``midi_events`` matching is done by the serializer using
+        the KEPT counter, so the order of energy events here must match
+        the order of KEPT events in ``midi_events``.
+    """
+    DEDUP_WINDOW_SEC = 0.012  # matches _validate_events_subset tolerance
+
+    # Defensive: unknown / None → 'energy' (preserve legacy behavior).
+    if detection_method not in ('energy', 'spectral', 'both'):
+        detection_method = 'energy'
+
+    if detection_method == 'energy':
+        # Pass-through; the serializer handles KEPT vs FILTERED and
+        # stamps note/velocity on KEPT items via the midi_events arg.
+        return list(all_onset_data)
+
+    # Build the spectral-candidate list as onset-shaped dicts.
+    spectral_as_onsets = []
+    for sp in spectral_onset_data:
+        # Carry through the spectral-only fields the user wants to keep
+        # visible in the WebUI; the rest of the onset fields (geomean,
+        # pitch, pan, status metadata) are null/None.
+        spectral_as_onsets.append({
+            'time': float(sp.get('time', 0.0)),
+            'status': 'KEPT',
+            'method': 'spectral',
+            'strength': sp.get('strength'),
+            'bins_above_floor': sp.get('bins_above_floor'),
+            'max_db': sp.get('max_db'),
+        })
+
+    if detection_method == 'spectral':
+        return spectral_as_onsets
+
+    # detection_method == 'both': union with 12ms dedup (energy wins).
+    energy_times = [e.get('time') for e in all_onset_data if e.get('time') is not None]
+    union = list(all_onset_data)
+    for sp in spectral_as_onsets:
+        sp_time = sp.get('time')
+        if sp_time is None:
+            continue
+        # Drop the spectral event if any energy event is within the
+        # dedup window — the energy event has richer metadata
+        # (pitch/classification) so it wins the collision.
+        if any(abs(sp_time - et) <= DEDUP_WINDOW_SEC for et in energy_times):
+            continue
+        union.append(sp)
+    return union
+
+
 def process_stem_to_midi(
     audio_path: Union[str, Path],
     stem_type: str,
@@ -878,7 +978,7 @@ def process_stem_to_midi(
     # Step 1: Load and validate audio
     audio, sr = _load_and_validate_audio(audio_path, config, stem_type, max_duration)
     if audio is None:
-        return {'events': [], 'all_onset_data': [], 'sensitive_onset_data': [], 'spectral_onset_data': [], 'spectral_config': None, 'envelope_data': None}
+        return {'events': [], 'events_configured': [], 'all_onset_data': [], 'sensitive_onset_data': [], 'spectral_onset_data': [], 'spectral_config': None, 'envelope_data': None}
     
     # Envelope data for waveform visualization (populated by energy-based detection)
     envelope_data = None
@@ -1007,7 +1107,7 @@ def process_stem_to_midi(
     print(f"    Found {len(onset_times)} hits (before filtering) -> MIDI note {getattr(drum_mapping, stem_type)}")
     
     if len(onset_times) == 0:
-        return {'events': [], 'all_onset_data': [], 'sensitive_onset_data': [], 'spectral_onset_data': [], 'spectral_config': None, 'envelope_data': envelope_data}
+        return {'events': [], 'events_configured': [], 'all_onset_data': [], 'sensitive_onset_data': [], 'spectral_onset_data': [], 'spectral_config': None, 'envelope_data': envelope_data}
     
     # Step 3: Calculate event durations (NEW)
     from .analysis_core import calculate_event_durations
@@ -1269,7 +1369,7 @@ def process_stem_to_midi(
             print(f"        Pass 2 Rejected (retriggering): {rejected_count}")
     
     if len(onset_times) == 0:
-        return {'events': [], 'all_onset_data': all_onset_data, 'sensitive_onset_data': [], 'spectral_onset_data': [], 'spectral_config': spectral_config, 'envelope_data': envelope_data}
+        return {'events': [], 'events_configured': list(all_onset_data), 'all_onset_data': all_onset_data, 'sensitive_onset_data': [], 'spectral_onset_data': [], 'spectral_config': spectral_config, 'envelope_data': envelope_data}
     
     # Step 5: Get MIDI note number (default for stem type)
     note = getattr(drum_mapping, stem_type)
@@ -1363,9 +1463,29 @@ def process_stem_to_midi(
     if spectral_onset_data:
         print(f"    Spectral detection: {len(spectral_onset_data)} candidate onsets")
 
+    # Step 12: Build events_configured based on the configured
+    # detection_method. The energy and spectral detectors BOTH always
+    # ran above; this is just a promotion step that picks which list
+    # becomes events_configured for the analysis.json sidecar (and
+    # therefore for the MIDI output via the rebuild path).
+    detection_method = (
+        config.get('onset_detection', {}).get('detection_method', 'both')
+    )
+    events_configured = _build_events_configured(
+        all_onset_data=all_onset_data,
+        spectral_onset_data=spectral_onset_data,
+        midi_events=events,
+        detection_method=detection_method,
+    )
+    print(f"    Detection method '{detection_method}': "
+          f"{len(events_configured)} events in events_configured "
+          f"(energy={len(all_onset_data)}, "
+          f"spectral={len(spectral_onset_data)})")
+
     # Return dict with events and analysis data
     return {
         'events': events,
+        'events_configured': events_configured,
         'all_onset_data': all_onset_data,
         'sensitive_onset_data': sensitive_onset_data,
         'spectral_onset_data': spectral_onset_data,

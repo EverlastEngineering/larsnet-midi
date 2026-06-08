@@ -369,6 +369,24 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         cli_flag='--hop-length',
     ),
 
+    SettingDefinition(
+        key='detection_method',
+        type=SettingType.CHOICE,
+        default='both',
+        label='Detection Method',
+        description=(
+            "Which detector's events become events_configured. The "
+            "spectral detector and the energy detector BOTH always run; "
+            "this only chooses which list is promoted to "
+            "events_configured for the MIDI output."
+        ),
+        category=SettingCategory.ONSET_DETECTION,
+        ui_control=UIControl.SELECT,
+        allowed_values=['energy', 'spectral', 'both'],
+        yaml_path=['onset_detection', 'detection_method'],
+        cli_flag='--detection-method',
+    ),
+
     # ======================
     # MIDI Output Settings
     # ======================
