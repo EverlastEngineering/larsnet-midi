@@ -212,7 +212,19 @@ def update_config(project_id: int, config_type: str):
             'success': False,
             'error': str(e)
         }), 404
-    
+
+    except FileNotFoundError as e:
+        # T3 follow-up (2026-06-08): a project without a per-project
+        # midiconfig.yaml should get a clean 4xx, not a 500. The
+        # YAMLConfigEngine raises FileNotFoundError when the project
+        # config doesn't exist; convert to 409 (would need to create
+        # from root) or 404 (no per-project config to update).
+        return jsonify({
+            'success': False,
+            'error': str(e) or 'No per-project config file exists',
+            'hint': 'Create a per-project midiconfig.yaml or update the root config instead.',
+        }), 409
+
     except Exception as e:
         return jsonify({
             'success': False,

@@ -377,3 +377,137 @@ class TestLoadAnalysisSidecarValidation:
         finally:
             midi_path.unlink(missing_ok=True)
             midi_path.with_suffix('.analysis.json').unlink(missing_ok=True)
+
+
+# ============================================================================
+# hihat_state serialization (T2 follow-up, 2026-06-08)
+# ============================================================================
+
+
+class TestSerializeHihatState:
+    """T2 A4 added 'preserve stored hihat_state on rebuild' — but
+    hihat_state is only ever set in the in-memory event dict (by
+    classify_hihat_notes in note_classification_core.py). It is never
+    propagated to onset_data, so _serialize_onset_events never writes
+    it to the JSON. Result: sidecar has no hihat_state field, T3 e2e
+    found 'hihat_state field missing from all 13 hihat KEPT events in
+    fresh conversion (baseline had 13/13)'.
+
+    The fix: _serialize_onset_events must surface hihat_state when the
+    midi_event param carries it. These tests assert the contract."""
+
+    def test_hihat_state_in_serialized_event_when_provided(self):
+        """When midi_events[i] has hihat_state='open', the serialized
+        event must include hihat_state='open'."""
+        onset = {
+            'time': 1.0,
+            'status': 'KEPT',
+            'sustain_ms': 200,
+            'geomean': 400.0,
+            'pan_confidence': 0.0,
+            'stereo_width': 0.1,
+            'pitch_hz': None,
+        }
+        midi_event = {
+            'time': 1.0,
+            'note': 46,
+            'velocity': 100,
+            'hihat_state': 'open',
+        }
+        events = _serialize_onset_events([onset], midi_events=[midi_event])
+        assert events[0].get('hihat_state') == 'open', (
+            f"hihat_state='open' was passed in midi_events but is missing "
+            f"from serialized event: {events[0]}"
+        )
+
+    def test_hihat_state_closed_propagates(self):
+        """closed state propagates too — not just open."""
+        onset = {
+            'time': 2.0, 'status': 'KEPT',
+            'sustain_ms': 80, 'geomean': 300.0,
+            'pan_confidence': 0.0, 'stereo_width': 0.1, 'pitch_hz': None,
+        }
+        midi_event = {
+            'time': 2.0, 'note': 42, 'velocity': 100,
+            'hihat_state': 'closed',
+        }
+        events = _serialize_onset_events([onset], midi_events=[midi_event])
+        assert events[0].get('hihat_state') == 'closed'
+
+    def test_hihat_state_handclap_propagates(self):
+        """handclap state propagates (T2 added a separate MIDI note for
+        handclap bleed from hihat)."""
+        onset = {
+            'time': 3.0, 'status': 'KEPT',
+            'sustain_ms': 20, 'geomean': 200.0,
+            'pan_confidence': 0.0, 'stereo_width': 0.1, 'pitch_hz': None,
+        }
+        midi_event = {
+            'time': 3.0, 'note': 39, 'velocity': 80,
+            'hihat_state': 'handclap',
+        }
+        events = _serialize_onset_events([onset], midi_events=[midi_event])
+        assert events[0].get('hihat_state') == 'handclap'
+
+    def test_hihat_state_omitted_when_not_a_hihat_event(self):
+        """For non-hihat events (or when midi_event lacks hihat_state),
+        the field is not written. This keeps the schema clean for
+        stems that don't use the field."""
+        onset = {
+            'time': 1.0, 'status': 'KEPT',
+            'sustain_ms': 80, 'geomean': 200.0,
+            'pan_confidence': 0.0, 'stereo_width': 0.1, 'pitch_hz': None,
+        }
+        midi_event = {'time': 1.0, 'note': 36, 'velocity': 99}
+        # No hihat_state in midi_event
+        events = _serialize_onset_events([onset], midi_events=[midi_event])
+        # hihat_state should not be present (or should be None / absent)
+        assert events[0].get('hihat_state') in (None, '', 'closed'), (
+            f"hihat_state should not be set when midi_event lacks it: {events[0]}"
+        )
+
+    def test_hihat_state_round_trip_through_save_analysis_sidecar(self, tmp_path):
+        """End-to-end: save the sidecar to disk, reload, hihat_state
+        is preserved. This is the real contract — the JSON file must
+        contain the field so the WebUI reclassify + tuning flows see it.
+        """
+        from stems_to_midi.midi import save_analysis_sidecar, load_analysis_sidecar
+
+        onset = {
+            'time': 1.0, 'status': 'KEPT', 'strength': 2.0,
+            'sustain_ms': 200, 'geomean': 400.0,
+            'pan_confidence': 0.0, 'stereo_width': 0.1, 'pitch_hz': None,
+        }
+        midi_events = [
+            {'time': 1.0, 'note': 46, 'velocity': 110, 'hihat_state': 'open'},
+        ]
+
+        midi_path = tmp_path / 'song.mid'
+        midi_path.write_bytes(b'MThd\x00\x00\x00\x06\x00\x00\x00\x01\x00\x60MTrk\x00\x00\x00\x00')
+
+        try:
+            save_analysis_sidecar(
+                events_by_stem={'hihat': midi_events},
+                midi_path=midi_path,
+                tempo=120.0,
+                analysis_by_stem={
+                    'hihat': {
+                        'all_onset_data': [onset],
+                        'sensitive_onset_data': [],
+                        'spectral_config': None,
+                    },
+                },
+                config={},
+            )
+            data = load_analysis_sidecar(midi_path)
+            hihat_events = data['stems']['hihat']['events_configured']
+            # Find the event with hihat_state
+            states = [e.get('hihat_state') for e in hihat_events]
+            assert 'open' in states, (
+                f"hihat_state='open' should round-trip through the sidecar. "
+                f"Got states: {states}"
+            )
+        finally:
+            midi_path.unlink(missing_ok=True)
+            midi_path.with_suffix('.analysis.json').unlink(missing_ok=True)
+

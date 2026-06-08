@@ -768,7 +768,7 @@ def delete_audio_file(project_number, filename):
 
 # ─── Event Overrides ─────────────────────────────────────────────────────
 
-@projects_bp.route('/projects/<int:project_number>/event-overrides', methods=['GET'])
+@projects_bp.route('/<int:project_number>/event-overrides', methods=['GET'])
 def get_event_overrides(project_number):
     """
     GET /api/projects/:project_number/event-overrides
@@ -795,7 +795,7 @@ def get_event_overrides(project_number):
     return jsonify({'overrides': overrides}), 200
 
 
-@projects_bp.route('/projects/<int:project_number>/event-overrides', methods=['PUT'])
+@projects_bp.route('/<int:project_number>/event-overrides', methods=['PUT'])
 def save_event_overrides(project_number):
     """
     PUT /api/projects/:project_number/event-overrides

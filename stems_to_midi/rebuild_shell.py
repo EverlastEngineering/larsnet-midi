@@ -123,9 +123,14 @@ def rebuild_midi_for_project(
 
     midi_dir = project_dir / 'midi'
     if not midi_dir.exists():
+        # T2 follow-up (2026-06-08): a project with no midi/ directory
+        # yet has never been through stems-to-midi. Return a clean
+        # 409 via the route, not a 500. The requires_full_pipeline
+        # flag signals the WebUI to show "run full conversion first".
         return {
             'success': False,
             'error': 'No midi directory found in project',
+            'requires_full_pipeline': True,
             'stems_rebuilt': [],
             'elapsed_ms': 0,
         }
@@ -136,6 +141,7 @@ def rebuild_midi_for_project(
         return {
             'success': False,
             'error': 'No MIDI file found in project',
+            'requires_full_pipeline': True,
             'stems_rebuilt': [],
             'elapsed_ms': 0,
         }

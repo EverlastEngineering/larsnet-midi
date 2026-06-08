@@ -215,12 +215,19 @@ class TestOperationsAPI:
     @patch('webui.api.operations.get_project_by_number')
     @patch('webui.api.operations.get_job_queue')
     def test_stems_to_midi(self, mock_get_queue, mock_get_project, client, mock_project):
-        """Test POST /api/stems-to-midi"""
+        """Test POST /api/stems-to-midi (legacy, mocks at queue level).
+
+        NOTE: This test passes by mocking job_queue.submit() and never
+        invoking run_stems_to_midi. It does NOT catch the route→work-function
+        kwarg drift. See test_stems_to_midi_forwards_config_overrides and
+        test_stems_to_midi_does_not_pass_stale_detection_kwargs for the
+        contract that catches that bug.
+        """
         mock_get_project.return_value = mock_project
         mock_queue = Mock()
         mock_queue.submit.return_value = 'job-789'
         mock_get_queue.return_value = mock_queue
-        
+
         response = client.post(
             '/api/stems-to-midi',
             data=json.dumps({
@@ -229,10 +236,274 @@ class TestOperationsAPI:
             }),
             content_type='application/json'
         )
-        
+
         assert response.status_code == 202
         data = json.loads(response.data)
         assert data['job_id'] == 'job-789'
+
+
+class TestStemsToMidiKwargsContract:
+    """T2 follow-up (2026-06-08): stems-to-midi route was blindly splatting
+    request body into run_stems_to_midi(**kwargs), which forwarded them to
+    stems_to_midi_for_project(**kwargs) — but T1's drift fix changed
+    stems_to_midi_for_project's signature to take only (project, config,
+    stems_to_process, max_duration, learning_mode). The stale kwargs
+    (onset_threshold, onset_delta, onset_wait, hop_length, min_velocity,
+    max_velocity, tempo, detect_hihat_open, etc.) hit the function and
+    raised TypeError. The user saw this as a 500 toast in the WebUI.
+
+    These tests mock at the WORK FUNCTION level (not the queue) so the
+    real call path is exercised, and assert the contract: only the
+    function's actual parameters are passed.
+    """
+
+    @patch('webui.api.operations.get_project_by_number')
+    @patch('webui.api.operations.run_stems_to_midi')
+    @patch('webui.api.operations.get_job_queue')
+    def test_stems_to_midi_does_not_pass_stale_detection_kwargs(
+        self, mock_get_queue, mock_run, mock_get_project, client, mock_project
+    ):
+        """The post-T1 stems_to_midi_for_project signature is
+        (project, config, stems_to_process, max_duration, learning_mode).
+        The route must NOT pass onset_threshold, onset_delta, onset_wait,
+        hop_length, min_velocity, max_velocity, tempo, or detect_hihat_open
+        as kwargs — those were the OLD signature, removed by the T1 drift fix.
+        If the route still splats them, stems_to_midi_for_project raises
+        TypeError at runtime."""
+        mock_get_project.return_value = mock_project
+        # Don't execute the work function (would hit the real
+        # stems_to_midi_for_project). Just record the call.
+        mock_get_queue.return_value = Mock(submit=Mock(return_value='job-x'))
+
+        # Simulate the JS sending a body that includes the stale kwargs
+        response = client.post(
+            '/api/stems-to-midi',
+            data=json.dumps({
+                'project_number': 1,
+                'onset_threshold': 0.3,
+                'onset_delta': 0.01,
+                'onset_wait': 3,
+                'hop_length': 512,
+                'min_velocity': 80,
+                'max_velocity': 110,
+                'tempo': 120.0,
+                'detect_hihat_open': False,
+            }),
+            content_type='application/json',
+        )
+        assert response.status_code == 202
+
+        # Extract the work function call from job_queue.submit kwargs
+        # OR, since we mocked at run_stems_to_midi level, the route body
+        # should NOT have called run_stems_to_midi with the stale kwargs.
+        # The contract: when we eventually inspect what the work fn got,
+        # none of the stale kwargs may be present.
+        # Since this test patches run_stems_to_midi but the route still
+        # uses job_queue.submit(func=run_stems_to_midi, **kwargs), the
+        # submission captures the kwargs. Pull them out:
+        submit_call = mock_get_queue.return_value.submit.call_args
+        submit_kwargs = submit_call.kwargs
+        # The function reference must be the work function
+        assert submit_kwargs.get('func') is mock_run, (
+            f"Expected func=run_stems_to_midi, got: {submit_kwargs}"
+        )
+        # No stale detection kwargs may reach the work function
+        for stale in ('onset_threshold', 'onset_delta', 'onset_wait',
+                      'hop_length', 'min_velocity', 'max_velocity',
+                      'tempo', 'detect_hihat_open'):
+            assert stale not in submit_kwargs, (
+                f"Stale kwarg {stale!r} leaked to run_stems_to_midi: {submit_kwargs}"
+            )
+
+    @patch('webui.api.operations.get_project_by_number')
+    @patch('webui.api.operations.run_stems_to_midi')
+    @patch('webui.api.operations.get_job_queue')
+    def test_stems_to_midi_forwards_modern_request_shape(
+        self, mock_get_queue, mock_run, mock_get_project, client, mock_project
+    ):
+        """Modern request shape (post-T1): config_overrides as a dict of
+        dotted YAML paths. The route must forward config_overrides, not
+        flatten the request body into legacy kwargs."""
+        mock_get_project.return_value = mock_project
+        mock_get_queue.return_value = Mock(submit=Mock(return_value='job-y'))
+
+        config_overrides = {
+            'kick.geomean_threshold': 600,
+            'hihat.open_geomean_min': 200,
+            'filtering.reverb_continuation_attack_threshold': 0.3,
+        }
+        response = client.post(
+            '/api/stems-to-midi',
+            data=json.dumps({
+                'project_number': 1,
+                'config_overrides': config_overrides,
+            }),
+            content_type='application/json',
+        )
+        assert response.status_code == 202
+
+        submit_kwargs = mock_get_queue.return_value.submit.call_args.kwargs
+        # The config_overrides dict must reach the work function
+        assert submit_kwargs.get('config_overrides') == config_overrides, (
+            f"config_overrides dropped! got: {submit_kwargs}"
+        )
+
+    @patch('webui.api.operations.get_project_by_number')
+    @patch('webui.api.operations.run_stems_to_midi')
+    @patch('webui.api.operations.get_job_queue')
+    def test_stems_to_midi_forwards_orchestration_kwargs(
+        self, mock_get_queue, mock_run, mock_get_project, client, mock_project
+    ):
+        """Modern request shape also accepts stems_to_process (list),
+        max_duration (float), learning_mode (bool). These are the only
+        kwargs the new stems_to_midi_for_project signature accepts
+        beyond project and config."""
+        mock_get_project.return_value = mock_project
+        mock_get_queue.return_value = Mock(submit=Mock(return_value='job-z'))
+
+        response = client.post(
+            '/api/stems-to-midi',
+            data=json.dumps({
+                'project_number': 1,
+                'stems_to_process': ['kick', 'snare'],
+                'max_duration': 60.0,
+                'learning_mode': True,
+            }),
+            content_type='application/json',
+        )
+        assert response.status_code == 202
+
+        submit_kwargs = mock_get_queue.return_value.submit.call_args.kwargs
+        assert submit_kwargs.get('stems_to_process') == ['kick', 'snare']
+        assert submit_kwargs.get('max_duration') == 60.0
+        assert submit_kwargs.get('learning_mode') is True
+
+    @patch('webui.api.operations.get_project_by_number')
+    def test_stems_to_midi_project_not_found(self, mock_get_project, client):
+        mock_get_project.return_value = None
+        response = client.post(
+            '/api/stems-to-midi',
+            data=json.dumps({'project_number': 999}),
+            content_type='application/json',
+        )
+        assert response.status_code == 404
+
+
+class TestEventOverridesRoute:
+    """T3 found: /api/projects/<n>/event-overrides double-prefixed URL.
+    The route is registered as /projects/<n>/event-overrides inside a
+    blueprint that already has url_prefix='/api/projects', so the full
+    URL becomes /api/projects/projects/<n>/event-overrides — which the
+    JS doesn't call. Result: click-to-toggle event bars never persist.
+
+    These tests cover both GET and PUT for the canonical URL, so future
+    blueprint/url_prefix renames can't silently break this.
+    """
+
+    @patch('webui.api.projects.get_project_by_number')
+    def test_get_event_overrides(self, mock_get, client, tmp_path):
+        """GET /api/projects/<n>/event-overrides returns 200 with the
+        overrides dict (or empty dict if file doesn't exist)."""
+        project_path = tmp_path / '1 - Test'
+        (project_path / 'midi').mkdir(parents=True)
+        (project_path / 'midi' / 'event_overrides.json').write_text(
+            json.dumps({'snare': {'2.0782': 'FILTERED'}})
+        )
+        mock_get.return_value = {
+            'number': 1, 'name': 'Test', 'path': project_path,
+            'created': datetime.now(), 'metadata': {},
+        }
+
+        response = client.get('/api/projects/1/event-overrides')
+        assert response.status_code == 200, (
+            f"GET /api/projects/1/event-overrides returned {response.status_code}: "
+            f"{response.data!r}. Likely cause: route is registered with "
+            f"double 'projects/' prefix."
+        )
+        data = json.loads(response.data)
+        assert data['overrides'] == {'snare': {'2.0782': 'FILTERED'}}
+
+    @patch('webui.api.projects.get_project_by_number')
+    def test_get_event_overrides_no_file_returns_empty(self, mock_get, client, tmp_path):
+        """GET when event_overrides.json doesn't exist returns 200 with {}."""
+        project_path = tmp_path / '1 - Test'
+        (project_path / 'midi').mkdir(parents=True)
+        mock_get.return_value = {
+            'number': 1, 'name': 'Test', 'path': project_path,
+            'created': datetime.now(), 'metadata': {},
+        }
+
+        response = client.get('/api/projects/1/event-overrides')
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data['overrides'] == {}
+
+    @patch('webui.api.projects.get_project_by_number')
+    def test_put_event_overrides_persists(self, mock_get, client, tmp_path):
+        """PUT /api/projects/<n>/event-overrides writes the file and
+        returns 200. Without this, click-to-toggle never persists across
+        page reloads (T3 finding)."""
+        project_path = tmp_path / '1 - Test'
+        (project_path / 'midi').mkdir(parents=True)
+        mock_get.return_value = {
+            'number': 1, 'name': 'Test', 'path': project_path,
+            'created': datetime.now(), 'metadata': {},
+        }
+
+        overrides = {'snare': {'2.0782': 'FILTERED'}, 'kick': {'1.0': 'KEPT'}}
+        response = client.put(
+            '/api/projects/1/event-overrides',
+            data=json.dumps({'overrides': overrides}),
+            content_type='application/json',
+        )
+        assert response.status_code == 200, (
+            f"PUT /api/projects/1/event-overrides returned {response.status_code}: "
+            f"{response.data!r}. Likely cause: route is registered with "
+            f"double 'projects/' prefix."
+        )
+        # File actually written
+        written = json.loads(
+            (project_path / 'midi' / 'event_overrides.json').read_text()
+        )
+        assert written == overrides
+
+
+class TestConfigUpdateMissingFile:
+    """T3 found: /api/config/<id>/midiconfig PUT 500s when project has no
+    per-project midiconfig.yaml. This breaks the Save & Reconvert flow
+    for projects that only have the root config. The fix is a clean 4xx
+    (e.g. 404 'no per-project config to update' or 200 'created from
+    root'). Anything 5xx is a regression.
+    """
+
+    @patch('webui.api.config.get_config_engine')
+    def test_config_update_missing_file_returns_clean_error(
+        self, mock_engine, client, tmp_path
+    ):
+        """PUT to /api/config/<id>/midiconfig on a project with NO
+        per-project midiconfig.yaml returns a 4xx with a useful message,
+        not a 500."""
+        # Engine throws FileNotFoundError when the per-project config
+        # doesn't exist. The route currently lets it bubble to a 500.
+        mock_engine.side_effect = FileNotFoundError(
+            'No per-project midiconfig.yaml'
+        )
+
+        response = client.post(
+            '/api/config/1/midiconfig',
+            data=json.dumps({
+                'updates': [
+                    {'path': ['kick', 'geomean_threshold'], 'value': 700.0},
+                ],
+            }),
+            content_type='application/json',
+        )
+        # Must be 4xx, NOT 5xx
+        assert 400 <= response.status_code < 500, (
+            f"PUT /api/config/1/midiconfig with no per-project config "
+            f"returned {response.status_code} (5xx would be a regression). "
+            f"Body: {response.data!r}"
+        )
 
 
 class TestJobsAPI:
@@ -541,16 +812,136 @@ class TestAudioFilesAPI:
 
 class TestHealthCheck:
     """Test health check endpoint"""
-    
+
     def test_health(self, client):
         """Test GET /health"""
         response = client.get('/health')
-        
+
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data['status'] == 'healthy'
         assert 'version' in data
 
 
+# ============================================================================
+# Route↔JS URL smoke test (T3 follow-up, 2026-06-08)
+# ============================================================================
+
+
+class TestRouteRegistration:
+    """T3 found /api/projects/<n>/event-overrides double-prefixed — the
+    route was registered as /projects/<n>/event-overrides inside a
+    blueprint whose url_prefix was already /api/projects. Result: 404.
+
+    This class catalogs the URL set the JS client uses (extracted from
+    webui/static/js/api.js) and asserts each one resolves to a real
+    Flask route. If a future rename or blueprint re-registration breaks
+    a URL, this test fails BEFORE the user clicks the broken button.
+
+    The list is intentionally hard-coded (not auto-generated) so it
+    documents the contract — a developer changing the JS or the routes
+    must update both sides."""
+
+    def test_event_overrides_url_not_double_prefixed(self, client, tmp_path):
+        """The JS calls /api/projects/<n>/event-overrides. The Flask
+        blueprint projects_bp is registered with url_prefix='/api/projects'.
+        The route must therefore be '/<n>/event-overrides' (not
+        '/projects/<n>/event-overrides'). This test asserts the URL the
+        JS uses resolves to a real route (404 → 200/404 with body, but
+        NOT the URL-mismatch 404)."""
+        project_path = tmp_path / '1 - Test'
+        (project_path / 'midi').mkdir(parents=True)
+        with patch('webui.api.projects.get_project_by_number') as mock_get:
+            mock_get.return_value = {
+                'number': 1, 'name': 'Test', 'path': project_path,
+                'created': datetime.now(), 'metadata': {},
+            }
+            # Hit the URL the JS actually calls
+            response = client.get('/api/projects/1/event-overrides')
+            # If the URL is double-prefixed, Flask returns 404 with empty
+            # body (no route matched). A working URL returns 200 with JSON.
+            assert response.status_code == 200, (
+                f"GET /api/projects/1/event-overrides returned {response.status_code}. "
+                f"This is the JS URL — the Flask route is probably registered "
+                f"as /projects/<n>/event-overrides inside a blueprint with "
+                f"url_prefix='/api/projects', giving the wrong full URL. "
+                f"Body: {response.data!r}"
+            )
+
+    def test_every_js_endpoint_resolves_to_a_flask_route(self, app, client):
+        """Catalog of URL paths the JS uses. Each must resolve to a
+        real Flask route (status != 404 for the canonical path).
+
+        The point of this test: if anyone renames a route or changes a
+        blueprint's url_prefix, the JS will silently 404. This catches
+        the breakage here, before the user clicks."""
+        # Build the JS endpoint set
+        js_endpoints = [
+            # (path, method, optional body)
+            ('/api/projects', 'GET'),
+            ('/api/projects/1', 'GET'),
+            ('/api/projects/1/config/midiconfig', 'GET'),
+            ('/api/projects/1/jobs', 'GET'),
+            ('/api/projects/1/analysis', 'GET'),
+            ('/api/projects/1/envelope/kick', 'GET'),
+            ('/api/projects/1/event-overrides', 'GET'),
+            ('/api/projects/1/event-overrides', 'PUT'),
+            ('/api/projects/1/audio-files', 'GET'),
+            ('/api/separate', 'POST'),
+            ('/api/cleanup', 'POST'),
+            ('/api/stems-to-midi', 'POST'),
+            ('/api/rebuild-midi', 'POST'),
+            ('/api/reclassify', 'POST'),
+            ('/api/render-video', 'POST'),
+            ('/api/jobs', 'GET'),
+            ('/api/jobs/job-1', 'GET'),
+            ('/api/jobs/job-1/cancel', 'POST'),
+        ]
+
+        # Get the full set of registered Flask routes for the app, with
+        # a normalized method list.
+        registered = []
+        for rule in app.url_map.iter_rules():
+            methods = sorted(m for m in rule.methods if m not in ('HEAD', 'OPTIONS'))
+            registered.append((rule.rule, methods))
+
+        failures = []
+        for path, method in js_endpoints:
+            ok = False
+            for rule, methods in registered:
+                if method in methods and _routes_match(rule, path):
+                    ok = True
+                    break
+            if not ok:
+                failures.append(f"  {method:6s} {path}  → NO MATCHING ROUTE")
+
+        assert not failures, (
+            "The following JS endpoints don't resolve to any registered Flask "
+            "route. The route was likely renamed, the blueprint url_prefix "
+            "was changed, or the URL is missing a path segment. Failures:\n"
+            + "\n".join(failures)
+            + "\n\nRegistered routes (sample):\n"
+            + "\n".join(f"  {','.join(methods)!s:20s} {rule}"
+                        for rule, methods in sorted(registered)[:20])
+        )
+
+
+def _routes_match(rule_str: str, js_path: str) -> bool:
+    """
+    Best-effort: does a Flask rule string (e.g. '/api/projects/<int:project_number>')
+    match a JS-callable path (e.g. '/api/projects/1')?
+
+    We do this by converting the Flask rule to a regex with integer-or-string
+    placeholders, then matching the JS path. Catches the most common cases
+    (int path params, string path params). Doesn't catch complex converters
+    (uuid, path, etc.) — those are rare in this codebase.
+    """
+    import re
+    # Convert Flask placeholders to a permissive regex
+    pattern = re.sub(r'<[^>]+>', r'[^/]+', rule_str)
+    return bool(re.fullmatch(pattern, js_path))
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+

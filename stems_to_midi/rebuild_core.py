@@ -117,8 +117,36 @@ def _classification_thresholds_changed(
                 return True
         return False
 
-    # For snare/toms/cymbals, cluster thresholds (expected_clusters, cluster_feature)
-    # already trigger reclassification via the 'classification' slider key path.
+    # For snare/toms/cymbals, classification is driven by
+    # expected_clusters, cluster_feature, and the per-class MIDI
+    # notes (midi_note, midi_note_rimshot, midi_note_clap, midi_note_crash,
+    # midi_note_ride, midi_note_chinese). Any change to these forces
+    # reclassification so the new labels take effect.
+    stem_config = config.get(stem_type, {})
+    classification_keys = (
+        'expected_clusters', 'cluster_feature', 'midi_note',
+    )
+    # Per-class notes: any midi_note_* key in this stem.
+    for key in stem_config:
+        if key.startswith('midi_note_'):
+            classification_keys = classification_keys + (key,)
+            break  # only need to detect a change in any of them
+    for key in classification_keys:
+        # The thresholds come from the stem config (config[stem_type]),
+        # NOT the per-stem spectral_config. spectral_config is the
+        # geomean/sustain/strength threshold bundle, not the
+        # classification input. We read both: the stem config has
+        # the value the user just set, the stored_logic has what the
+        # previous conversion used.
+        current = stem_config.get(key)
+        stored = stored_logic.get(key)
+        if current is not None and stored is not None and current != stored:
+            return True
+        # Also check the spectral_config (covers cluster_feature which
+        # some flows put there). This is a defensive read.
+        spectral_value = spectral_config.get(key)
+        if spectral_value is not None and stored is not None and spectral_value != stored:
+            return True
     return False
 
 

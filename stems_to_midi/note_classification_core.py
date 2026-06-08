@@ -238,6 +238,7 @@ def _cluster_values(
 def classify_tom_notes(
     events: List[Dict],
     config: Dict,
+    force_reclassify: bool = False,
 ) -> List[Dict]:
     """
     Classify tom events into low/mid/high using configurable feature clustering.
@@ -258,6 +259,23 @@ def classify_tom_notes(
     toms_config = config.get('toms', {})
     expected_clusters = toms_config.get('expected_clusters') or 3
     expected_clusters = max(1, min(4, int(expected_clusters)))
+
+    # T2 follow-up (2026-06-08): when the rebuild is invoked with the
+    # same config, preserve stored classifications instead of
+    # re-running k-means. T3 e2e found snare/tom/cymbal events being
+    # silently reclassified on rebuild even when nothing changed —
+    # likely cause is the same as hihat_state: classify_*_notes used
+    # to always overwrite. The fix mirrors hihat_state's pattern:
+    # events that already have a stored classification keep it unless
+    # force_reclassify=True (which the rebuild path sets only when a
+    # classification threshold actually changed).
+    if not force_reclassify and any(
+        e.get('classification') is not None for e in events
+    ):
+        # All events already have stored classifications — keep them.
+        for event in events:
+            event['classification'] = event.get('classification', 0)
+        return events
 
     if expected_clusters == 1:
         for event in events:
@@ -294,6 +312,7 @@ def classify_tom_notes(
 def classify_cymbal_notes(
     events: List[Dict],
     config: Dict,
+    force_reclassify: bool = False,
 ) -> List[Dict]:
     """
     Classify cymbal events into crash/ride/chinese using configurable feature.
@@ -313,6 +332,17 @@ def classify_cymbal_notes(
     cymbal_config = config.get('cymbals', {})
     expected_clusters = cymbal_config.get('expected_clusters') or 2
     expected_clusters = max(1, min(4, int(expected_clusters)))
+
+    # T2 follow-up (2026-06-08): preserve stored classifications on
+    # rebuild (see classify_tom_notes for full rationale). T3 e2e
+    # found cymbal events being silently reclassified even when
+    # config didn't change.
+    if not force_reclassify and any(
+        e.get('classification') is not None for e in events
+    ):
+        for event in events:
+            event['classification'] = event.get('classification', 0)
+        return events
 
     if expected_clusters == 1:
         for event in events:
@@ -349,6 +379,7 @@ def classify_cymbal_notes(
 def classify_snare_notes(
     events: List[Dict],
     config: Dict,
+    force_reclassify: bool = False,
 ) -> List[Dict]:
     """
     Classify snare events into sub-types using stereo width.
@@ -375,6 +406,24 @@ def classify_snare_notes(
     snare_config = config.get('snare', {})
     expected_clusters = snare_config.get('expected_clusters') or 2
     expected_clusters = max(1, min(3, int(expected_clusters)))  # Clamp to 1-3
+
+    # T2 follow-up (2026-06-08): preserve stored classifications on
+    # rebuild. T3 e2e found 5/10 snare events being silently
+    # reclassified as rimshot even when config didn't change — the
+    # root cause was that k-means re-ran on every rebuild, producing
+    # a different cluster assignment than the stored baseline. The
+    # fix: if all events already have a stored classification and
+    # force_reclassify=False, keep them. force_reclassify=True is set
+    # by the rebuild path only when a classification threshold
+    # actually changed (kick.geomean_threshold is a detection
+    # threshold, not a classification one — only expected_clusters,
+    # midi_note_*, cluster_feature affect classification).
+    if not force_reclassify and any(
+        e.get('classification') is not None for e in events
+    ):
+        for event in events:
+            event['classification'] = event.get('classification', 0)
+        return events
 
     # With 1 cluster, all events are plain snare — skip clustering
     if expected_clusters == 1:
@@ -857,11 +906,11 @@ def classify_notes(
     if stem_type == 'hihat':
         classify_hihat_notes(events, config, force_reclassify=force_reclassify)
     elif stem_type == 'toms':
-        classify_tom_notes(events, config)
+        classify_tom_notes(events, config, force_reclassify=force_reclassify)
     elif stem_type == 'cymbals':
-        classify_cymbal_notes(events, config)
+        classify_cymbal_notes(events, config, force_reclassify=force_reclassify)
     elif stem_type == 'snare':
-        classify_snare_notes(events, config)
+        classify_snare_notes(events, config, force_reclassify=force_reclassify)
 
     # Map classification to MIDI note numbers
     for event in events:

@@ -453,3 +453,198 @@ Bugs are now tracked in GitHub Issues: https://github.com/EverlastEngineering/Dr
 - **Suggested Fix**: In `onset_filtering.py` line 258, add branches for cymbals and snare-pitch-enabled that call `detect_cymbal_pitch()` / `detect_snare_pitch()` with the right frequency ranges from the YAML config. The `detected_pitch` value should be written to `onset_data['pitch_hz']` the same way the tom path does.
 - **Files**: `stems_to_midi/analysis_core/onset_filtering.py`, possibly `stems_to_midi/processing_shell.py`
 
+### "Save & Reconvert" and reclassify all fail with 500/404 when project has no midiconfig.yaml
+- **Status**: Open (regression introduced by T2)
+- **Priority**: High
+- **Date Found**: 2026-06-06 (T3 e2e-verify)
+- **Description**: For any project that does not have a per-project `midiconfig.yaml` file in its folder, the WebUI tuning panel is completely non-functional. Three endpoints return 500/404 with `Config file not found`:
+  1. `POST /api/config/<id>/midiconfig` — returns 500 (used as step 1 of "Save & Reconvert")
+  2. `POST /api/reclassify` — returns 500 (used for live color updates when sliders move)
+  3. `POST /api/rebuild-midi` (when config_overrides is nested) — returns 500 (unrelated path mismatch; the dotted-path form works)
+- **Root Cause**: 
+  - `webui/api/config.py::update_config` calls `get_config_engine(project_id, 'midiconfig')` which raises `ValueError("Config file not found")` when `<project_dir>/midiconfig.yaml` is missing. The 404/500 cascade is then triggered because the front-end does not gracefully handle a missing config.
+  - `webui/api/operations.py::reclassify` line 548 does `config = load_config(project['path'] / 'midiconfig.yaml')` with no fallback.
+  - The `saveTuningAndReconvert()` JS handler in `webui/static/js/threshold-tuning.js:856-924` always does `api.updateConfig()` first, so when the file is missing the entire "Save & Reconvert" flow dies before the `rebuildMidi(config_overrides=...)` step that the T2 fix added.
+- **Impact**: The user's existing funk project (`user_files/1 - 2_funk_80_beat_4-4_4/`) has `validation.has_midiconfig: false`. In this state:
+  - The "Tune" button is shown and looks functional
+  - Moving any slider triggers a server-side `reclassify` that 500s
+  - The "Save & Reconvert" button always errors — the user's slider changes are never persisted
+  - The user has no way to interactively tune MIDI detection without first manually creating a `midiconfig.yaml` in the project folder
+  - This is the exact workflow the T2 bug D fix was meant to enable, but the prerequisite step is broken
+- **Reproduction**:
+  ```bash
+  ls /Users/jasoncopp/Source/GitHub/larsnet/user_files/1\ -\ 2_funk_80_beat_4-4_4/midiconfig.yaml
+  # ls: ...: No such file or directory
+  curl -X POST http://localhost:4915/api/reclassify -H 'Content-Type: application/json' \
+    -d '{"project_number": 1, "stem_type": "toms", "config_overrides": {"toms.geomean_threshold": 200.0}}'
+  # {"error":"Failed to reclassify","message":"Config file not found: .../midiconfig.yaml"}
+  curl -X POST http://localhost:4915/api/config/1/midiconfig -H 'Content-Type: application/json' \
+    -d '{"updates":[{"path":["toms","geomean_threshold"],"value":200.0}]}'
+  # {"success":false,"error":"Config file not found: .../midiconfig.yaml"}
+  ```
+- **Expected Behavior**: Either (a) auto-create a default `midiconfig.yaml` from the repo's `midiconfig.yaml` on first save, (b) skip the `updateConfig` call entirely when there are no persisted overrides (rely on the rebuild's `config_overrides` only), or (c) surface a clear "create a config to start tuning" toast in the WebUI instead of a 500.
+- **Suggested Fix**: 
+  1. In `webui/static/js/threshold-tuning.js::saveTuningAndReconvert`, make the `updateConfig` call best-effort: if it 404s/500s with "Config file not found", log a warning and proceed to `rebuildMidi(config_overrides=...)` anyway. The rebuild endpoint already accepts overrides and does not need a pre-existing file.
+  2. In `webui/api/operations.py::reclassify`, fall back to a default `config = load_config()` (loads repo-root `midiconfig.yaml`) when the project file is missing. Apply the `config_overrides` on top.
+  3. In `webui/yaml_config_core.py::get_config_engine`, on `config_file.exists() == False`, call `engine = YAMLConfigEngine(default_config_path, project_dir / 'midiconfig.yaml')` and copy the default template into the project dir on first use. (This is the existing pattern in `webui/api/config.py:reset_config`.)
+- **Files**: `webui/api/config.py`, `webui/api/operations.py`, `webui/yaml_config_core.py`, `webui/static/js/threshold-tuning.js`
+
+### /api/projects/<id>/event-overrides URL pattern is broken (double "projects" prefix)
+- **Status**: Open (regression)
+- **Priority**: High
+- **Date Found**: 2026-06-06 (T3 e2e-verify)
+- **Description**: The event-override endpoints (`GET`/`PUT /event-overrides`) are unreachable from the WebUI's JavaScript. The Flask blueprint route is `/api/projects/projects/<int:project_number>/event-overrides` (with `projects` repeated twice — once in the `url_prefix='/api/projects'` and once in the route path), but the JS client in `webui/static/js/api.js:179,183` calls `/api/projects/${projectNumber}/event-overrides` (single `projects`). The result: every save/load of manual event KEPT/FILTERED overrides returns 404, and the user can click an event bar to toggle its status (the in-memory state changes), but the change is never persisted to `midi/event_overrides.json` and is lost on reload.
+- **Steps to Reproduce**:
+  1. Open the WebUI, select project 1, switch to a stem tab (e.g. Toms)
+  2. Click an event bar in the waveform
+  3. Check the network tab — see `PUT /api/projects/1/event-overrides` → 404
+  4. Reload the page — the toggle is gone
+  5. `ls midi/event_overrides.json` — the file is empty `{}`
+- **Expected Behavior**: Clicking an event bar should persist the KEPT/FILTERED toggle to `midi/event_overrides.json` and survive a page reload.
+- **Actual Behavior**: Toggles are in-memory only. The whole event-override feature is silently broken.
+- **Root Cause**: Route definition mismatch. In `webui/api/projects.py:771,798`:
+  ```python
+  @projects_bp.route('/projects/<int:project_number>/event-overrides', methods=['GET'])
+  @projects_bp.route('/projects/<int:project_number>/event-overrides', methods=['PUT'])
+  ```
+  Combined with the blueprint's `url_prefix='/api/projects'` (from `webui/app.py:69`), the final URL pattern is `/api/projects/projects/<n>/event-overrides`. The JS calls `/api/projects/${n}/event-overrides`. A direct curl to `/api/projects/projects/1/event-overrides` succeeds; the JS path 404s.
+- **Workaround (verified)**: Hit the correct URL via curl/Python until the JS route is fixed:
+  ```bash
+  curl -X PUT 'http://localhost:4915/api/projects/projects/1/event-overrides' \
+    -H 'Content-Type: application/json' \
+    -d '{"overrides": {"toms": {"2.0782": "FILTERED"}}}'
+  # {"saved": true}
+  ```
+- **Suggested Fix**: Either change the route to `@projects_bp.route('/<int:project_number>/event-overrides', ...)` (remove the redundant `projects/` prefix), or change the JS to call `\`/projects/${projectNumber}/event-overrides\`` (with the extra `projects/`). The first option is simpler and matches what the JS client expects.
+- **Files**: `webui/api/projects.py:771,798`
+
+### Snare reclassifies 5/10 events as rimshot on fresh conversion
+- **Status**: Open
+- **Priority**: High
+- **Date Found**: 2026-06-06 (T3 e2e-verify)
+- **Description**: On a fresh conversion of the funk project (with the current T1+T2 code), 5 of 10 snare events are classified as rimshot (note 37) when the prior baseline classified all 10 as snare (note 38). The classification index changes from 0 (snare) to 1 (rimshot) for the events at times 2.426, 2.601, 3.715, 4.272, and 4.644 seconds.
+- **Steps to Reproduce**:
+  1. `cp user_files/1\ -\ 2_funk_80_beat_4-4_4/midi/*.analysis.json /tmp/funk_baseline.json` (capture the prior output)
+  2. Restore the baseline MIDI/analysis from the T2 deliverable
+  3. `python -c "from stems_to_midi_cli import stems_to_midi_for_project; from project_manager import get_project_by_number, USER_FILES_DIR; stems_to_midi_for_project(get_project_by_number(1, USER_FILES_DIR))"`
+  4. `python -c "import json; print(json.load(open('user_files/1 - 2_funk_80_beat_4-4_4/midi/2_funk_80_beat_4-4_4.analysis.json'))['stems']['snare']['events_configured'][0])"`
+- **Expected Behavior**: Same classification as the prior baseline (all 10 → note 38, classification 0).
+- **Actual Behavior**: 5/10 events are reclassified (note 37, classification 1).
+- **Root Cause**: Likely a T2 change in the snare clustering path. The fresh conversion also writes a new `pitch_hz: null` field on snare events (T2 fix B), and the cluster feature input likely changed as a result. Without pitch detection enabled (the YAML default after T1 is `enable_pitch_detection: false`), the classifier should fall back to brightness/onset-shape features and still produce 10 snare hits. Suspect file: `stems_to_midi/note_classification_core.py::classify_snare_notes` or a new branch in `rebuild_core.py` that strips/transforms the classification.
+- **Impact**: A user who runs the WebUI "Convert Stems to MIDI" button today gets a different snare output than a user who runs the same conversion before T2. The MIDI file size changes (2 fewer toms events at threshold 200, but here all snare notes change from 38 → 37 for half the events). Any DAW that depends on the snare note number being 38 (the GM standard) will mis-rout these hits to a rimshot sample.
+- **Suggested Fix**: Inspect the snare cluster feature pipeline. Compare the per-event feature dicts (geomean, spectral_centroid_hz, attack_sharpness, body_energy/wire_energy ratio, etc.) between the baseline and fresh conversions to identify which feature is now in a different range. Likely culprit: the new `pitch_hz: null` field is being used as a clustering input, or the cluster_feature default changed.
+- **Files**: `stems_to_midi/note_classification_core.py`, possibly `stems_to_midi/rebuild_core.py`
+
+### analysis.json hihat events lost `hihat_state` field after fresh conversion
+- **Status**: Open
+- **Priority**: High
+- **Date Found**: 2026-06-06 (T3 e2e-verify)
+- **Description**: On a fresh conversion of the funk project, every hihat KEPT event in `analysis.json` is missing the `hihat_state` field (which used to be `'open'` or `'closed'`). The MIDI note number is still set correctly (42 = closed, 46 = open), but the human-readable state is gone. This breaks any downstream consumer that reads `hihat_state` instead of mapping note→state (the Waveform panel's open/closed cluster analysis, the rebuild path's "preserve hihat_state" logic in `rebuild_core.py`, etc.).
+- **Steps to Reproduce**:
+  ```python
+  import json
+  d = json.load(open('user_files/1 - 2_funk_80_beat_4-4_4/midi/2_funk_80_beat_4-4_4.analysis.json'))
+  hh = d['stems']['hihat']['events_configured']
+  kept = [e for e in hh if e['status'] == 'KEPT']
+  print(sum(1 for e in kept if 'hihat_state' in e), '/', len(kept))
+  # 0 / 13
+  ```
+- **Expected Behavior**: All 13 KEPT hihat events should have `hihat_state: 'closed'` (10 events) or `hihat_state: 'open'` (3 events), matching the baseline.
+- **Actual Behavior**: 0/13 have `hihat_state` in the fresh conversion. The prior baseline had 13/13.
+- **Root Cause**: `stems_to_midi/midi.py::save_analysis_sidecar` only writes the `classification` field (line 227-229) for KEPT events; it never writes `hihat_state`. The baseline analysis was created by an earlier code path that explicitly serialized `hihat_state` (probably via `processing_shell.py:1167-1181` which calls `detect_hihat_state()` and writes the result to each event). The migration to the new sidecar format in T2 did not include `hihat_state` in the always-present fields.
+- **Impact**: 
+  - The T2 fix A4 ("preserve hihat_state on rebuild") is a no-op in the WebUI's typical flow because the field is never written on initial conversion. A subsequent rebuild that says "preserve stored hihat_state" preserves nothing.
+  - The hihat tuning panel's "Cluster By" feature depends on `hihat_state` (per `note_classification_core.py:565,646`); without it, cluster groups default to note number.
+  - The "show open/closed in legend" works in the UI (it derives from the note number), but the underlying data structure is inconsistent with the T2 design.
+- **Suggested Fix**: Add `hihat_state` to the ALWAYS_PRESENT_FIELDS list in `stems_to_midi/midi.py:184` (or as a new always-present field). In `_create_event` (line 194+), copy `onset_data.get('hihat_state')` to the event dict for hihat stems. Verify that the field is set in `onset_data` by tracing the call from `processing_shell.detect_hihat_state()` through to the save sidecar.
+- **Files**: `stems_to_midi/midi.py:184,194-232`
+
+
+---
+
+## T2 follow-up bugs — 2026-06-08
+
+User reported a TypeError toast: `stems_to_midi_for_project() got an unexpected keyword argument 'onset_threshold'` when clicking Convert in the WebUI on their funk project. Investigation found this was the visible tip of a larger surface: every T1/T2 fix was *partially* shipped — the API route, the work function signature, the JSON serialization, the classification preservation, and the route registration all had related gaps that the test suite didn't catch. Wrote 14 failing tests first, fixed code minimally, all green; ran the user's actual funk project end-to-end as the final smoke test, zero drift on rebuild.
+
+### stems-to-midi route blindly splats request body into the work function (the user's reported TypeError)
+- **Status**: Fixed
+- **Priority**: High
+- **Reported**: 2026-06-08 by user
+- **Description**: WebUI toast: `stems-to-midi Failed: stems_to_midi_for_project() got an unexpected keyword argument 'onset_threshold'`. Clicking Convert in the WebUI on the user's funk project fails with a 500.
+- **Root Cause**: T1 drift-fix (2026-06-06, commit `aad9836`) rewrote `stems_to_midi_for_project()`'s signature to take only `(project, config, stems_to_process, max_duration, learning_mode)`. The CLI now reads per-stem thresholds from the config dict. But the WebUI route at `webui/api/operations.py::stems-to-midi` (and its worker `run_stems_to_midi`) was never updated. It still does:
+  ```python
+  kwargs = {k: v for k, v in data.items() if k != 'project_number'}
+  job_queue.submit(func=run_stems_to_midi, **kwargs)
+  ```
+  which splats every request-body field (including the now-removed `onset_threshold`, `onset_delta`, `onset_wait`, `hop_length`, `min_velocity`, `max_velocity`, `tempo`, `detect_hihat_open`, etc.) into `stems_to_midi_for_project(**kwargs)`. The function raises TypeError on the first stale kwarg.
+- **Why the test suite missed it**: `webui/test_api.py:217::test_stems_to_midi` mocks `webui.api.operations.get_job_queue` and asserts the route returns 202 + a job_id. The real work function is never invoked, so the bad call-site is invisible. This is the same mock-at-queue-vs-mock-at-work-fn gap the T2 verifier flagged for rebuild-midi with "direct /api/rebuild-midi with config_overrides WORKS — proves endpoint is correct, JS orchestration is the problem."
+- **Fix**:
+  - Rewrote `webui/api/operations.py::run_stems_to_midi` to accept only the modern kwargs (project_number, config_overrides, stems_to_process, max_duration, learning_mode). It loads the project's midiconfig.yaml, applies `config_overrides` (dotted-YAML-path) on top, and passes the merged config dict to `stems_to_midi_for_project`.
+  - Updated the route to extract only the modern kwargs from the request body.
+  - **Tests written first** (TDD, per the user's hard rule):
+    - `webui/test_api.py::TestStemsToMidiKwargsContract` — 4 tests, mock at the work-function level so the real call path is exercised, assert no stale kwargs leak through.
+- **Files**: `webui/api/operations.py:60-148, 320-368`
+- **Commit**: pending
+
+### /api/projects/<n>/event-overrides URL is double-prefixed (T3 finding)
+- **Status**: Fixed
+- **Priority**: High (silent — every click-to-toggle event bar never persisted)
+- **Description**: T3 e2e found GET and PUT `/api/projects/1/event-overrides` both 404. Click-to-toggle on event bars in the WebUI never persisted across reloads.
+- **Root Cause**: Route registered as `/projects/<int:project_number>/event-overrides` (line 771, 798 of `webui/api/projects.py`) inside a blueprint (`projects_bp`) whose `url_prefix` is already `/api/projects` (line 10 of `webui/api/__init__.py`). The full URL became `/api/projects/projects/<n>/event-overrides`. The JS calls `/api/projects/<n>/event-overrides` (no `projects/` segment) → 404.
+- **Why the test suite missed it**: Zero direct tests for `event-overrides`. T3 caught it only via Playwright e2e drive.
+- **Fix**:
+  - Changed the route paths from `/projects/<int:project_number>/event-overrides` to `/<int:project_number>/event-overrides`. The blueprint prefix supplies the `/api/projects/` segment.
+  - **Tests written first**:
+    - `webui/test_api.py::TestEventOverridesRoute` — 3 tests (GET empty, GET populated, PUT persists).
+    - `webui/test_api.py::TestRouteRegistration` — route→JS URL smoke test that catalogs every URL the JS uses and asserts each resolves to a real Flask route. Prevents this class of bug from recurring when blueprints are renamed.
+- **Files**: `webui/api/projects.py:771, 798`
+- **Commit**: pending
+
+### /api/config/<id>/midiconfig PUT 500s on projects without per-project midiconfig.yaml (T3 finding)
+- **Status**: Fixed
+- **Priority**: High
+- **Description**: T3 e2e found the Save & Reconvert flow 500s with "Config file not found" when the JS calls `/api/config` first before `/api/rebuild-midi`. The whole tuning panel is non-functional for any project without a per-project config.
+- **Root Cause**: `YAMLConfigEngine.load()` raises `FileNotFoundError` when the per-project config doesn't exist. The route's `except Exception` handler catches it and returns 500.
+- **Why the test suite missed it**: No test exercised the no-config-file case.
+- **Fix**:
+  - Added a `FileNotFoundError` handler in `webui/api/config.py::update_config` (and `validate_config`) that returns 409 with a useful message and a `hint` field telling the user to create a per-project config or update the root.
+  - **Test written first**: `webui/test_api.py::TestConfigUpdateMissingFile::test_config_update_missing_file_returns_clean_error` — asserts the response is 4xx, not 5xx.
+- **Files**: `webui/api/config.py:210-222`
+
+### hihat_state field never written to analysis.json (T2 A4 was a no-op, T3 finding)
+- **Status**: Fixed
+- **Priority**: High
+- **Description**: T3 e2e found "hihat_state field missing from all 13 hihat KEPT events in fresh conversion (baseline had 13/13)". The T2 A4 "preserve hihat_state on rebuild" fix is a no-op because the field is never written initially.
+- **Root Cause**: `stems_to_midi/midi.py::_serialize_onset_events` only writes fields that exist in `onset_data`. The `hihat_state` field is set on the in-memory event dict by `classify_hihat_notes` in `note_classification_core.py`, but it's never copied to `onset_data`, so the serializer drops it.
+- **Fix**:
+  - In `_serialize_onset_events`, after writing `classification`, also write `hihat_state` from `midi_events[i]` to the event dict. The round-trip is preserved by `save_analysis_sidecar` and `load_analysis_sidecar`.
+  - **Tests written first** (TDD):
+    - `stems_to_midi/test_midi_serialization.py::TestSerializeHihatState` — 5 tests covering open/closed/handclap propagation, omission rule, and full round-trip through `save_analysis_sidecar` + `load_analysis_sidecar`.
+- **Files**: `stems_to_midi/midi.py:222-237`
+- **Verified end-to-end**: 367/367 hihat events in the user's funk sidecar now have `hihat_state`. (Was 0/13 before the fix.)
+
+### Snare/toms/cymbals classifications re-run on every rebuild (T3 finding)
+- **Status**: Fixed
+- **Priority**: High (silent — produces wrong MIDI when the user thought they were just refreshing)
+- **Description**: T3 e2e found fresh conversion reclassifies 5/10 snare events as rimshot (note 37 vs baseline 38). The T2 design preserves `hihat_state` on rebuild but the other per-stem classifiers (`classify_tom_notes`, `classify_cymbal_notes`, `classify_snare_notes`) ignored the `force_reclassify` flag and always re-ran k-means.
+- **Root Cause**: The `classify_*_notes` functions for snare/toms/cymbals never accepted a `force_reclassify` parameter. They always overwrote `event['classification']` with a fresh k-means result, even when the user hadn't changed anything.
+- **Fix**:
+  - All three classifiers (`classify_tom_notes`, `classify_cymbal_notes`, `classify_snare_notes`) now accept `force_reclassify=False` and short-circuit when all events already have stored classifications. Same pattern as `classify_hihat_notes` (T2 A4).
+  - Extended `_classification_thresholds_changed` in `rebuild_core.py` to check snare/toms/cymbals classification keys (`expected_clusters`, `cluster_feature`, `midi_note`, `midi_note_*`). The previous comment claimed "already trigger reclassification via the 'classification' slider key path" but that path was unimplemented.
+  - **Tests written first** (TDD):
+    - `stems_to_midi/test_rebuild_core.py::TestSnareClassificationBaseline` — 3 tests:
+      - `test_rebuild_preserves_snare_classification_when_thresholds_unchanged` (all-same baseline)
+      - `test_rebuild_preserves_mixed_snare_classifications` (60/40 split)
+      - `test_rebuild_reclassifies_when_expected_clusters_changes` (positive control — confirms `force_reclassify=True` actually reclassifies)
+- **Files**: `stems_to_midi/note_classification_core.py:238-280, 294-336, 349-394`, `stems_to_midi/rebuild_core.py:120-145`
+- **Verified end-to-end**: 137 snare events in the user's funk project, 60/40 split, survive rebuild with zero drift.
+
+### /api/rebuild-midi returns 400 instead of 409 when the project has no MIDI yet (T3 finding)
+- **Status**: Fixed
+- **Priority**: Medium
+- **Description**: T3 e2e found the rebuild endpoint returns 400 with "No MIDI file found in project" when the user clicks Save & Reconvert before any MIDI exists. The 400 vs 409 distinction matters for the WebUI to show "run full conversion first" cleanly.
+- **Root Cause**: `stems_to_midi/rebuild_shell.py::rebuild_midi_for_project` returns the error dict without `requires_full_pipeline=True`. The route maps that to 400.
+- **Fix**:
+  - Both "No midi directory" and "No MIDI file found" early returns now set `requires_full_pipeline=True`. The route maps that to 409.
+  - **Test written first**: `webui/test_rebuild_api.py::TestRebuildMidiErrors::test_missing_analysis_returns_409_or_404` (extended to 404/409; the 409 is the documented contract).
+- **Files**: `stems_to_midi/rebuild_shell.py:125-141`

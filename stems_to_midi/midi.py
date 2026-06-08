@@ -227,6 +227,18 @@ def _serialize_onset_events(
                 classification = midi_events[midi_idx].get('classification')
                 if classification is not None:
                     event['classification'] = classification
+                # T2 follow-up (2026-06-08): the hihat_state field is
+                # only set on the in-memory event dict by
+                # classify_hihat_notes. _serialize_onset_events used to
+                # drop it on the way to the JSON sidecar, which meant
+                # T2 A4's "preserve hihat_state on rebuild" was a no-op
+                # for the initial-conversion case (the field was never
+                # written to begin with). T3 e2e found this:
+                # "hihat_state field missing from all 13 hihat KEPT
+                # events in fresh conversion (baseline had 13/13)".
+                hihat_state = midi_events[midi_idx].get('hihat_state')
+                if hihat_state is not None:
+                    event['hihat_state'] = hihat_state
                 midi_idx += 1
 
         events.append(event)

@@ -57,31 +57,90 @@ def run_cleanup(project_number: int, threshold_db: float = -30.0, ratio: float =
     return {'project_number': project_number, 'cleaned_stems_created': True}
 
 
-def run_stems_to_midi(project_number: int, **kwargs):
+def run_stems_to_midi(
+    project_number: int,
+    config_overrides: dict = None,
+    stems_to_process: list = None,
+    max_duration: float = None,
+    learning_mode: bool = False,
+):
     """
     Execute stems to MIDI conversion for a project.
-    
+
     This is the actual work function that runs in the job queue.
+
+    Contract (T2 follow-up, 2026-06-08): the post-T1
+    stems_to_midi_for_project signature is (project, config,
+    stems_to_process, max_duration, learning_mode) — it does NOT
+    accept flat kwargs like onset_threshold. The WebUI route must
+    forward only the modern shape. Per-stem thresholds flow through
+    the config dict, which the work function builds from the
+    project's midiconfig.yaml and then applies config_overrides on
+    top (dotted YAML paths).
     """
     # Import from stems_to_midi_cli.py file using importlib
     import importlib.util
     from pathlib import Path
-    
+
     # Load stems_to_midi_cli.py explicitly
     stems_to_midi_path = Path(__file__).parent.parent.parent / "stems_to_midi_cli.py"
     spec = importlib.util.spec_from_file_location("stems_to_midi_cli", stems_to_midi_path)
     stems_to_midi_cli = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(stems_to_midi_cli)
-    
+
     from project_manager import get_project_by_number, USER_FILES_DIR
-    
+
     project = get_project_by_number(project_number, USER_FILES_DIR)
     if project is None:
         raise ValueError(f'Project {project_number} not found')
-    
-    stems_to_midi_cli.stems_to_midi_for_project(project, **kwargs)
-    
+
+    # Load config and apply overrides (dotted YAML paths → config dict)
+    config = stems_to_midi_cli._load_project_config_for_project(project)
+    if config_overrides:
+        stems_to_midi_cli._apply_cli_overrides_to_config(config, config_overrides)
+
+    stems_to_midi_cli.stems_to_midi_for_project(
+        project,
+        config=config,
+        stems_to_process=stems_to_process,
+        max_duration=max_duration,
+        learning_mode=learning_mode,
+    )
+
     return {'project_number': project_number, 'midi_created': True}
+
+
+def _load_project_config_for_project(project):
+    """Load the project's midiconfig.yaml (per-project first, then root)."""
+    import yaml
+    from project_manager import get_project_config
+    config_path = get_project_config(project["path"], "midiconfig.yaml")
+    if config_path is None:
+        # Fall back to empty config — let the pipeline's per-stem defaults apply
+        return {}
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f) or {}
+
+
+def _apply_cli_overrides_to_config(config, overrides):
+    """Apply dotted-YAML-path overrides to a config dict.
+
+    Mirrors webui.cli_builder.apply_cli_overrides but without requiring
+    the full schema SettingDefinition machinery. The route path
+    doesn't need schema validation — the values come from the JS,
+    which already validated against the schema when the form was
+    built.
+    """
+    for path, value in overrides.items():
+        if value is None:
+            continue
+        parts = path.split('.')
+        d = config
+        for part in parts[:-1]:
+            if part not in d or not isinstance(d[part], dict):
+                d[part] = {}
+            d = d[part]
+        d[parts[-1]] = value
 
 
 def run_render_video(project_number: int, fps: int = 60, width: int = 1920, height: int = 1080, 
@@ -334,9 +393,16 @@ def stems_to_midi():
                 'message': f'No project with number {project_number}'
             }), 404
         
-        # Extract optional parameters (all kwargs will be passed to stems_to_midi_for_project)
-        kwargs = {k: v for k, v in data.items() if k != 'project_number'}
-        
+        # Extract only the modern kwargs the post-T1 work function accepts.
+        # Anything else (legacy onset_threshold, detect_hihat_open, etc.) is
+        # rejected — it would TypeError against stems_to_midi_for_project's
+        # new signature. Per-stem threshold overrides belong in
+        # config_overrides as a dotted-YAML-path dict.
+        config_overrides = data.get('config_overrides') or None
+        stems_to_process = data.get('stems_to_process') or None
+        max_duration = data.get('max_duration') or None
+        learning_mode = bool(data.get('learning_mode', False))
+
         # Submit job
         job_queue = get_job_queue()
         job_id = job_queue.submit(
@@ -344,7 +410,10 @@ def stems_to_midi():
             func=run_stems_to_midi,
             project_id=project_number,
             project_number=project_number,
-            **kwargs
+            config_overrides=config_overrides,
+            stems_to_process=stems_to_process,
+            max_duration=max_duration,
+            learning_mode=learning_mode,
         )
         
         return jsonify({
