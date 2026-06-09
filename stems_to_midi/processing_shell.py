@@ -866,10 +866,19 @@ def _build_events_configured(
       these (the spectral detector does not compute it), so the
       serializer writes ``null`` for those fields.
     - ``"both"`` (current default per the schema): the union of energy
-      + spectral, deduplicated within 12ms (matches the validator
-      tolerance in ``midi._validate_events_subset``). On a collision
-      the energy event wins (it has richer metadata); surviving
-      spectral events keep ``method='spectral'``.
+      + spectral events, with NO coupling. Energy events pass through
+      as-is; strong spectral events (bins >= ``SPECTRAL_BINS_FLOOR``)
+      are added alongside. Overlapping markers in the WebUI are the
+      diagnostic value of the A/B view. Spectral events that don't
+      meet the bins floor are dropped (post-hit tail / decay
+      artefacts).
+
+    Note (2026-06-09): the previous version of this function had a
+    12ms dedup window in 'both' mode that dropped spectral events
+    coinciding with energy events. The user explicitly asked for
+    spectral to run in isolation from the energy detector, so the
+    dedup is gone — the spectral signal is now used on its own
+    merits (with the bins quality floor).
 
     Args:
         all_onset_data: Energy-detector output (KEPT + FILTERED onsets
@@ -895,7 +904,18 @@ def _build_events_configured(
         the KEPT counter, so the order of energy events here must match
         the order of KEPT events in ``midi_events``.
     """
-    DEDUP_WINDOW_SEC = 0.012  # matches _validate_events_subset tolerance
+    # Spectral quality floor: only events with at least this many
+    # high-freq bins above the -50dB floor (out of 167 possible) are
+    # treated as real hits. Events below this are post-hit tail / decay
+    # artefacts — the energy in the high band is real but the audio
+    # is already decaying, so the broadband strike signature is gone.
+    # Filter applies to 'both' and 'spectral' modes; the 'energy' mode
+    # is unchanged (no coupling to spectral data).
+    # User direction (2026-06-09): "spectral data should NOT use ANY
+    # data from the original system. for now, JUST use spectral data
+    # for the spectral events." So this filter is purely on the
+    # spectral signal itself — no reference to the energy detector.
+    SPECTRAL_BINS_FLOOR = 150
 
     # Defensive: unknown / None → 'energy' (preserve legacy behavior).
     if detection_method not in ('energy', 'spectral', 'both'):
@@ -906,9 +926,15 @@ def _build_events_configured(
         # stamps note/velocity on KEPT items via the midi_events arg.
         return list(all_onset_data)
 
-    # Build the spectral-candidate list as onset-shaped dicts.
+    # Build the spectral-candidate list as onset-shaped dicts, applying
+    # the bins quality floor. Spectral events that don't meet the
+    # floor are dropped (they're tail / decay artefacts, not real hits).
     spectral_as_onsets = []
     for sp in spectral_onset_data:
+        bins = sp.get('bins_above_floor') or 0
+        if bins < SPECTRAL_BINS_FLOOR:
+            # Weak spectral event — drop silently.
+            continue
         # Carry through the spectral-only fields the user wants to keep
         # visible in the WebUI; the rest of the onset fields (geomean,
         # pitch, pan, status metadata) are null/None.
@@ -924,20 +950,18 @@ def _build_events_configured(
     if detection_method == 'spectral':
         return spectral_as_onsets
 
-    # detection_method == 'both': union with 12ms dedup (energy wins).
-    energy_times = [e.get('time') for e in all_onset_data if e.get('time') is not None]
-    union = list(all_onset_data)
-    for sp in spectral_as_onsets:
-        sp_time = sp.get('time')
-        if sp_time is None:
-            continue
-        # Drop the spectral event if any energy event is within the
-        # dedup window — the energy event has richer metadata
-        # (pitch/classification) so it wins the collision.
-        if any(abs(sp_time - et) <= DEDUP_WINDOW_SEC for et in energy_times):
-            continue
-        union.append(sp)
-    return union
+    # detection_method == 'both': union without dedup.
+    # User direction (2026-06-09): "spectral data should NOT use ANY
+    # data from the original system. for now, JUST use spectral data
+    # for the spectral events. I want to develop this system in
+    # isolation from the other for now." So we no longer couple the
+    # spectral output to the energy event list — no dedup, no
+    # promotion. Energy events pass through as-is; strong spectral
+    # events (bins >= SPECTRAL_BINS_FLOOR, already filtered above)
+    # are added alongside. The WebUI will show overlapping markers
+    # when both detectors fire near the same time — that's the
+    # diagnostic value of the A/B view.
+    return list(all_onset_data) + list(spectral_as_onsets)
 
 
 def process_stem_to_midi(

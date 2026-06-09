@@ -274,30 +274,33 @@ class TestDetectionMethodBoth:
                 round(e['time'], 4) == t for e in configured
             ), f"energy event at t={t} missing from 'both' result"
 
-    def test_spectral_events_within_12ms_of_energy_are_dropped(
+    def test_spectral_events_within_12ms_of_energy_are_NOT_dropped(
         self, wav_path, base_config, drum_mapping
     ):
-        """If a spectral event is within 12ms of an energy event, the
-        energy one wins. So the spectral event shouldn't be in
-        events_configured."""
+        """The old 12ms dedup is gone (2026-06-09). Spectral events
+        that are within 12ms of an energy event are no longer dropped
+        — they appear in events_configured alongside the energy
+        event. The user wants spectral to run in isolation, so the
+        only filter on spectral output is the bins quality floor.
+        Overlapping markers in the WebUI are the diagnostic value of
+        the A/B view."""
         both = _run_with_method(wav_path, base_config, drum_mapping, 'both')
         configured = both['events_configured']
-        spectral_survivors = [e for e in configured if e.get('method') == 'spectral']
+        spectral_events = [e for e in configured if e.get('method') == 'spectral']
 
-        # Each surviving spectral event must be at least 12ms away from
-        # any energy event in the same list. (This is the dedup rule
-        # in code; here we verify the property held.)
-        energy_times = [
-            e['time'] for e in configured if e.get('method') != 'spectral'
-        ]
-        DEDUP_WINDOW = 0.012
-        for sp in spectral_survivors:
-            t = sp['time']
-            assert all(
-                abs(t - et) > DEDUP_WINDOW for et in energy_times
-            ), (
-                f"spectral event at t={t} is within {DEDUP_WINDOW*1000}ms "
-                f"of an energy event but wasn't dropped: {sp}"
+        # Sanity: at least one spectral event exists.
+        assert len(spectral_events) > 0, (
+            "expected at least one spectral event in events_configured under 'both' mode"
+        )
+
+        # Every spectral event must meet the bins quality floor (>= 150).
+        # (The old test checked the dedup window; we now check the
+        # quality floor that replaced it.)
+        for sp in spectral_events:
+            bins = sp.get('bins_above_floor') or 0
+            assert bins >= 150, (
+                f"weak spectral event at t={sp.get('time')} (bins={bins}) "
+                f"should have been dropped by the bins quality floor"
             )
 
     def test_spectral_survivors_carry_method_marker(
