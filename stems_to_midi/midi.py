@@ -207,10 +207,17 @@ def _serialize_onset_events(
         # Add spectral features with rounding
         # Band energy fields are dynamic per stem (e.g., body_energy, wire_energy)
         band_fields = [f'{b}_energy' for b in onset_data.get('geomean_bands', [])]
-        for field in ['strength', 'amplitude'] + band_fields + ['geomean', 'total_energy', 'sustain_ms']:
+        for field in (['strength', 'amplitude']
+                      + band_fields
+                      + ['geomean', 'total_energy', 'sustain_ms',
+                         'bins_above_floor', 'max_db']):
             value = onset_data.get(field)
             if value is not None:
-                event[field] = _round_value(value, 2)
+                # bins_above_floor is an int count; round to int.
+                if field == 'bins_above_floor':
+                    event[field] = int(round(value))
+                else:
+                    event[field] = _round_value(value, 2)
 
         # Optional Phase 2 metadata — present when the upstream pipeline
         # computed them, omitted otherwise.

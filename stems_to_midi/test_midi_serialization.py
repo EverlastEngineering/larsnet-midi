@@ -86,6 +86,37 @@ class TestSerializeOnsetEventsAlwaysPresentFields:
                 f"Optional field {optional!r} should be omitted, not null"
             )
 
+    def test_spectral_fields_preserved_when_present(self):
+        """Bug (2026-06-09): _serialize_onset_events was dropping
+        bins_above_floor and max_db from spectral events that
+        survive into events_configured. The WebUI tooltip wants to
+        show bins for spectral events, but if the sidecar strips the
+        field, the tooltip falls through to the legacy Strength
+        display. _build_events_configured produces spectral events
+        with bins_above_floor and max_db set; the serializer must
+        round and write them through."""
+        onset = {
+            'time': 1.2345, 'status': 'KEPT', 'method': 'spectral',
+            'strength': 0.95,
+            'bins_above_floor': 167,
+            'max_db': -5.4321,
+        }
+        events = _serialize_onset_events([onset])
+        assert 'bins_above_floor' in events[0], (
+            "bins_above_floor was dropped by the serializer; "
+            "spectral events in events_configured will not have the "
+            "data the WebUI tooltip needs"
+        )
+        assert 'max_db' in events[0], (
+            "max_db was dropped by the serializer"
+        )
+        # Both should be present-or-absent, not always-null, so the
+        # JS side can detect "field missing" vs "value is 0".
+        # For spectral events with values set, the field should
+        # carry the value through.
+        assert events[0]['bins_above_floor'] == 167
+        assert events[0]['max_db'] == -5.43  # 2-decimal rounding
+
     def test_basic_fields_still_present(self):
         """time, status, and computed features still work as before."""
         onset = {
