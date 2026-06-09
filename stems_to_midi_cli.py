@@ -249,7 +249,13 @@ def _process_stems_to_midi(
                 # The spectral detector runs on every stem regardless
                 # of detection_method; its candidates are written to
                 # stems.<stem>.events_spectral in the sidecar.
+                # events_configured MUST be forwarded too — without it,
+                # save_analysis_sidecar falls back to all_onset_data
+                # (energy only) and the spectral events never make it
+                # into the sidecar. Bug caught by e2e verifier on
+                # plan_e0953a25, 2026-06-08.
                 analysis_by_stem[stem_type] = {
+                    'events_configured': result.get('events_configured', []),
                     'all_onset_data': result.get('all_onset_data', []),
                     'sensitive_onset_data': result.get('sensitive_onset_data', []),
                     'spectral_onset_data': result.get('spectral_onset_data', []),
