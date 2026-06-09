@@ -196,6 +196,28 @@ class TestWaveformJSColorHelper:
             "the color → method mapping except by reading the legend."
         )
 
+    def test_tooltip_shows_bins_for_spectral_events(self, waveform_js_text):
+        """User request (2026-06-09): the tooltip should show the
+        bins_above_floor value for spectral events (the meaningful
+        quality signal for the spectral detector), not the
+        normalized strength."""
+        m = re.search(
+            r"function\s+drawTooltip\s*\([^)]*\)\s*\{(.*?)\n\}",
+            waveform_js_text,
+            re.DOTALL,
+        )
+        assert m is not None, "could not locate drawTooltip function body"
+        body = m.group(1)
+        # The tooltip must read event.bins_above_floor and push a
+        # 'Bins: ...' line for spectral events.
+        assert 'bins_above_floor' in body, (
+            "drawTooltip must read event.bins_above_floor for the "
+            "spectral quality signal"
+        )
+        assert 'Bins:' in body or 'Bins ' in body, (
+            "drawTooltip must push a 'Bins: ...' line for spectral events"
+        )
+
 
 # ─── 2. Node-based behavioral tests: the helper actually works ──────────
 

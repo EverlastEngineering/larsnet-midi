@@ -1180,7 +1180,18 @@ function drawTooltip(ctx, event, W, H) {
         lines.push(`Type: ${event.classification + 1}`);
     }
     if (event.hihat_state != null) lines.push(`Hi-hat: ${event.hihat_state}`);
-    if (event.strength != null) lines.push(`Strength: ${event.strength}`);
+    // For spectral events, the relevant quality signal is
+    // bins_above_floor (how many of the 167 high-freq bins in the
+    // 800-8000Hz band crossed the -50dB floor at the moment of the
+    // strike), not the normalized strength. Show bins for spectral
+    // events; show strength for energy events as before.
+    if (event.method === 'spectral') {
+        if (event.bins_above_floor != null) {
+            lines.push(`Bins: ${event.bins_above_floor}/167`);
+        }
+    } else if (event.strength != null) {
+        lines.push(`Strength: ${event.strength}`);
+    }
     if (event.geomean != null) lines.push(`Geomean: ${event.geomean}`);
     if (event.amplitude != null) lines.push(`Amplitude: ${event.amplitude}`);
     if (event.total_energy != null) lines.push(`Total energy: ${event.total_energy}`);

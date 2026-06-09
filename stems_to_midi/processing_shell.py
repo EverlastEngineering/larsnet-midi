@@ -915,7 +915,7 @@ def _build_events_configured(
     # data from the original system. for now, JUST use spectral data
     # for the spectral events." So this filter is purely on the
     # spectral signal itself — no reference to the energy detector.
-    SPECTRAL_BINS_FLOOR = 150
+    SPECTRAL_BINS_FLOOR = 159
 
     # Defensive: unknown / None → 'energy' (preserve legacy behavior).
     if detection_method not in ('energy', 'spectral', 'both'):

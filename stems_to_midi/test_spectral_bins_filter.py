@@ -17,6 +17,12 @@ User direction (2026-06-09): "spectral data should NOT use ANY data
 from the original system. for now, JUST use spectral data for the
 spectral events. I want to develop this system in isolation from
 the other for now."
+
+The threshold (150 in SPECTRAL_BINS_FLOOR; the 159 number in test
+data is the data-driven minimum for a real hit in project 4 toms
+73-77s) is a quality floor on the spectral signal: only events
+where a strong majority of the 167 high-freq bins crossed the -50dB
+floor count as hits.
 """
 
 import pytest
