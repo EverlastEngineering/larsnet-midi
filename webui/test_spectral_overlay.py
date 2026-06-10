@@ -72,6 +72,11 @@ def waveform_js_text() -> str:
 
 
 @pytest.fixture(scope='module')
+def index_html_text() -> str:
+    return INDEX_HTML.read_text()
+
+
+@pytest.fixture(scope='module')
 def node_available() -> bool:
     """Skip Node-based tests when the binary isn't on PATH."""
     return shutil.which('node') is not None
@@ -200,7 +205,13 @@ class TestWaveformJSColorHelper:
         """User request (2026-06-09): the tooltip should show the
         bins_above_floor value for spectral events (the meaningful
         quality signal for the spectral detector), not the
-        normalized strength."""
+        normalized strength.
+
+        Updated 2026-06-09: the per-band profile (band_powers,
+        band_max_idx, band_max_ratio) superseded bins_above_floor.
+        The tooltip now shows the 5 band labels and values instead
+        of the bins count — this is the diagnostic data the user
+        needs to troubleshoot the hihat/delta-signal regression."""
         m = re.search(
             r"function\s+drawTooltip\s*\([^)]*\)\s*\{(.*?)\n\}",
             waveform_js_text,
@@ -208,14 +219,105 @@ class TestWaveformJSColorHelper:
         )
         assert m is not None, "could not locate drawTooltip function body"
         body = m.group(1)
-        # The tooltip must read event.bins_above_floor and push a
-        # 'Bins: ...' line for spectral events.
-        assert 'bins_above_floor' in body, (
-            "drawTooltip must read event.bins_above_floor for the "
-            "spectral quality signal"
+        # The tooltip must read event.band_powers (the new per-band
+        # profile that superseded bins_above_floor 2026-06-09) and
+        # push a label for each band so the user can see WHICH band
+        # was the loudest at the strike moment.
+        assert 'band_powers' in body, (
+            "drawTooltip must read event.band_powers for the "
+            "spectral quality signal (5 band power sums)"
         )
-        assert 'Bins:' in body or 'Bins ' in body, (
-            "drawTooltip must push a 'Bins: ...' line for spectral events"
+        # The tooltip must surface the 5 user-specified band labels
+        # so the user can interpret the band_powers values.
+        assert '60-200Hz' in body, (
+            "drawTooltip must label the low band (60-200Hz) so the "
+            "user can interpret band_powers[0]"
+        )
+        assert '2400-8000Hz' in body, (
+            "drawTooltip must label the high band (2400-8000Hz) so "
+            "the user can interpret band_powers[4]"
+        )
+
+    def test_tooltip_shows_ring_and_snap_delta_for_spectral_events(self, waveform_js_text):
+        """The tooltip must surface BOTH the ring delta (all 5
+        bands) and the snap delta (per-stem snap_bands) for spectral
+        events, so the user can understand which signal triggered
+        the event. Added 2026-06-09 after the user reported they
+        couldn't see the snap signal value in the tooltip.
+        """
+        m = re.search(
+            r"function\s+drawTooltip\s*\([^)]*\)\s*\{(.*?)\n\}",
+            waveform_js_text,
+            re.DOTALL,
+        )
+        assert m is not None, "could not locate drawTooltip function body"
+        body = m.group(1)
+        assert 'band_delta' in body, (
+            "drawTooltip must read event.band_delta (RING signal "
+            "value at the event frame) so the user can see what "
+            "signal strength fired the event."
+        )
+        assert 'snap_delta' in body, (
+            "drawTooltip must read event.snap_delta (SNAP signal "
+            "value at the event frame) so the user can distinguish "
+            "ring-fired events (low snap) from snap-fired events "
+            "(high snap)."
+        )
+
+    def test_tooltip_is_dom_element_not_canvas(self, waveform_js_text):
+        """The tooltip MUST be a DOM element, not a canvas drawing.
+
+        The previous canvas-drawing version was clipped to the
+        events-canvas bounds (120px tall), which cut off the top of
+        tall spectral tooltips (~190px) when the cursor was near
+        the top of the events panel. The DOM-div version is
+        absolutely positioned with z-index 30 inside the
+        panels-container, so it can extend into the envelope area
+        and is not clipped by either canvas.
+
+        This test guards against a regression to canvas-drawing."""
+        # drawTooltip must look up a DOM element, not call ctx.fillText
+        assert 'getElementById' in waveform_js_text, (
+            "drawTooltip must use document.getElementById to find "
+            "the tooltip DOM element. Canvas-drawing (ctx.fillText) "
+            "is clipped to the events-canvas bounds and will cut off "
+            "the top of tall spectral tooltips."
+        )
+        assert 'waveform-tooltip' in waveform_js_text, (
+            "waveform.js must reference the #waveform-tooltip DOM "
+            "element ID (added in index.html with z-index: 30)."
+        )
+        # The function must not call ctx.fillText — that's the
+        # canvas-drawing API that was the source of the clipping.
+        m = re.search(
+            r"function\s+drawTooltip\s*\([^)]*\)\s*\{(.*?)\n\}",
+            waveform_js_text,
+            re.DOTALL,
+        )
+        assert m is not None, "could not locate drawTooltip function body"
+        body = m.group(1)
+        assert 'ctx.fillText' not in body, (
+            "drawTooltip must not use ctx.fillText — the canvas "
+            "clipping region was the root cause of the tooltip "
+            "getting cut off. Use a DOM div instead."
+        )
+
+    def test_html_has_tooltip_element_with_z_index(self, index_html_text):
+        """The #waveform-tooltip div must exist in the HTML and have
+        z-index so it sits above the waveform canvases."""
+        assert 'id="waveform-tooltip"' in index_html_text, (
+            "index.html must have a #waveform-tooltip DOM element"
+        )
+        # Find the tooltip element and check it has a z-index
+        m = re.search(
+            r'<div[^>]*id="waveform-tooltip"[^>]*>',
+            index_html_text,
+        )
+        assert m is not None, "could not find #waveform-tooltip element"
+        elem = m.group(0)
+        assert 'z-index' in elem, (
+            f"#waveform-tooltip must have a z-index to sit above "
+            f"the waveform canvases, got: {elem!r}"
         )
 
 

@@ -181,6 +181,15 @@ def apply_spectral_filter_py(events, params, filter_mode):
     """
     Python mirror of the JS applySpectralFilter function.
     Used to verify the logic is correct.
+
+    Note (2026-06-09, bug fix): spectral events (method='spectral')
+    are EXEMPT from the geomean / sustain / strength filters. Those
+    signals are properties of the energy detector; spectral events
+    have band_powers / band_max_ratio / band_delta / snap_delta
+    instead. The previous behavior filtered them whenever geomean
+    was null (which it always is for spectral events), which
+    silently destroyed all magenta events when the user dragged
+    the geomean slider.
     """
     geomean_threshold = params.get('geomean_threshold')
     min_sustain_ms = params.get('min_sustain_ms')
@@ -188,6 +197,11 @@ def apply_spectral_filter_py(events, params, filter_mode):
 
     for event in events:
         event['status'] = 'KEPT'
+
+        # Spectral events are exempt — see JS applySpectralFilter
+        # for the rationale.
+        if event.get('method') == 'spectral':
+            continue
 
         # Strength gate
         if min_strength is not None and event.get('strength') is not None:
@@ -332,6 +346,89 @@ class TestSpectralFilterRequireBoth:
         apply_spectral_filter_py(events, {'geomean_threshold': 100.0}, 'require_both')
         assert events[0]['status'] == 'KEPT'
         assert events[1]['status'] == 'FILTERED'
+
+
+class TestSpectralEventsExemptFromGeomeanFilter:
+    """Bug fix (2026-06-09): spectral events (method='spectral') are
+    EXEMPT from the geomean / sustain / strength filters.
+
+    The energy detector produces geomean / sustain_ms / strength.
+    The spectral-transient detector produces band_powers /
+    band_max_ratio / band_delta / snap_delta. Spectral events
+    have no geomean field; the old code treated that as
+    "filter out", which silently destroyed every magenta event
+    whenever the user dragged the geomean slider.
+    """
+
+    def test_spectral_event_with_null_geomean_is_kept(self):
+        """A spectral event with no geomean field must NOT be
+        filtered by the geomean threshold. This was the bug —
+        the old code's `event.geomean == null` branch filtered
+        every spectral event."""
+        events = [
+            {'time': 1.0, 'method': 'spectral', 'snap_delta': 0.5, 'status': 'KEPT'},
+        ]
+        apply_spectral_filter_py(events, {'geomean_threshold': 100.0}, 'geomean_only')
+        assert events[0]['status'] == 'KEPT', (
+            "spectral event must be exempt from the geomean filter — "
+            "the geomean field is meaningless for spectral events. "
+            "If this fails, dragging the geomean slider destroys "
+            "all magenta events."
+        )
+
+    def test_spectral_event_kept_even_when_geomean_extreme(self):
+        """Drag the geomean to 10000 — energy events should be
+        filtered, but spectral events should survive. The user
+        wants to use the geomean slider to clean up the energy
+        signal without nuking the magenta A/B view."""
+        events = [
+            # Energy event with low geomean — must be filtered.
+            {'time': 1.0, 'geomean': 50.0, 'strength': 0.5, 'status': 'KEPT'},
+            # Spectral event with no geomean — must be KEPT.
+            {'time': 2.0, 'method': 'spectral', 'snap_delta': 0.5, 'status': 'KEPT'},
+        ]
+        apply_spectral_filter_py(events, {'geomean_threshold': 10000.0}, 'geomean_only')
+        assert events[0]['status'] == 'FILTERED', (
+            "energy event with low geomean must be filtered when "
+            "the threshold is high"
+        )
+        assert events[1]['status'] == 'KEPT', (
+            "spectral event must survive even at extreme geomean "
+            "threshold — the spectral signal is independent of "
+            "the energy signal"
+        )
+
+    def test_spectral_event_exempt_from_sustain_filter(self):
+        """A spectral event with no sustain_ms field must NOT be
+        filtered by the min_sustain_ms slider."""
+        events = [
+            {'time': 1.0, 'method': 'spectral', 'snap_delta': 0.5, 'status': 'KEPT'},
+        ]
+        apply_spectral_filter_py(events, {'min_sustain_ms': 200}, 'geomean_only')
+        assert events[0]['status'] == 'KEPT'
+
+    def test_spectral_event_exempt_from_strength_filter(self):
+        """A spectral event with no strength field must NOT be
+        filtered by the min_strength_threshold slider."""
+        events = [
+            {'time': 1.0, 'method': 'spectral', 'snap_delta': 0.5, 'status': 'KEPT'},
+        ]
+        apply_spectral_filter_py(events, {'min_strength_threshold': 0.5}, 'geomean_only')
+        assert events[0]['status'] == 'KEPT'
+
+    def test_energy_event_still_filtered_by_geomean(self):
+        """The bug fix exempts spectral events ONLY. Energy events
+        with null geomean are still filtered — they're either
+        invalid (no geomean computed) or have geomean below the
+        threshold, and the user wants them gone."""
+        events = [
+            {'time': 1.0, 'geomean': None, 'strength': 0.5, 'status': 'KEPT'},
+        ]
+        apply_spectral_filter_py(events, {'geomean_threshold': 100.0}, 'geomean_only')
+        assert events[0]['status'] == 'FILTERED', (
+            "energy events with null geomean are still filtered — "
+            "they're the ones the user wants gone"
+        )
 
 
 class TestReverbContinuationFilter:

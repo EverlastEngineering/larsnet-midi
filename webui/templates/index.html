@@ -237,6 +237,20 @@
             width: 100%;
             height: 100%;
         }
+        /* Tooltip — DOM div positioned above both waveform panels.
+           Lives inside .waveform-panels-container so absolute
+           positioning is relative to the container. */
+        .waveform-tooltip {
+            background: #1f2937;
+            border: 1px solid #4b5563;
+            border-radius: 4px;
+            padding: 8px;
+            color: #e5e7eb;
+            font: 11px system-ui, sans-serif;
+            line-height: 16px;
+            white-space: nowrap;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+        }
         .waveform-legend-bar {
             display: flex;
             align-items: center;
@@ -653,6 +667,11 @@
                                         <div class="waveform-panel waveform-panel-events">
                                             <canvas id="events-canvas"></canvas>
                                         </div>
+                                        <!-- Tooltip (DOM, not canvas) — sits above both panels so
+                                             it can extend into the envelope area when the event is
+                                             near the top of the events canvas, and not get clipped
+                                             by the canvas's 120px height. -->
+                                        <div id="waveform-tooltip" class="waveform-tooltip" style="display: none; position: absolute; z-index: 30; pointer-events: none;"></div>
                                     </div>
                                     <!-- Threshold tuning panel (inline, below canvas) -->
                                     <div id="tuning-panel" class="hidden mt-3 bg-gray-800 rounded-lg border border-gray-600 p-3">

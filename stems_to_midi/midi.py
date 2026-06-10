@@ -210,14 +210,24 @@ def _serialize_onset_events(
         for field in (['strength', 'amplitude']
                       + band_fields
                       + ['geomean', 'total_energy', 'sustain_ms',
-                         'bins_above_floor', 'max_db']):
+                         'bins_above_floor', 'max_db',
+                         'band_max_idx', 'band_max_ratio',
+                         'band_delta', 'snap_delta']):
             value = onset_data.get(field)
             if value is not None:
                 # bins_above_floor is an int count; round to int.
-                if field == 'bins_above_floor':
+                # band_max_idx is also an int (0-4).
+                if field in ('bins_above_floor', 'band_max_idx'):
                     event[field] = int(round(value))
                 else:
                     event[field] = _round_value(value, 2)
+        # band_powers is a list of 5 floats — serialize with 6-decimal
+        # precision (sub-band power sums are small on quiet hits).
+        bp_raw = onset_data.get('band_powers')
+        if bp_raw is not None:
+            event['band_powers'] = [
+                _round_value(float(x), 6) for x in bp_raw
+            ]
 
         # Optional Phase 2 metadata — present when the upstream pipeline
         # computed them, omitted otherwise.
@@ -270,14 +280,19 @@ def _serialize_spectral_events(spectral_events: list) -> list:
 
         {
             'time': float,
-            'strength': float,         # in [0, 1]
-            'bins_above_floor': int,
-            'max_db': float,
+            'strength': float,         # in [0, 1] (derived from band_max_ratio)
+            'band_powers': [b0, b1, b2, b3, b4],  # linear power per band
+            'band_max_idx': int,       # argmax of band_powers, 0-4
+            'band_max_ratio': float,   # top / second-highest band
             'method': 'spectral',
         }
 
-    Extra fields (e.g. ``prominence_bins``) are preserved with 2-decimal
-    rounding when present.
+    The per-band profile (2026-06-09) replaces the legacy
+    ``bins_above_floor`` / ``max_db`` fields — those described a
+    single-number summary; the band profile preserves the full
+    spectral shape so the WebUI tooltip and downstream classifiers
+    can distinguish tom hits (band 0-dominant) from hi-hat sizzle
+    (band 3-4 dominant).
 
     Args:
         spectral_events: List of spectral event dicts from
@@ -290,12 +305,28 @@ def _serialize_spectral_events(spectral_events: list) -> list:
     for ev in spectral_events:
         # Required fields with rounding. ``time`` uses 4-decimal
         # precision to match the other event lists in the sidecar
-        # (see _serialize_onset_events); the rest use 2 decimals.
+        # (see _serialize_onset_events); band_powers uses 6 decimals
+        # (linear power is small — sub-band sums on quiet hits are
+        # 1e-6 to 1e-9); other floats use 2 decimals.
+        bp_raw = ev.get('band_powers')
+        if bp_raw is not None:
+            band_powers = [_round_value(float(x), 6) for x in bp_raw]
+        else:
+            band_powers = None
         out.append({
             'time': _round_value(ev.get('time'), 4),
             'strength': _round_value(ev.get('strength'), 4),
-            'bins_above_floor': ev.get('bins_above_floor'),
-            'max_db': _round_value(ev.get('max_db'), 2),
+            'band_powers': band_powers,
+            'band_max_idx': ev.get('band_max_idx'),
+            'band_max_ratio': _round_value(ev.get('band_max_ratio'), 2),
+            # Detection signal values at the event frame (2026-06-09).
+            # Useful for diagnosing why an event fired (or didn't) —
+            # the RING signal (band_delta) fires on per-band-dominant
+            # content, the SNAP signal (snap_delta) fires on broadband
+            # content in the configured snap_bands. See the WebUI
+            # tooltip for human-readable annotation.
+            'band_delta': _round_value(ev.get('band_delta'), 4),
+            'snap_delta': _round_value(ev.get('snap_delta'), 6),
             'method': ev.get('method', 'spectral'),
         })
     return out

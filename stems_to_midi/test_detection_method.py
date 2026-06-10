@@ -281,9 +281,9 @@ class TestDetectionMethodBoth:
         that are within 12ms of an energy event are no longer dropped
         — they appear in events_configured alongside the energy
         event. The user wants spectral to run in isolation, so the
-        only filter on spectral output is the bins quality floor.
-        Overlapping markers in the WebUI are the diagnostic value of
-        the A/B view."""
+        only filter on spectral output is the band-ratio quality
+        floor (>= 2.0). Overlapping markers in the WebUI are the
+        diagnostic value of the A/B view."""
         both = _run_with_method(wav_path, base_config, drum_mapping, 'both')
         configured = both['events_configured']
         spectral_events = [e for e in configured if e.get('method') == 'spectral']
@@ -293,14 +293,20 @@ class TestDetectionMethodBoth:
             "expected at least one spectral event in events_configured under 'both' mode"
         )
 
-        # Every spectral event must meet the bins quality floor (>= 150).
-        # (The old test checked the dedup window; we now check the
-        # quality floor that replaced it.)
+        # Every spectral event must meet the band-ratio quality floor.
+        # (The old test checked bins >= 150; that field was superseded
+        # by the per-band profile on 2026-06-09. The new floor is
+        # SPECTRAL_BAND_RATIO_FLOOR = 1.0 in processing_shell.py —
+        # calibrated 2026-06-09 on project 4: real hits are ratio
+        # 1.7+, wire-tail artefacts are < 1.05. The NMS+wire-tail
+        # filter in spectral_transient_core handles the bulk of the
+        # work; this floor is a safety net.)
         for sp in spectral_events:
-            bins = sp.get('bins_above_floor') or 0
-            assert bins >= 150, (
-                f"weak spectral event at t={sp.get('time')} (bins={bins}) "
-                f"should have been dropped by the bins quality floor"
+            ratio = sp.get('band_max_ratio') or 0.0
+            assert ratio >= 1.0, (
+                f"weak spectral event at t={sp.get('time')} "
+                f"(band_max_ratio={ratio}) should have been dropped by "
+                f"the band-ratio quality floor"
             )
 
     def test_spectral_survivors_carry_method_marker(

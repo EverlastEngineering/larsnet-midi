@@ -87,35 +87,44 @@ class TestSerializeOnsetEventsAlwaysPresentFields:
             )
 
     def test_spectral_fields_preserved_when_present(self):
-        """Bug (2026-06-09): _serialize_onset_events was dropping
-        bins_above_floor and max_db from spectral events that
-        survive into events_configured. The WebUI tooltip wants to
-        show bins for spectral events, but if the sidecar strips the
-        field, the tooltip falls through to the legacy Strength
-        display. _build_events_configured produces spectral events
-        with bins_above_floor and max_db set; the serializer must
-        round and write them through."""
+        """Bug (2026-06-09, second iteration): _serialize_onset_events
+        was dropping band_powers, band_max_idx, and band_max_ratio
+        from spectral events that survive into events_configured.
+        The WebUI tooltip (webui-tooltip-bands task) wants to show
+        the per-band profile for spectral events, but if the sidecar
+        strips the field, the tooltip can't render it.
+        _build_events_configured produces spectral events with these
+        fields set; the serializer must round and write them through.
+
+        (Earlier this test asserted on bins_above_floor / max_db;
+        those were superseded by the per-band profile on 2026-06-09.)
+        """
         onset = {
             'time': 1.2345, 'status': 'KEPT', 'method': 'spectral',
             'strength': 0.95,
-            'bins_above_floor': 167,
-            'max_db': -5.4321,
+            'band_powers': [1.0e+00, 5.0e-04, 1.0e-04, 2.0e-05, 1.0e-05],
+            'band_max_idx': 0,
+            'band_max_ratio': 2000.0,
         }
         events = _serialize_onset_events([onset])
-        assert 'bins_above_floor' in events[0], (
-            "bins_above_floor was dropped by the serializer; "
+        assert 'band_powers' in events[0], (
+            "band_powers was dropped by the serializer; "
             "spectral events in events_configured will not have the "
             "data the WebUI tooltip needs"
         )
-        assert 'max_db' in events[0], (
-            "max_db was dropped by the serializer"
+        assert 'band_max_idx' in events[0], (
+            "band_max_idx was dropped by the serializer"
         )
-        # Both should be present-or-absent, not always-null, so the
-        # JS side can detect "field missing" vs "value is 0".
-        # For spectral events with values set, the field should
-        # carry the value through.
-        assert events[0]['bins_above_floor'] == 167
-        assert events[0]['max_db'] == -5.43  # 2-decimal rounding
+        assert 'band_max_ratio' in events[0], (
+            "band_max_ratio was dropped by the serializer"
+        )
+        # band_max_idx is an int (0-4)
+        assert events[0]['band_max_idx'] == 0
+        # band_powers is a 5-list of floats; verify shape and a value
+        assert len(events[0]['band_powers']) == 5
+        assert events[0]['band_powers'][0] == pytest.approx(1.0, rel=1e-5)
+        # band_max_ratio is a float, 2-decimal rounded
+        assert events[0]['band_max_ratio'] == 2000.0
 
     def test_basic_fields_still_present(self):
         """time, status, and computed features still work as before."""

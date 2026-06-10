@@ -184,19 +184,17 @@ async function initWaveformViewer(project) {
         return;
     }
 
-    // Bug C: surface any data-integrity warnings from the loader so the
-    // user is told when events_configured contains events not in
-    // events_sensitive. Loaded fresh on every project open, so this also
-    // catches warnings for projects opened without going through the
-    // rebuild path.
+    // Bug C: surface any data-integrity warnings from the loader so
+    // the user is told when events_configured contains events not in
+    // events_sensitive. Loaded fresh on every project open, so this
+    // also catches warnings for projects opened without going through
+    // the rebuild path. Logged to console only — toasts were too noisy
+    // on every project open and the warnings are diagnostic, not
+    // blocking.
     if (Array.isArray(waveformAnalysisData.data_integrity_warnings) &&
         waveformAnalysisData.data_integrity_warnings.length > 0) {
         for (const warning of waveformAnalysisData.data_integrity_warnings) {
-            if (typeof showToast === 'function') {
-                showToast(warning, 'warning');
-            } else {
-                console.warn('Data integrity warning:', warning);
-            }
+            console.warn('Data integrity warning:', warning);
         }
     }
 
@@ -387,7 +385,9 @@ function drawWaveform() {
     // Draw tooltip on events panel
     if (waveformHoverEvent) {
         const rect = eventsCanvas.parentElement.getBoundingClientRect();
-        drawTooltip(eventsCtx, waveformHoverEvent, rect.width, rect.height);
+        drawTooltip(waveformHoverEvent, rect.width, rect.height);
+    } else {
+        hideTooltip();
     }
 }
 
@@ -1158,7 +1158,31 @@ function animatePlaybackIndicator() {
 
 // ─── Tooltip ─────────────────────────────────────────────────────────────
 
-function drawTooltip(ctx, event, W, H) {
+// Tooltip is a DOM div (#waveform-tooltip) inside the
+// .waveform-panels-container, positioned absolutely with z-index 30
+// so it sits above both the envelope and events canvases. The
+// previous canvas-drawing version was clipped to the events canvas
+// (120px tall), which cut off the top of tall spectral tooltips
+// (192px) when the cursor was near the top of the events canvas.
+let _tooltipEl = null;
+function getTooltipEl() {
+    if (!_tooltipEl) _tooltipEl = document.getElementById('waveform-tooltip');
+    return _tooltipEl;
+}
+
+function hideTooltip() {
+    const el = getTooltipEl();
+    if (el) el.style.display = 'none';
+}
+
+function drawTooltip(event, W, H) {
+    const el = getTooltipEl();
+    if (!el) return;
+
+    // Build the same diagnostic content the old canvas-draw
+    // version had. Lines are kept as an array so we can compute
+    // the tooltip height accurately (used for vertical centering
+    // within the panels container).
     const lines = [];
     lines.push(`Time: ${formatTime(event.time)}`);
     lines.push(`Status: ${event.status}`);
@@ -1180,14 +1204,44 @@ function drawTooltip(ctx, event, W, H) {
         lines.push(`Type: ${event.classification + 1}`);
     }
     if (event.hihat_state != null) lines.push(`Hi-hat: ${event.hihat_state}`);
-    // For spectral events, the relevant quality signal is
-    // bins_above_floor (how many of the 167 high-freq bins in the
-    // 800-8000Hz band crossed the -50dB floor at the moment of the
-    // strike), not the normalized strength. Show bins for spectral
-    // events; show strength for energy events as before.
+    // For spectral events, show the full per-band profile so the
+    // user can troubleshoot detection issues at a glance. The 5
+    // user-specified bands are: 60-200Hz (low/kick), 200-600Hz
+    // (toms/snare body), 600-1200Hz (snare/hi-hat fund.),
+    // 1200-2400Hz (snare wire/hi-hat edge/cymbal edge),
+    // 2400-8000Hz (hi-hat sizzle/cymbal body).
+    // band_max_ratio = top band / second-highest band (clear
+    // band-dominance signature of a strike; ~1.0 means
+    // broadband/decay). Strength is the same value normalized to
+    // [0, 1] by min(1, ratio/10).
     if (event.method === 'spectral') {
-        if (event.bins_above_floor != null) {
-            lines.push(`Bins: ${event.bins_above_floor}/167`);
+        if (Array.isArray(event.band_powers) && event.band_powers.length === 5) {
+            const bandLabels = [
+                'B0 60-200Hz',
+                'B1 200-600Hz',
+                'B2 600-1200Hz',
+                'B3 1200-2400Hz',
+                'B4 2400-8000Hz',
+            ];
+            for (let i = 0; i < 5; i++) {
+                const marker = i === event.band_max_idx ? ' *' : '  ';
+                lines.push(`${bandLabels[i]}${marker}: ${event.band_powers[i].toExponential(2)}`);
+            }
+        }
+        if (event.band_max_idx != null) {
+            lines.push(`Top band: B${event.band_max_idx}`);
+        }
+        if (event.band_max_ratio != null) {
+            lines.push(`Top/2nd ratio: ${event.band_max_ratio.toFixed(2)} (higher = clearer strike)`);
+        }
+        if (event.band_delta != null) {
+            lines.push(`Ring Δ (max-median, all bands): ${event.band_delta.toFixed(2)}`);
+        }
+        if (event.snap_delta != null) {
+            lines.push(`Snap Δ (min of snap_bands): ${event.snap_delta.toFixed(4)}`);
+        }
+        if (event.strength != null) {
+            lines.push(`Strength (ratio/10): ${event.strength.toFixed(2)}`);
         }
     } else if (event.strength != null) {
         lines.push(`Strength: ${event.strength}`);
@@ -1199,30 +1253,46 @@ function drawTooltip(ctx, event, W, H) {
     if (event.stereo_width != null) lines.push(`Stereo width: ${event.stereo_width.toFixed(3)}`);
     if (event.pan_confidence != null) lines.push(`Pan: ${event.pan_confidence.toFixed(3)}`);
 
+    // Render as <div> children — each line on its own row. Using a
+    // <div> per line (instead of <br> in one innerHTML) keeps
+    // future styling hooks (e.g. coloring the band_max_idx line)
+    // trivial.
+    el.innerHTML = '';
+    for (const line of lines) {
+        const div = document.createElement('div');
+        div.textContent = line;
+        el.appendChild(div);
+    }
+    el.style.display = 'block';
+
+    // Position. _mouseX / _mouseY are in the events-canvas
+    // coordinate space; translate to the panels-container space by
+    // adding the events canvas's offset within the container.
+    // (The events canvas is the bottom panel, so its top is
+    // envelope height below the container top.)
     const lineH = 16;
     const pad = 8;
-    const tooltipW = 180;
+    const containerRect = el.parentElement.getBoundingClientRect();
+    const eventsRect = eventsCanvas.getBoundingClientRect();
+    const offsetX = eventsRect.left - containerRect.left;
+    const offsetY = eventsRect.top - containerRect.top;
+
+    const tooltipW = el.offsetWidth;
     const tooltipH = lines.length * lineH + pad * 2;
 
-    let tx = event._mouseX + 12;
-    let ty = event._mouseY - tooltipH / 2;
-    if (tx + tooltipW > W) tx = event._mouseX - tooltipW - 12;
+    // Convert from events-canvas-relative mouse coords to
+    // container-relative tooltip coords.
+    let tx = offsetX + event._mouseX + 12;
+    let ty = offsetY + event._mouseY - tooltipH / 2;
+    // Keep on screen within the container, allowing the tooltip to
+    // extend ABOVE the events panel (into the envelope area) when
+    // needed — this is the whole reason we moved off canvas.
+    if (tx + tooltipW > containerRect.width) tx = offsetX + event._mouseX - tooltipW - 12;
     if (ty < 0) ty = 4;
-    if (ty + tooltipH > H) ty = H - tooltipH - 4;
+    if (ty + tooltipH > containerRect.height) ty = containerRect.height - tooltipH - 4;
 
-    ctx.fillStyle = WAVEFORM_COLORS.tooltipBg;
-    ctx.strokeStyle = WAVEFORM_COLORS.tooltipBorder;
-    ctx.lineWidth = 1;
-    roundRect(ctx, tx, ty, tooltipW, tooltipH, 4);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = WAVEFORM_COLORS.tooltipText;
-    ctx.font = '11px system-ui, sans-serif';
-    ctx.textAlign = 'left';
-    lines.forEach((line, i) => {
-        ctx.fillText(line, tx + pad, ty + pad + (i + 1) * lineH - 3);
-    });
+    el.style.left = tx + 'px';
+    el.style.top = ty + 'px';
 }
 
 function roundRect(ctx, x, y, w, h, r) {

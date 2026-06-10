@@ -286,7 +286,101 @@ class TestRefilterEvents:
         assert events[0]['status'] == 'KEPT'   # Both pass
         assert events[1]['status'] == 'FILTERED'  # Sustain too short
 
+    def test_spectral_event_exempt_from_geomean_filter(self):
+        """Bug D: spectral events have no geomean field — the geomean filter
+        must NOT touch them, otherwise the Save-rebuild path silently destroys
+        every magenta event. Spectral FPs are handled by the snap-mask pass
+        and the band-ratio quality floor, not by geomean/sustain/strength.
 
+        Pre-fix: an energy event with geomean=10.0 against threshold=500.0
+        would be FILTERED. A spectral event with the same geomean=10.0 (which
+        is an arbitrary carry-over from the helper default — real spectral
+        events have no geomean at all) was ALSO FILTERED, even though the
+        geomean field is meaningless for spectral events. The fix in
+        _refilter_events skips method='spectral' events before the
+        should_keep_onset() call.
+        """
+        spectral_event = _make_event(1.0, geomean=10.0, status='KEPT', method='spectral')
+        events = [spectral_event]
+        spectral_config = {'geomean_threshold': 500.0, 'filter_mode': 'geomean_only'}
+        _refilter_events(events, spectral_config)
+        assert events[0]['status'] == 'KEPT', (
+            "Spectral events must be exempt from the geomean filter "
+            "(Bug D, 2026-06-09). The fix in _refilter_events skips them."
+        )
+
+    def test_energy_event_still_filtered_by_geomean(self):
+        """Companion sanity check: the geomean filter MUST still filter
+        energy events below threshold — we only exempted spectral events.
+        """
+        energy_event = _make_event(2.0, geomean=10.0, status='KEPT')
+        events = [energy_event]
+        spectral_config = {'geomean_threshold': 500.0, 'filter_mode': 'geomean_only'}
+        _refilter_events(events, spectral_config)
+        assert events[0]['status'] == 'FILTERED', (
+            "Sanity: energy events with geomean=10.0 against threshold=500.0 "
+            "must be FILTERED — the filter is only exempted for spectral events."
+        )
+
+    def test_spectral_event_exempt_from_sustain_filter(self):
+        """Spectral events are also exempt from the min_sustain_ms filter.
+        The exemption is method-based, not value-based, so it covers all
+        energy-derived filters in the same call (Bug D, 2026-06-09).
+
+        Uses ``filter_mode='require_both'`` so both the geomean and
+        sustain thresholds are checked (the test_require_both_mode
+        pattern). With ``geomean_only`` mode the function only checks
+        geomean, which is the wrong test for the sustain exemption.
+        """
+        spectral_event = _make_event(
+            1.0, geomean=200.0, sustain_ms=5.0, status='KEPT',
+            method='spectral',
+        )
+        energy_short = _make_event(
+            2.0, geomean=200.0, sustain_ms=5.0, status='KEPT',
+            method='energy',
+        )
+        events = [spectral_event, energy_short]
+        spectral_config = {
+            'geomean_threshold': 50.0,
+            'min_sustain_ms': 100.0,
+            'filter_mode': 'require_both',
+        }
+        _refilter_events(events, spectral_config)
+        assert events[0]['status'] == 'KEPT', (
+            "spectral event with sustain_ms=5 must survive a "
+            "min_sustain_ms=100 threshold — the exemption covers all "
+            "energy-derived filters, not just geomean."
+        )
+        assert events[1]['status'] == 'FILTERED', (
+            "energy event with sustain_ms=5 must be filtered at "
+            "min_sustain_ms=100."
+        )
+
+    def test_spectral_event_with_override_survives_filter(self):
+        """Defense-in-depth: the override flag is checked BEFORE the
+        spectral exemption, so an overridden spectral event also
+        survives the filter (consistent with the existing override
+        contract: overrides are always honored first)."""
+        spectral_event = _make_event(
+            1.0, geomean=None, status='KEPT', method='spectral',
+        )
+        spectral_event['override'] = True
+        events = [spectral_event]
+        spectral_config = {
+            'geomean_threshold': 500.0,
+            'filter_mode': 'geomean_only',
+        }
+        _refilter_events(events, spectral_config)
+        assert events[0]['status'] == 'KEPT', (
+            "overridden spectral event must survive (override check "
+            "runs first; then spectral exemption runs; the result is "
+            "the same as the JS path)."
+        )
+
+
+# ============================================================================
+# _apply_reverb_continuation_filter tests
 # ============================================================================
 # _apply_reverb_continuation_filter tests
 # ============================================================================

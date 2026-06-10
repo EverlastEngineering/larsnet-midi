@@ -144,8 +144,8 @@ class TestRunSpectralDetection:
     def test_returns_list_of_event_dicts_with_required_fields(
         self, synthetic_toms_audio
     ):
-        """Should return a list of dicts with time, strength, bins_above_floor,
-        max_db, method='spectral'."""
+        """Should return a list of dicts with time, strength, band_powers,
+        band_max_idx, band_max_ratio, method='spectral'."""
         stereo, mono, sr, hit_times = synthetic_toms_audio
         result = _run_spectral_detection(
             audio=stereo,
@@ -157,46 +157,57 @@ class TestRunSpectralDetection:
 
         assert isinstance(result, list)
         assert len(result) > 0, "spectral detector should find the 4 hits"
-        required_fields = {'time', 'strength', 'bins_above_floor',
-                           'max_db', 'method'}
+        required_fields = {'time', 'strength', 'band_powers',
+                           'band_max_idx', 'band_max_ratio', 'method'}
         for event in result:
             assert required_fields.issubset(event.keys()), (
                 f"missing fields: {required_fields - event.keys()}"
             )
             assert event['method'] == 'spectral'
             assert 0.0 <= event['strength'] <= 1.0
-            assert event['bins_above_floor'] >= 0
+            assert isinstance(event['band_powers'], list)
+            assert len(event['band_powers']) == 5
+            assert 0 <= event['band_max_idx'] <= 4
+            assert event['band_max_ratio'] >= 1.0
 
-    def test_strength_is_bins_above_floor_over_167(self, synthetic_toms_audio):
-        """Per spec: strength proxy = bins_above_floor / 167.
-        167 is the max possible high-freq bins (800-8000Hz at 1024/44100)."""
+    def test_band_powers_and_band_max_consistent(self, synthetic_toms_audio):
+        """For each event, band_max_idx must equal argmax(band_powers)."""
         stereo, mono, sr, _ = synthetic_toms_audio
         result = _run_spectral_detection(
             audio=stereo, audio_mono=mono, sr=sr,
             is_stereo=True, stem_type='toms',
         )
         for event in result:
-            expected = event['bins_above_floor'] / 167.0
-            assert event['strength'] == pytest.approx(expected, rel=1e-9), (
-                f"strength {event['strength']} != "
-                f"bins/167 {expected}"
+            bp = event['band_powers']
+            # argmax may return any of the ties; we check the value at
+            # band_max_idx is the maximum (loose — could be tied)
+            max_val = max(bp)
+            assert bp[event['band_max_idx']] == max_val, (
+                f"band_max_idx {event['band_max_idx']} doesn't point to "
+                f"the max of band_powers {bp}"
             )
 
     def test_finds_4_hits_in_synthetic_audio(self, synthetic_toms_audio):
-        """Synthetic toms: 4 evenly-spaced hits should all be detected."""
+        """Synthetic toms: 4 evenly-spaced hits should all be detected.
+
+        With the band-power detector (2026-06-09), the synthetic
+        broadband burst's ratio peak may trail the strike by up to
+        ~100ms (the spectral shape changes during decay). We allow
+        100ms tolerance for synthetic audio; real-audio tests
+        (test_project_4_toms_finds_six_known_hits_in_73_77s) are
+        stricter.
+        """
         stereo, mono, sr, hit_times = synthetic_toms_audio
         result = _run_spectral_detection(
             audio=stereo, audio_mono=mono, sr=sr,
             is_stereo=True, stem_type='toms',
         )
-        # The detector finds the high-freq count peak, which trails the
-        # strike by ~5-30ms. Use a 50ms tolerance for synthetic audio.
         detected_times = sorted(e['time'] for e in result)
         # Each hit should be near at least one detected event.
         for ht in hit_times:
             nearest = min(abs(t - ht) for t in detected_times)
-            assert nearest < 0.050, (
-                f"No detected event within 50ms of hit at {ht}s "
+            assert nearest < 0.100, (
+                f"No detected event within 100ms of hit at {ht}s "
                 f"(nearest: {nearest * 1000:.1f}ms)"
             )
 
@@ -226,8 +237,7 @@ class TestRunSpectralDetection:
         stereo, mono, sr, _ = synthetic_toms_audio
         custom_cfg = SpectralTransientConfig(
             n_fft=1024, hop=256,
-            f_lo_hz=500.0, f_hi_hz=10000.0,
-            floor_db=-60.0,
+            min_band_ratio=1.5,  # lower threshold = more sensitive
         )
         result = _run_spectral_detection(
             audio=stereo, audio_mono=mono, sr=sr,
@@ -295,8 +305,9 @@ class TestSaveAnalysisSidecarWritesSpectral:
                     {
                         'time': 0.502,
                         'strength': 0.95,
-                        'bins_above_floor': 159,
-                        'max_db': -13.4,
+                        'band_powers': [1.0e+00, 5.0e-04, 1.0e-04, 2.0e-05, 1.0e-05],
+                        'band_max_idx': 0,
+                        'band_max_ratio': 2000.0,
                         'method': 'spectral',
                     },
                 ],
@@ -322,7 +333,9 @@ class TestSaveAnalysisSidecarWritesSpectral:
         assert len(spec_events) == 1
         assert spec_events[0]['time'] == 0.502
         assert spec_events[0]['method'] == 'spectral'
-        assert spec_events[0]['bins_above_floor'] == 159
+        assert spec_events[0]['band_max_idx'] == 0
+        assert spec_events[0]['band_max_ratio'] == 2000.0
+        assert spec_events[0]['band_powers'] == [1.0e+00, 5.0e-04, 1.0e-04, 2.0e-05, 1.0e-05]
 
     def test_empty_spectral_produces_empty_list(
         self, tmp_midi_path, toms_stem_config

@@ -67,3 +67,89 @@ Scope boundaries (as of 2026-06):
   parameter naming.
 - T3 — owns the end-to-end WebUI + audio verification on the funk
   project (`user_files/1 - 2_funk_80_beat_4-4_4/`).
+- pipeline-plumbing (2026-06-08, commit 6526b7a) — wired the
+  spectral-transient detector into the main pipeline. Always runs
+  on every stem regardless of detection_method; candidate events
+  written to `stems.<stem>.events_spectral` in the sidecar. The
+  energy detector still drives `events_configured`; the new key is
+  additive.
+
+## Adding a new detector to process_stem_to_midi
+
+When wiring a new detector (spectral, ML, anything) alongside
+`_run_sensitive_detection`, touch exactly four places in this
+order. The pattern was validated end-to-end on 2026-06-08 by
+spectral-transient (commit 6526b7a):
+
+1. **Helper in `stems_to_midi/processing_shell.py`.** Mirror the
+   shape of `_run_sensitive_detection`: takes `audio`, `audio_mono`,
+   `sr`, `is_stereo`, `stem_type`, `config`; returns a list of
+   dicts. Add to `__all__` so tests can import it directly. Use a
+   string forward reference for any type hint whose import is
+   lazy (`config: "Optional[SpectralTransientConfig]" = None`)
+   so cold-path imports don't trigger the import.
+2. **Call site + return-dict wiring in `process_stem_to_midi`.**
+   Run the detector before the return statement. Stash the result
+   on the return dict under a new key (`spectral_onset_data`).
+   Update every `return {...}` path in the function to include
+   the new key with a sensible default (`[]`). There are
+   typically 3-4 early-return paths (audio is None, no onsets
+   found, etc.) — grep for `return {` inside
+   `process_stem_to_midi` to find them all.
+3. **Sidecar serializer in `stems_to_midi/midi.py`.** Add a
+   focused serializer (e.g. `_serialize_spectral_events`) if the
+   event shape differs from the existing energy-detector shape.
+   `save_analysis_sidecar` reads `analysis.get('<key>')` and
+   writes the result to the per-stem dict in the sidecar JSON.
+   `load_analysis_sidecar` and `rebuild_events_from_analysis`
+   need no change if the new key is purely additive — both
+   already pass through unknown keys.
+4. **Forwarding in `stems_to_midi_cli.py`.** In the per-stem
+   branch that builds `analysis_by_stem[stem_type]`, add the new
+   key from `result.get('<key>', [])`.
+
+**DrumMapping kwargs gotcha:** the field is `hihat_handclap`,
+not `hihat_pedal`. `hihat_pedal` does not exist; passing it
+raises `TypeError` at fixture construction. Other fields are
+`snare_rimshot`, `snare_clap`, `crash`, `ride`, `chinese`,
+`hihat_open`, `hihat_closed` — see
+`stems_to_midi/config.py:48-62`.
+
+**CLI positional:** `stems_to_midi_cli.py` takes `project_number`
+as a positional arg, NOT `--stems-dir`. To run on a custom
+directory you have to call `process_stem_to_midi` directly via
+Python. The CLI's `--help` is also a misleading `usage:` block
+that lists every schema-driven flag without a clean summary.
+
+**`load_config()` requires a `Path`, not a string.** Pass
+`Path('/path/to/midiconfig.yaml')`; passing a bare string raises
+`AttributeError: 'str' object has no attribute 'exists'` deep
+inside `config.py:38`.
+
+## End-to-end smoke test for pipeline changes
+
+Unit tests on synthetic audio prove the wiring is correct, but
+they can't prove a new detector behaves sanely on real recordings.
+The validated 4-step smoke test recipe (used 2026-06-08 for
+spectral-transient, project 3, commit 6526b7a):
+
+1. `process_stem_to_midi(...)` on each real stem with a short
+   `max_duration=5.0` to keep it fast. This is the WRITE path.
+2. `save_analysis_sidecar(events_by_stem, midi_path, ..., analysis_by_stem=...)`.
+   This is the JSON serialization.
+3. `load_analysis_sidecar(midi_path)`. This is the round-trip —
+   assert the new key survives and `data_integrity_warnings`
+   is `none`.
+4. `rebuild_events_from_analysis(analysis_data, overrides={}, config=config)`.
+   This is the "Save & Reconvert" path. Critical because
+   end-users trigger rebuilds far more often than full converts.
+   Assert the new key count is unchanged after rebuild.
+
+Then print a per-stem table of `events_configured | events_sensitive
+| events_<new_key>` counts. Look for any row where the new
+key is 5x+ the configured count — that's the over-firing
+signature that synthetic tests can't catch.
+
+Use a temp dir for the midi/analysis output (`/tmp/<name>-test`)
+and `mavis-trash` to clean up (the bash tool blocks
+`shutil.rmtree` on `/tmp` dirs).
