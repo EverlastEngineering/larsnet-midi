@@ -1240,6 +1240,23 @@ function drawTooltip(event, W, H) {
         if (event.snap_delta != null) {
             lines.push(`Snap Δ (min of snap_bands): ${event.snap_delta.toFixed(4)}`);
         }
+        // Derived ratios (2026-06-10). Both are diagnostic — they
+        // tell the user WHY an event fired or why it was filtered.
+        // - snap_to_ring_ratio: snap/band_delta. Low values mean the
+        //   broadband attack (snap) is much weaker than the sustained
+        //   ring — typical of wire-tail / decay events. The user's
+        //   calibration case (ring=665, snap=0.01) gives ~0.000015.
+        // - snap_to_top_ratio: snap/band_max_ratio. How the snap
+        //   compares to the top-band dominance metric. Close to 1.0
+        //   means the snap is roughly as strong as the band peak
+        //   (real hit); low means the band-dominance is in a
+        //   non-snap band (sustained ring without attack).
+        if (event.snap_to_ring_ratio != null) {
+            lines.push(`Snap/Ring ratio: ${event.snap_to_ring_ratio.toExponential(2)} (lower = weaker attack than sustain)`);
+        }
+        if (event.snap_to_top_ratio != null) {
+            lines.push(`Snap/Top ratio: ${event.snap_to_top_ratio.toExponential(2)} (closer to 1 = real hit)`);
+        }
         if (event.strength != null) {
             lines.push(`Strength (ratio/10): ${event.strength.toFixed(2)}`);
         }

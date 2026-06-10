@@ -1111,3 +1111,337 @@ class TestSnapMaskToggle:
             "Legacy config (threshold set, no enabled bool) must default "
             "the toggle to ON for back-compat in rebuild path"
         )
+
+
+# ─── 9. Onset filter master gate (2026-06-10) ────────────────────────────
+#
+# The user asked for a master gate that, when OFF, skips the geomean /
+# sustain / strength filter passes entirely. Use case: instead of
+# dragging the geomean threshold to an extreme value to see every
+# event, flip this off for an A/B comparison. Default ON so existing
+# projects behave the same.
+
+
+class TestOnsetFilterMasterGate:
+    """The onset filter master gate (default ON) lets the user skip
+    all energy-derived filter passes in one toggle instead of
+    dragging the geomean threshold to an extreme."""
+
+    def test_settings_schema_has_onset_filter_enabled(self):
+        from webui.settings_schema import SETTINGS_REGISTRY
+        keys = {s.key for s in SETTINGS_REGISTRY}
+        assert 'toms_onset_filter_enabled' in keys
+
+    def test_settings_schema_default_is_true(self):
+        from webui.settings_schema import SETTINGS_REGISTRY
+        s = next(x for x in SETTINGS_REGISTRY if x.key == 'toms_onset_filter_enabled')
+        assert s.default is True, (
+            "Default must be True so existing projects behave the same"
+        )
+
+    def test_filter_onsets_by_spectral_bypasses_when_off(self):
+        """filter_onsets_by_spectral must treat every onset as
+        KEPT when onset_filter_enabled is False, regardless of
+        geomean / sustain / strength values."""
+        from stems_to_midi.analysis_core.onset_filtering import filter_onsets_by_spectral
+        import numpy as np
+
+        # Two onsets that would normally be FILTERED by a typical
+        # geomean threshold. With the master gate off, both stay
+        # KEPT.
+        onset_times = np.array([1.0, 2.0])
+        onset_strengths = np.array([0.1, 0.1])
+        peak_amplitudes = np.array([0.5, 0.5])
+
+        # Need a real audio buffer long enough for analysis — use
+        # silence. The point is the gate, not the audio content.
+        sr = 22050
+        duration = 3.0
+        audio = np.zeros(int(sr * duration))
+
+        # Minimal toms config — only the keys the gate cares about
+        # plus the freq bands (which the spectral config helper
+        # requires). Real projects have a much richer config; this
+        # is a minimal valid set for the gate-bypass path.
+        config = {
+            'toms': {
+                'onset_filter_enabled': False,
+                'geomean_threshold': 1000.0,  # impossibly high
+                'fundamental_freq_min': 60,
+                'fundamental_freq_max': 200,
+                'body_freq_min': 200,
+                'body_freq_max': 600,
+                'freq_bands': ['fundamental', 'body'],
+            }
+        }
+        result = filter_onsets_by_spectral(
+            onset_times, onset_strengths, peak_amplitudes,
+            audio, sr, 'toms', config,
+        )
+        # With master off, all_onset_data should mark everything KEPT.
+        statuses = [e['status'] for e in result.get('all_onset_data', [])]
+        assert all(s == 'KEPT' for s in statuses), (
+            f"Master gate off must mark every onset as KEPT regardless "
+            f"of geomean threshold. Got statuses: {statuses}"
+        )
+
+    def test_filter_onsets_by_spectral_default_on_filters_normally(self):
+        """Default (no onset_filter_enabled key) keeps existing
+        filter behavior — events with low geomean are FILTERED."""
+        from stems_to_midi.analysis_core.onset_filtering import filter_onsets_by_spectral
+        import numpy as np
+
+        onset_times = np.array([1.0, 2.0])
+        onset_strengths = np.array([0.1, 0.1])
+        peak_amplitudes = np.array([0.5, 0.5])
+        sr = 22050
+        duration = 3.0
+        audio = np.zeros(int(sr * duration))
+
+        config = {
+            'toms': {
+                'geomean_threshold': 1000.0,
+                'fundamental_freq_min': 60,
+                'fundamental_freq_max': 200,
+                'body_freq_min': 200,
+                'body_freq_max': 600,
+                'freq_bands': ['fundamental', 'body'],
+            }
+        }
+        result = filter_onsets_by_spectral(
+            onset_times, onset_strengths, peak_amplitudes,
+            audio, sr, 'toms', config,
+        )
+        # With master ON (default), events with low geomean are
+        # FILTERED.
+        statuses = [e['status'] for e in result.get('all_onset_data', [])]
+        assert 'FILTERED' in statuses, (
+            f"Default (master ON) must still filter events with low "
+            f"geomean. Got: {statuses}"
+        )
+
+    def test_rebuild_core_refilter_bypasses_when_off(self):
+        """_refilter_events must be a no-op when onset_filter_enabled
+        is False in the spectral_config."""
+        from stems_to_midi.rebuild_core import _refilter_events
+
+        events = [
+            {'time': 1.0, 'status': 'KEPT', 'geomean': 0.0},
+            {'time': 2.0, 'status': 'KEPT', 'geomean': 0.0},
+        ]
+        # spectral_config is the post-get_spectral_config_for_stem
+        # dict. The gate is read off this dict, not the raw config.
+        spectral_config = {
+            'geomean_threshold': 1000.0,  # impossibly high
+            'onset_filter_enabled': False,
+            'filter_mode': 'geomean_only',
+        }
+        _refilter_events(events, spectral_config)
+        # No filtering happened — events stay KEPT.
+        assert events[0]['status'] == 'KEPT'
+        assert events[1]['status'] == 'KEPT'
+
+
+# ─── 10. Advanced spectral filter (2026-06-10) ───────────────────────────
+#
+# Two-stage filter designed for cases where the basic snap-mask
+# isn't enough. Opt-in via advanced_filter_enabled toggle. When
+# on:
+#   Stage 1: spectral events with snap_delta > floor are always kept
+#   Stage 2: spectral events with snap/ring ratio on the wrong
+#            side of threshold (per direction) are filtered
+# The user's calibration case: ring=665, snap=0.01 → ratio
+# 0.000015, must be filtered when threshold=0.001 and direction=under.
+
+
+class TestAdvancedSpectralFilter:
+    """The advanced spectral filter (off by default) is a
+    two-stage pass: rescue floor + ratio filter. Both stages
+    only act on spectral events."""
+
+    def test_settings_schema_has_advanced_filter_keys(self):
+        from webui.settings_schema import SETTINGS_REGISTRY
+        keys = {s.key for s in SETTINGS_REGISTRY}
+        for k in (
+            'toms_advanced_filter_enabled',
+            'toms_advanced_min_snap_delta',
+            'toms_advanced_snap_ring_threshold',
+            'toms_advanced_snap_ring_direction',
+        ):
+            assert k in keys, f"{k} missing from settings schema"
+
+    def test_default_direction_is_under(self):
+        from webui.settings_schema import SETTINGS_REGISTRY
+        s = next(x for x in SETTINGS_REGISTRY if x.key == 'toms_advanced_snap_ring_direction')
+        assert s.default == 'under'
+
+    def test_rebuild_core_advanced_filter_off_by_default(self):
+        """No-op when the advanced filter toggle is missing or False."""
+        from stems_to_midi.rebuild_core import _apply_advanced_filter
+
+        events = [
+            {'time': 1.0, 'status': 'KEPT', 'method': 'spectral',
+             'snap_delta': 0.0, 'band_delta': 665.0, 'snap_to_ring_ratio': 0.000015},
+        ]
+        # No advanced_filter_enabled key — back-compat default OFF.
+        _apply_advanced_filter(events, {}, 'toms')
+        assert events[0]['status'] == 'KEPT', (
+            "advanced filter off (default) must be a no-op"
+        )
+        # Explicit false.
+        _apply_advanced_filter(events, {'toms': {'advanced_filter_enabled': False}}, 'toms')
+        assert events[0]['status'] == 'KEPT'
+
+    def test_rebuild_core_advanced_filter_calibration_case(self):
+        """The user's calibration event (ring=665, snap=0.01,
+        ratio 0.000015) must be FILTERED when advanced filter is
+        on with threshold=0.001 and direction=under."""
+        from stems_to_midi.rebuild_core import _apply_advanced_filter
+
+        events = [
+            {'time': 14.9014, 'status': 'KEPT', 'method': 'spectral',
+             'snap_delta': 0.01, 'band_delta': 665.0,
+             'snap_to_ring_ratio': 0.01 / 665.0},
+        ]
+        config = {
+            'toms': {
+                'advanced_filter_enabled': True,
+                'advanced_snap_ring_threshold': 0.001,
+                'advanced_snap_ring_direction': 'under',
+            }
+        }
+        _apply_advanced_filter(events, config, 'toms')
+        assert events[0]['status'] == 'FILTERED', (
+            f"User's calibration event (ring=665, snap=0.01, "
+            f"ratio=0.000015) must be FILTERED when advanced filter "
+            f"is on with threshold=0.001 direction=under. "
+            f"Got status: {events[0]['status']!r}"
+        )
+
+    def test_rebuild_core_advanced_filter_rescues_above_floor(self):
+        """Stage 1 (rescue floor): spectral events with snap_delta >
+        floor are restored to KEPT regardless of the snap-mask."""
+        from stems_to_midi.rebuild_core import _apply_advanced_filter
+
+        # The 0.0 snap event has been FILTERED by the snap-mask.
+        # With the rescue floor at 0.005, an event with snap=0.5
+        # should be recovered to KEPT. But snap=0.0 stays FILTERED.
+        events = [
+            {'time': 1.0, 'status': 'FILTERED', 'method': 'spectral',
+             'snap_delta': 0.5, 'band_delta': 100.0, 'snap_to_ring_ratio': 0.005},
+            {'time': 2.0, 'status': 'FILTERED', 'method': 'spectral',
+             'snap_delta': 0.0, 'band_delta': 100.0, 'snap_to_ring_ratio': 0.0},
+        ]
+        config = {
+            'toms': {
+                'advanced_filter_enabled': True,
+                'advanced_min_snap_delta': 0.01,
+                'advanced_snap_ring_threshold': 0.001,
+                'advanced_snap_ring_direction': 'under',
+            }
+        }
+        _apply_advanced_filter(events, config, 'toms')
+        assert events[0]['status'] == 'KEPT', (
+            f"Event with snap=0.5 > floor=0.01 must be restored to "
+            f"KEPT. Got: {events[0]['status']!r}"
+        )
+        assert events[1]['status'] == 'FILTERED', (
+            f"Event with snap=0.0 (below floor) stays FILTERED. "
+            f"Got: {events[1]['status']!r}"
+        )
+
+    def test_rebuild_core_advanced_filter_only_affects_spectral(self):
+        """Energy events are not subject to the advanced filter."""
+        from stems_to_midi.rebuild_core import _apply_advanced_filter
+
+        events = [
+            # Energy event — should pass through unchanged.
+            {'time': 1.0, 'status': 'KEPT', 'method': 'energy', 'geomean': 0.0},
+        ]
+        config = {
+            'toms': {
+                'advanced_filter_enabled': True,
+                'advanced_min_snap_delta': 0.5,
+                'advanced_snap_ring_threshold': 0.5,
+                'advanced_snap_ring_direction': 'under',
+            }
+        }
+        _apply_advanced_filter(events, config, 'toms')
+        assert events[0]['status'] == 'KEPT'
+
+    def test_rebuild_core_advanced_filter_over_direction(self):
+        """Direction 'over' filters events with ratio ABOVE the
+        threshold (opposite of the default 'under')."""
+        from stems_to_midi.rebuild_core import _apply_advanced_filter
+
+        # Event with very HIGH snap/ring ratio.
+        events = [
+            {'time': 1.0, 'status': 'KEPT', 'method': 'spectral',
+             'snap_delta': 5.0, 'band_delta': 1.0, 'snap_to_ring_ratio': 5.0},
+            # Event with LOW ratio.
+            {'time': 2.0, 'status': 'KEPT', 'method': 'spectral',
+             'snap_delta': 0.01, 'band_delta': 100.0, 'snap_to_ring_ratio': 0.0001},
+        ]
+        config = {
+            'toms': {
+                'advanced_filter_enabled': True,
+                'advanced_snap_ring_threshold': 1.0,
+                'advanced_snap_ring_direction': 'over',
+            }
+        }
+        _apply_advanced_filter(events, config, 'toms')
+        assert events[0]['status'] == 'FILTERED', (
+            f"Direction=over with threshold=1.0 must filter events "
+            f"with ratio=5.0. Got: {events[0]['status']!r}"
+        )
+        assert events[1]['status'] == 'KEPT', (
+            f"Direction=over with threshold=1.0 must keep events with "
+            f"ratio=0.0001. Got: {events[1]['status']!r}"
+        )
+
+    def test_rebuild_core_advanced_filter_respects_override(self):
+        """User-set override is the strongest signal — neither
+        stage acts on overridden events."""
+        from stems_to_midi.rebuild_core import _apply_advanced_filter
+
+        events = [
+            {'time': 1.0, 'status': 'KEPT', 'method': 'spectral',
+             'snap_delta': 0.0, 'band_delta': 665.0, 'override': True,
+             'snap_to_ring_ratio': 0.0},
+        ]
+        config = {
+            'toms': {
+                'advanced_filter_enabled': True,
+                'advanced_min_snap_delta': 0.5,
+                'advanced_snap_ring_threshold': 0.001,
+                'advanced_snap_ring_direction': 'under',
+            }
+        }
+        _apply_advanced_filter(events, config, 'toms')
+        assert events[0]['status'] == 'KEPT', (
+            "Override-Kept events must not be touched by the advanced filter"
+        )
+
+    def test_rebuild_core_advanced_filter_invalid_direction_falls_back(self):
+        """An unknown direction string falls back to 'under' so we
+        never silently do nothing."""
+        from stems_to_midi.rebuild_core import _apply_advanced_filter
+
+        events = [
+            {'time': 1.0, 'status': 'KEPT', 'method': 'spectral',
+             'snap_delta': 0.01, 'band_delta': 665.0,
+             'snap_to_ring_ratio': 0.01 / 665.0},
+        ]
+        config = {
+            'toms': {
+                'advanced_filter_enabled': True,
+                'advanced_snap_ring_threshold': 0.001,
+                # Garbage direction — must fall back to 'under'.
+                'advanced_snap_ring_direction': 'sideways',
+            }
+        }
+        _apply_advanced_filter(events, config, 'toms')
+        assert events[0]['status'] == 'FILTERED', (
+            "Invalid direction must fall back to 'under' so the "
+            "filter still does something"
+        )

@@ -778,6 +778,141 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         yaml_path=['toms', 'snap_mask_enabled'],
         cli_flag='--toms-snap-mask-enabled',
     ),
+
+    # Master onset-filter gate (2026-06-10). When ON (default),
+    # the Geomean / Sustain / Strength filter sliders behave as
+    # before. When OFF, those filter passes are skipped entirely —
+    # every onset that the energy detector produced is treated as
+    # KEPT regardless of the slider values. Use case: instead of
+    # dragging the geomean threshold to a high value to see every
+    # event (which clobbers the saved MIDI and is hard to recover
+    # from), flip this toggle off for a one-off A/B comparison and
+    # flip it back on to restore the strict filtering. The snap
+    # mask is independent and still applies when this is off.
+    SettingDefinition(
+        key='toms_onset_filter_enabled',
+        type=SettingType.BOOL,
+        default=True,
+        label='Enable Onset Filter (Toms)',
+        description=(
+            'Master gate for the toms Geomean / Sustain / Strength '
+            'filter passes. ON (default): the filter sliders are '
+            'enforced — events below threshold are dropped. OFF: '
+            'those passes are skipped and every detected onset is '
+            'kept. Useful for A/B comparison without having to drag '
+            'the geomean threshold to an extreme value (which is '
+            'one-way and hard to recover from). The snap-mask toggle '
+            'is independent — it still applies when this is off.'
+        ),
+        category=SettingCategory.TOMS,
+        ui_control=UIControl.CHECKBOX,
+        yaml_path=['toms', 'onset_filter_enabled'],
+        cli_flag='--toms-onset-filter-enabled',
+    ),
+
+    # Advanced filter (2026-06-10, opt-in). Two-stage filter
+    # designed for the cases where the basic snap-mask isn't
+    # enough:
+    #
+    # Stage 1 — snap_delta floor (overrides the snap-mask).
+    # Spectral events with snap_delta > this floor are ALWAYS
+    # kept, even if the snap-mask would have filtered them.
+    # Use case: "I want to keep any spectral event that has a
+    # real broadband attack, regardless of whether the snap
+    # signal also fired." The floor acts as a 'rescue' for
+    # spectral events.
+    #
+    # Stage 2 — snap/ring ratio filter.
+    # Spectral events whose snap/ring ratio is on the wrong side
+    # of the threshold (per the direction setting) are filtered.
+    # Use case: "I want to drop events where the broadband snap
+    # is way weaker than the per-band-dominant ring" — those
+    # are typical wire-tails or decay events that the snap
+    # signal missed entirely (the user's calibration case:
+    # ring=665, snap=0.01 → ratio 0.000015, filtered).
+    #
+    # Both stages only apply to spectral events. Energy events
+    # are unaffected. Off by default — opt in when the basic
+    # mask isn't getting the job done.
+    SettingDefinition(
+        key='toms_advanced_filter_enabled',
+        type=SettingType.BOOL,
+        default=False,
+        label='Enable Advanced Filter (Toms)',
+        description=(
+            'Off by default. When on, two extra filters apply to '
+            'spectral events: (1) snap_delta > Snap Floor are always '
+            'kept regardless of the snap-mask; (2) events whose '
+            'snap/ring ratio is on the wrong side of the Snap/Ring '
+            'Threshold (per the direction setting) are filtered. '
+            'Use when the basic snap-mask leaves in too much noise '
+            'or drops real hits. Energy events are unaffected.'
+        ),
+        category=SettingCategory.TOMS,
+        ui_control=UIControl.CHECKBOX,
+        yaml_path=['toms', 'advanced_filter_enabled'],
+        cli_flag='--toms-advanced-filter-enabled',
+    ),
+    SettingDefinition(
+        key='toms_advanced_min_snap_delta',
+        type=SettingType.FLOAT,
+        default=0.01,
+        label='Snap Δ Floor (Toms)',
+        description=(
+            'Advanced-filter Stage 1: spectral events with snap_delta '
+            'strictly greater than this value are ALWAYS kept, '
+            'overriding the snap-mask. Use to rescue real hits that '
+            'the basic mask dropped. Only takes effect when the '
+            'Advanced Filter toggle is on.'
+        ),
+        category=SettingCategory.TOMS,
+        ui_control=UIControl.SLIDER,
+        min_value=0.0,
+        max_value=1.0,
+        step=0.01,
+        yaml_path=['toms', 'advanced_min_snap_delta'],
+        cli_flag='--toms-advanced-min-snap-delta',
+    ),
+    SettingDefinition(
+        key='toms_advanced_snap_ring_threshold',
+        type=SettingType.FLOAT,
+        default=0.001,
+        label='Snap/Ring Threshold (Toms)',
+        description=(
+            'Advanced-filter Stage 2: spectral events whose '
+            'snap_to_ring_ratio is on the wrong side of this '
+            'threshold (per the direction setting) are filtered. '
+            'The ratio is snap_delta / band_delta — a low value '
+            'means the broadband attack is much weaker than the '
+            'sustained ring (typical wire-tail / decay).'
+        ),
+        category=SettingCategory.TOMS,
+        ui_control=UIControl.SLIDER,
+        min_value=0.0,
+        max_value=1.0,
+        step=0.0001,
+        yaml_path=['toms', 'advanced_snap_ring_threshold'],
+        cli_flag='--toms-advanced-snap-ring-threshold',
+    ),
+    SettingDefinition(
+        key='toms_advanced_snap_ring_direction',
+        type=SettingType.STRING,
+        default='under',
+        label='Snap/Ring Filter Direction (Toms)',
+        description=(
+            'Which side of the Snap/Ring Threshold is filtered. '
+            '"under" (default): events with snap/ring BELOW the '
+            'threshold are filtered (catches wire-tails and '
+            'decay with very weak broadband attack). "over": '
+            'events with snap/ring ABOVE the threshold are '
+            'filtered (catches events with overly strong snap '
+            'relative to ring — usually a misclassification).'
+        ),
+        category=SettingCategory.TOMS,
+        ui_control=UIControl.TEXT,
+        yaml_path=['toms', 'advanced_snap_ring_direction'],
+        cli_flag='--toms-advanced-snap-ring-direction',
+    ),
     SettingDefinition(
         key='toms_snap_mask_threshold',
         type=SettingType.FLOAT,

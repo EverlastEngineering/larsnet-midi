@@ -65,9 +65,21 @@ const STEM_SLIDER_CONFIGS = {
         { key: 'expected_clusters', label: '🥁 Sound Types', min: 1, max: 3, step: 1, fallback: 2, unit: '', classification: true }
     ],
     toms: [
-        { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 500, step: 1, fallback: 80, unit: '' },
-        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' },
-        { key: 'expected_clusters', label: '🥁 Sound Types', min: 1, max: 4, step: 1, fallback: 3, unit: '', classification: true },
+        // Master onset-filter gate (2026-06-10). When OFF, the
+        // Geomean / Sustain / Strength filter passes are skipped
+        // and every detected onset is kept regardless of slider
+        // values. Default ON to preserve existing behavior. The
+        // three filter sliders below carry `dependsOn:
+        // 'onset_filter_enabled'` so the UI shows them grayed
+        // (visually disabled) when the master gate is off — but
+        // they still exist in the DOM for the buildConfigUpdates
+        // path. The snap mask is independent and applies even
+        // when the master gate is off.
+        { key: 'onset_filter_enabled', label: '🚦 Onset Filter (Toms)', type: 'toggle', fallback: true, unit: '',
+          help: 'When on, the Geomean / Sustain / Strength filters apply. When off, every detected onset is kept (use for A/B comparison).' },
+        { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 500, step: 1, fallback: 80, unit: '', dependsOn: 'onset_filter_enabled' },
+        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '', dependsOn: 'onset_filter_enabled' },
+        { key: 'expected_clusters', label: '🥁 Sound Types', min: 1, max: 4, step: 1, fallback: 3, unit: '', classification: true, dependsOn: 'onset_filter_enabled' },
         // Snap-delta mask (2026-06-09; toggle+conditional slider 2026-06-10).
         // The mask is OFF by default and the slider is only visible when
         // the toggle is on — see buildSlidersForStem. The mask is
@@ -76,8 +88,21 @@ const STEM_SLIDER_CONFIGS = {
         // tuning panel. Both the toggle and the threshold need
         // `_buildConfigOverrides` / `buildConfigUpdates` to forward them
         // on Save (so the YAML midiconfig.yaml records the user's choice).
-        { key: 'snap_mask_enabled', label: '🎯 Snap Mask (Toms)', type: 'toggle', fallback: false, unit: '' },
-        { key: 'snap_mask_threshold', label: 'Snap Δ Mask Threshold (Toms)', min: 0, max: 0.5, step: 0.01, fallback: 0.001, unit: '', dependsOn: 'snap_mask_enabled' }
+        { key: 'snap_mask_enabled', label: '🎯 Snap Mask (Toms)', type: 'toggle', fallback: false, unit: '',
+          help: 'When on, spectral events with snap_delta below the threshold are filtered out' },
+        { key: 'snap_mask_threshold', label: 'Snap Δ Mask Threshold (Toms)', min: 0, max: 0.5, step: 0.01, fallback: 0.001, unit: '', dependsOn: 'snap_mask_enabled' },
+        // Advanced spectral filter (2026-06-10, opt-in). Two-stage
+        // filter applied AFTER the basic snap-mask. The floor
+        // rescues events the basic mask dropped (snap_delta > X
+        // are always kept); the ratio filter drops events whose
+        // snap/ring ratio is on the wrong side of the threshold
+        // (per the direction setting). Both stages only apply to
+        // spectral events. Off by default.
+        { key: 'advanced_filter_enabled', label: '🔬 Advanced Filter (Toms)', type: 'toggle', fallback: false, unit: '',
+          help: 'When on: events with snap_delta > floor are always kept; events with snap/ring ratio on the wrong side of the threshold are filtered' },
+        { key: 'advanced_min_snap_delta', label: 'Snap Δ Floor (Toms)', min: 0, max: 1.0, step: 0.01, fallback: 0.01, unit: '', dependsOn: 'advanced_filter_enabled' },
+        { key: 'advanced_snap_ring_threshold', label: 'Snap/Ring Threshold (Toms)', min: 0, max: 1.0, step: 0.0001, fallback: 0.001, unit: '', dependsOn: 'advanced_filter_enabled' },
+        { key: 'advanced_snap_ring_direction', label: 'Snap/Ring Direction (under|over)', type: 'text', fallback: 'under', unit: '', dependsOn: 'advanced_filter_enabled' }
     ],
     hihat: [
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 200, step: 0.5, fallback: 8, unit: '' },
@@ -233,15 +258,19 @@ function buildSlidersForStem(stemType) {
 
         // Toggle control (e.g. snap_mask_enabled). Rendered as a
         // switch; when off, dependent rows (dependsOn=this key) are
-        // hidden via CSS class + JS visibility update below.
+        // hidden via CSS class + JS visibility update below. The
+        // help text under the label is taken from slider.help when
+        // provided; falls back to a generic description so legacy
+        // toggle entries without help text still render cleanly.
         if (slider.type === 'toggle') {
             const checked = currentVal ? 'checked' : '';
+            const help = slider.help || 'Toggle to enable or disable this filter';
             return `
                 <div class="tuning-slider-row" data-slider-key="${slider.key}">
                     <div class="flex items-center justify-between">
                         <div class="flex-1">
                             <label class="text-xs text-gray-300">${slider.label}</label>
-                            <p class="text-[10px] text-gray-500">When on, spectral events with snap_delta below the threshold are filtered out</p>
+                            <p class="text-[10px] text-gray-500">${help}</p>
                         </div>
                         <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 ml-2">
                             <input type="checkbox" id="tuning-slider-${slider.key}"
@@ -255,16 +284,72 @@ function buildSlidersForStem(stemType) {
                 </div>`;
         }
 
-        // Determine visibility: hidden if this slider depends on a
-        // toggle that's currently off.
+        // Pre-compute disabled / class state for sliders and
+        // text inputs that depend on a toggle. Both branches below
+        // need these. (Hoisted to here to avoid the temporal dead
+        // zone when a text input references them.)
         let hidden = '';
+        let disabledAttr = '';
+        let rowClass = 'tuning-slider-row';
+
+        // Text input control (e.g. advanced_snap_ring_direction).
+        // Free-form text — used for string enum-style settings
+        // where the user types a value (we don't render a select
+        // here to avoid re-encoding the allowed_values in the JS).
+        if (slider.type === 'text') {
+            const isDisabled = disabledAttr !== '';
+            return `
+                <div class="${rowClass}" data-slider-key="${slider.key}" data-depends-on="${slider.dependsOn || ''}"${hidden}>
+                    <div class="flex items-center justify-between mb-1">
+                        <label class="text-xs text-gray-300">${slider.label}</label>
+                        <span class="text-xs text-gray-500 font-mono" id="tuning-val-${slider.key}">${String(currentVal)}</span>
+                    </div>
+                    <input type="text"
+                           id="tuning-slider-${slider.key}"
+                           class="w-full text-xs bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-gray-200"${isDisabled ? ' disabled' : ''}
+                           value="${String(currentVal)}"
+                           data-key="${slider.key}"
+                           data-text="true">
+                </div>`;
+        }
+
+        // Determine visibility: hidden if this slider depends on a
+        // toggle that's currently off. (The state vars were
+        // declared above so the text-input branch could see them
+        // without hitting a TDZ error.)
         if (slider.dependsOn) {
             const depVal = tuningSliderValues[stemType]?.[slider.dependsOn];
             // Treat null/undefined as 'off' for a fresh project that
             // has no stored toggle value (schema default for
             // snap_mask_enabled is false, so OFF is the safe default).
-            const depOn = depVal === true;
-            if (!depOn) hidden = ' style="display: none"';
+            // Exception: for `onset_filter_enabled`, the default is
+            // true, so missing-bool = ON — that means the filter
+            // sliders are ACTIVE by default. We handle that here by
+            // using the slider's `fallback` (which is the schema
+            // default) as the assumed state when the toggle value is
+            // null/undefined.
+            if (depVal === undefined || depVal === null) {
+                // Look up the toggle's fallback from the configs
+                // (a small scan — there are at most a couple of
+                // toggles per stem).
+                const depToggle = sliderConfigs.find(s => s.key === slider.dependsOn);
+                const depOn = depToggle?.fallback === true;
+                if (!depOn) hidden = ' style="display: none"';
+                else disabledAttr = '';
+            } else if (depVal === false) {
+                // Toggle is explicitly off. The snap-mask slider
+                // should hide entirely (its slider value is
+                // meaningless without the toggle on). The
+                // onset-filter sliders should be VISIBLE but
+                // disabled (the user can see the value, just not
+                // adjust it).
+                if (slider.dependsOn === 'snap_mask_enabled') {
+                    hidden = ' style="display: none"';
+                } else {
+                    disabledAttr = ' disabled';
+                    rowClass += ' opacity-50 pointer-events-none';
+                }
+            }
         }
 
         const unitLabel = slider.unit ? ` <span class="text-gray-500">${slider.unit}</span>` : '';
@@ -273,7 +358,7 @@ function buildSlidersForStem(stemType) {
             : '';
 
         return `
-            <div class="tuning-slider-row" data-slider-key="${slider.key}" data-depends-on="${slider.dependsOn || ''}"${hidden}>
+            <div class="${rowClass}" data-slider-key="${slider.key}" data-depends-on="${slider.dependsOn || ''}"${hidden}>
                 <div class="flex items-center justify-between mb-1">
                     <label class="text-xs text-gray-300">${slider.label}${defaultLabel}</label>
                     <span class="text-xs text-larsnet-primary font-mono" id="tuning-val-${slider.key}">${formatSliderValue(currentVal)}${unitLabel}</span>
@@ -284,7 +369,7 @@ function buildSlidersForStem(stemType) {
                        min="${slider.min}"
                        max="${slider.max}"
                        step="${slider.step}"
-                       value="${currentVal}"
+                       value="${currentVal}"${disabledAttr}
                        data-key="${slider.key}"
                        data-unit="${slider.unit || ''}"
                        data-classification="${slider.classification ? 'true' : 'false'}">
@@ -362,6 +447,11 @@ function buildSlidersForStem(stemType) {
         input.addEventListener('change', onToggleInput);
     });
 
+    // Attach input listeners for text controls (e.g. advanced_snap_ring_direction)
+    container.querySelectorAll('input[type=text][data-text="true"]').forEach(input => {
+        input.addEventListener('change', onTextInput);
+    });
+
     // Update save button visibility for this stem
     updateTuningSaveButton();
 }
@@ -403,6 +493,9 @@ function _buildConfigOverrides(stemType, stored) {
         'geomean_threshold', 'min_sustain_ms', 'min_strength_threshold',
         'open_geomean_min', 'open_sustain_ms', 'expected_clusters',
         'cluster_feature', 'snap_mask_enabled', 'snap_mask_threshold',
+        'onset_filter_enabled',
+        'advanced_filter_enabled', 'advanced_min_snap_delta',
+        'advanced_snap_ring_threshold', 'advanced_snap_ring_direction',
     ]) {
         if (stored[key] != null) {
             overrides[`${stemType}.${key}`] = stored[key];
@@ -459,6 +552,30 @@ function onSliderInput(e) {
 }
 
 /**
+ * Handle text input change (e.g. advanced_snap_ring_direction).
+ * Stores the string value in tuningSliderValues and refreshes the
+ * Save button dirty check. Unlike onSliderInput / onToggleInput,
+ * text inputs don't trigger a local filter pass — the value is
+ * used in the rebuild path (after Save), not in the live
+ * applyTuningFilter() call.
+ */
+function onTextInput(e) {
+    const key = e.target.dataset.key;
+    const val = String(e.target.value || '');
+
+    if (waveformActiveStem) {
+        if (!tuningSliderValues[waveformActiveStem]) tuningSliderValues[waveformActiveStem] = {};
+        tuningSliderValues[waveformActiveStem][key] = val;
+    }
+
+    // Refresh the value display span.
+    const display = document.getElementById(`tuning-val-${key}`);
+    if (display) display.textContent = val;
+
+    updateTuningSaveButton();
+}
+
+/**
  * Handle toggle control change (e.g. snap_mask_enabled).
  *
  * Stores the bool in tuningSliderValues, shows/hides dependent
@@ -477,11 +594,27 @@ function onToggleInput(e) {
         tuningSliderValues[waveformActiveStem][key] = enabled;
     }
 
-    // Show/hide dependent slider rows. CSS visibility via inline
-    // style is the most robust path — display:none drops the row
-    // from layout, matching the hidden state of the closed panel.
+    // Show/hide dependent slider rows. Two behaviors:
+    //   - snap_mask_enabled: toggle hides/shows the threshold
+    //     slider row entirely (its value is meaningless without
+    //     the mask enabled).
+    //   - onset_filter_enabled: toggle disables+grays the filter
+    //     sliders but keeps them visible — the user can see what
+    //     the current values are, just not adjust them. This is
+    //     the "I can read the slider but it's grayed" UX.
+    // The two cases are distinguished by which key the row
+    // depends on (the row's data-depends-on attribute).
     document.querySelectorAll(`[data-depends-on="${key}"]`).forEach(row => {
-        row.style.display = enabled ? '' : 'none';
+        if (key === 'onset_filter_enabled') {
+            // Disable the input and gray the row.
+            const input = row.querySelector('input[type=range]');
+            if (input) input.disabled = !enabled;
+            row.classList.toggle('opacity-50', !enabled);
+            row.classList.toggle('pointer-events-none', !enabled);
+        } else {
+            // snap_mask_enabled or any other future toggle: hide.
+            row.style.display = enabled ? '' : 'none';
+        }
     });
 
     updateTuningSaveButton();
@@ -892,6 +1025,12 @@ function _sliderValueChanged(slider, currentVal, configuredVal) {
         // null/undefined currentVal is filtered above.
         return currentVal !== configuredVal;
     }
+    if (slider.type === 'text') {
+        // Strings: exact equality. Whitespace differences would
+        // also count as a change, which is the right user signal
+        // for a direction enum.
+        return currentVal !== configuredVal;
+    }
     if (slider.step == null) return currentVal !== configuredVal;
     return Math.abs(currentVal - configuredVal) > slider.step * 0.01;
 }
@@ -1139,13 +1278,28 @@ function applyTuningFilter() {
     const params = tuningSliderValues[stemType] || {};
     const filterMode = STEM_FILTER_MODES[stemType] || 'geomean_only';
 
-    // Pass 1: Spectral filter (geomean + sustain + strength)
-    applySpectralFilter(tuningBaseEvents, params, filterMode);
+    // Master onset-filter gate (2026-06-10). When OFF (explicit
+    // false), skip the energy-derived filter passes (geomean /
+    // sustain / strength) entirely — every event is treated as
+    // KEPT before the snap-mask pass runs. Missing bool = ON
+    // (back-compat) — preserves the old behavior for projects
+    // that pre-date the toggle.
+    //
+    // The reverb continuation filter is part of the "onset
+    // filter" group (it's the post-pass on the energy-detector
+    // output) so it also gets bypassed when the master is off.
+    // The snap-mask pass is independent — it still runs.
+    const onsetFilterEnabled = params.onset_filter_enabled !== false;
 
-    // Pass 2: Reverb continuation filter
-    const attackThreshold = params.reverb_continuation_attack_threshold;
-    if (attackThreshold != null) {
-        applyReverbContinuationFilter(tuningBaseEvents, attackThreshold);
+    if (onsetFilterEnabled) {
+        // Pass 1: Spectral filter (geomean + sustain + strength)
+        applySpectralFilter(tuningBaseEvents, params, filterMode);
+
+        // Pass 2: Reverb continuation filter
+        const attackThreshold = params.reverb_continuation_attack_threshold;
+        if (attackThreshold != null) {
+            applyReverbContinuationFilter(tuningBaseEvents, attackThreshold);
+        }
     }
 
     // Pass 3: Final min_sustain filter for hihat (after reverb filtering)
@@ -1173,6 +1327,19 @@ function applyTuningFilter() {
     const snapMaskThreshold = params.snap_mask_threshold;
     if (snapMaskEnabled && snapMaskThreshold != null && snapMaskThreshold >= 0 && stemType === 'toms') {
         applySnapDeltaMask(tuningBaseEvents, snapMaskThreshold);
+    }
+
+    // Pass 5: Advanced spectral filter (2026-06-10, opt-in). Runs
+    // AFTER the basic snap-mask so the rescue floor can recover
+    // events the mask just dropped. Off by default — opt in via
+    // the tuning panel toggle.
+    if (params.advanced_filter_enabled === true && stemType === 'toms') {
+        applyAdvancedFilter(
+            tuningBaseEvents,
+            params.advanced_min_snap_delta,
+            params.advanced_snap_ring_threshold,
+            params.advanced_snap_ring_direction || 'under',
+        );
     }
 
     // Re-apply any cached classification data (note colors, types)
@@ -1370,6 +1537,59 @@ function applySnapDeltaMask(events, threshold) {
         if (event.status !== 'KEPT') continue;
         if (event.snap_delta == null) continue;
         if (event.snap_delta <= threshold) {
+            event.status = 'FILTERED';
+        }
+    }
+}
+
+/**
+ * Pass 5: Advanced spectral filter (2026-06-10, opt-in).
+ *
+ * Two stages. Both stages only act on spectral events (energy
+ * events don't have snap_delta / band_delta and pass through
+ * unchanged).
+ *
+ * Stage 1 — snap_delta rescue floor. Spectral events with
+ * snap_delta > floor are restored to KEPT regardless of the
+ * snap-mask. The "always show" override.
+ *
+ * Stage 2 — snap/ring ratio filter. Spectral events whose
+ * snap_to_ring_ratio is on the wrong side of the threshold
+ * (per direction) are marked FILTERED. The ratio is
+ * snap_delta / band_delta — low values mean the broadband
+ * attack is much weaker than the sustained ring (typical
+ * wire-tail / decay).
+ *
+ * Mirrors the server-side pass in
+ * ``rebuild_core._apply_advanced_filter`` so the tuning panel
+ * matches the saved MIDI.
+ */
+function applyAdvancedFilter(events, floor, ratioThreshold, direction) {
+    for (const event of events) {
+        if (event._overridden) continue;
+        if (event.method !== 'spectral') continue;
+        if (event.snap_delta == null) continue;
+
+        // Stage 1: rescue floor. Strictly-greater-than so the
+        // floor value itself doesn't qualify.
+        if (floor != null && event.snap_delta > floor) {
+            event.status = 'KEPT';
+            continue;
+        }
+
+        // Stage 2: ratio filter. Compute the ratio defensively
+        // in case the field wasn't populated.
+        let ratio = event.snap_to_ring_ratio;
+        if (ratio == null) {
+            if (event.band_delta == null || event.band_delta === 0) continue;
+            ratio = event.snap_delta / event.band_delta;
+        }
+
+        if (ratioThreshold == null) continue;
+        const dir = direction === 'over' ? 'over' : 'under';
+        if (dir === 'under' && ratio < ratioThreshold) {
+            event.status = 'FILTERED';
+        } else if (dir === 'over' && ratio > ratioThreshold) {
             event.status = 'FILTERED';
         }
     }

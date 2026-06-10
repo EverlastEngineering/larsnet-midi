@@ -866,6 +866,12 @@ def _run_spectral_detection(
     # how clearly one band dominated at the hit. Values < 1.0 indicate
     # broadband / decaying frames; values >= 1.0 indicate clear
     # band dominance (the ratio is itself >= 1 by construction).
+    #
+    # Derived ratios (2026-06-10): snap_to_ring_ratio and
+    # snap_to_top_ratio are stored on the event for the WebUI
+    # tooltip and the advanced filter. They are properties on the
+    # SpectralTransientEvent dataclass, so we read them here via
+    # attribute access (no recomputation).
     return [
         {
             'time': float(e.time_sec),
@@ -875,6 +881,8 @@ def _run_spectral_detection(
             'band_max_ratio': float(e.band_max_ratio),
             'band_delta': float(e.band_delta),
             'snap_delta': float(e.snap_delta),
+            'snap_to_ring_ratio': float(e.snap_to_ring_ratio),
+            'snap_to_top_ratio': float(e.snap_to_top_ratio),
             'method': 'spectral',
         }
         for e in events
@@ -991,7 +999,25 @@ def _build_events_configured(
             continue
         # Carry through the spectral-only fields the user wants to keep
         # visible in the WebUI; the rest of the onset fields (geomean,
-        # pitch, pan, status metadata) are null/None.
+        # pitch, pan, status metadata) are null/None. The
+        # snap_to_ring_ratio and snap_to_top_ratio fields (added
+        # 2026-06-10) are also carried through for the advanced
+        # filter and tooltip — we trust the upstream detector to
+        # have computed them, and recompute here as a defensive
+        # fallback if the upstream didn't fill them (older
+        # analysis.json from before this commit).
+        sp_snap = sp.get('snap_delta')
+        sp_band = sp.get('band_delta') or 0.0
+        sp_top = sp.get('band_max_ratio') or 0.0
+        if 'snap_to_ring_ratio' in sp:
+            snap_to_ring = float(sp['snap_to_ring_ratio'])
+        else:
+            snap_to_ring = (float(sp_snap) / sp_band) if (sp_snap is not None and sp_band > 0) else 0.0
+        if 'snap_to_top_ratio' in sp:
+            snap_to_top = float(sp['snap_to_top_ratio'])
+        else:
+            snap_to_top = (float(sp_snap) / sp_top) if (sp_snap is not None and sp_top > 0) else 0.0
+
         spectral_as_onsets.append({
             'time': float(sp.get('time', 0.0)),
             'status': 'KEPT',
@@ -1002,6 +1028,8 @@ def _build_events_configured(
             'band_max_ratio': sp.get('band_max_ratio'),
             'band_delta': sp.get('band_delta'),
             'snap_delta': sp.get('snap_delta'),
+            'snap_to_ring_ratio': snap_to_ring,
+            'snap_to_top_ratio': snap_to_top,
         })
 
     # Apply the snap_delta mask to spectral events (2026-06-09;
