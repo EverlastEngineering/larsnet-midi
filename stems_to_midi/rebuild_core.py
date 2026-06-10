@@ -293,6 +293,15 @@ def _refilter_events(
     The reverb continuation filter is applied separately as a post-pass since
     it operates on stored metadata.
 
+    Spectral events (method='spectral') are EXEMPT from the geomean / sustain /
+    strength filters (Bug D, 2026-06-09). Those signals are properties of
+    the energy-detector output; spectral events have band_powers /
+    band_max_ratio / band_delta / snap_delta instead. The previous
+    implementation filtered them out whenever geomean was None (which
+    ``event.get('geomean', 0.0)`` produces), which silently destroyed all
+    magenta events when the user dragged the geomean slider. The snap-delta
+    mask pass (``_apply_snap_mask``) handles low-snap-delta spectral FPs.
+
     Args:
         events: Event dicts with pre-computed geomean, sustain_ms, strength, etc.
         spectral_config: From get_spectral_config_for_stem() with current thresholds.
@@ -308,6 +317,15 @@ def _refilter_events(
     for event in events:
         # Skip overridden events — user decision is authoritative
         if event.get('override'):
+            continue
+
+        # Spectral events are not subject to the energy-derived
+        # filters (geomean / sustain / strength). They have their
+        # own quality signal (band_max_ratio) which the server-side
+        # band-ratio quality floor already enforces. Keep them
+        # unconditionally here; the snap-mask pass handles the
+        # low-snap-delta FPs.
+        if event.get('method') == 'spectral':
             continue
 
         is_kept = should_keep_onset(
@@ -371,6 +389,120 @@ def _apply_reverb_continuation_filter(
     # Transfer status changes back to the main events list
     # (mark_reverb_continuations modified the kept_events in place,
     # and they reference the same dicts as the events list)
+    return events
+
+
+def _apply_snap_mask(
+    events: List[Dict],
+    config: Dict,
+    stem_type: str,
+) -> List[Dict]:
+    """
+    Apply the snap_delta mask to spectral events (2026-06-09;
+    toggle-gated 2026-06-10; idempotent re-evaluation 2026-06-10).
+
+    Mirrors the client-side filter in
+    webui/static/js/threshold-tuning.js::applySnapDeltaMask and the
+    full-pipeline filter in
+    processing_shell._build_events_configured so the saved MIDI is
+    consistent with what the tuning panel shows.
+
+    Gate: respects ``config[stem_type].snap_mask_enabled``. OFF
+    (explicit false) → reset any prior snap-mask FILTERED statuses
+    on spectral events back to KEPT, then return. Missing (legacy
+    projects pre-date the toggle) → default ON for back-compat.
+    Once a project has been saved with the explicit bool recorded,
+    the user's choice sticks across subsequent rebuilds.
+
+    Threshold semantics (when the gate is ON): reads
+    ``config[stem_type].snap_mask_threshold``:
+      - INCLUSIVE (≤)
+      - default 0.001 (a tiny epsilon) cleans up zero-snap tail events
+      - 0 keeps all zero-snap events
+      - 0.05–0.1 keeps only the strongest attacks
+      - negative disables the mask (independent of the toggle)
+
+    Only events with a non-None ``snap_delta`` are evaluated. Energy
+    events that don't carry snap_delta (the majority of
+    ``events_configured`` in 'energy' or 'both' mode) are untouched.
+
+    IDEMPOTENT RE-EVALUATION (Bug-2 fix, 2026-06-10): the previous
+    implementation only acted on already-KEPT events, so once an
+    event was FILTERED by the snap mask it was stuck FILTERED across
+    subsequent rebuilds even if the user loosened the threshold.
+    This version:
+      1. Resets the snap-mask-derived FILTERED status on every
+         spectral event back to KEPT (it does NOT touch overrides,
+         REVERB_CONTINUATION statuses from another pass, or
+         energy-event statuses — those are authoritative).
+      2. Then re-applies the new mask: any spectral event whose
+         snap_delta ≤ threshold becomes FILTERED again.
+    The result is that toggling the threshold or the mask is fully
+    reversible: events that were masked at 0.5 but have
+    snap_delta=0.1 recover when the user dials the threshold down
+    to 0.001.
+
+    The filter respects the ``override`` flag — events the user has
+    manually kept via the WebUI's per-event override system retain
+    KEPT status regardless of the mask.
+
+    Args:
+        events: Event dicts with status field. Mutated in place.
+        config: Full config dict (with per-stem sections).
+        stem_type: Stem name (e.g. 'toms', 'snare').
+
+    Returns:
+        Same event list with snap-masked events set to FILTERED.
+    """
+    stem_cfg = config.get(stem_type, {})
+    enabled = stem_cfg.get('snap_mask_enabled', None)
+    threshold = stem_cfg.get('snap_mask_threshold', None)
+
+    # Back-compat: missing bool defaults to ON (legacy behavior).
+    if enabled is None:
+        enabled = True
+
+    # Pass A: reset prior snap-mask status on every spectral event.
+    # A spectral event is one with a snap_delta field. We reset
+    # FILTERED → KEPT for these so the next pass re-evaluates from
+    # a clean slate. Events without snap_delta (energy events) and
+    # overridden events are left alone — they came from other
+    # passes and we don't want to second-guess them.
+    for event in events:
+        if event.get('override'):
+            continue
+        if 'snap_delta' not in event:
+            continue
+        # Only undo a FILTERED status — don't touch REVERB_CONTINUATION
+        # or KEPT.
+        if event.get('status') == 'FILTERED':
+            event['status'] = 'KEPT'
+
+    if not enabled:
+        return events
+    if threshold is None or threshold < 0:
+        # No mask configured, or explicitly disabled via the
+        # threshold. After the reset above, spectral events are
+        # correctly KEPT; energy events and overrides are
+        # untouched. The Pass A reset is the value-add here even
+        # when the mask is "off" — the user gets back any events
+        # that were masked in a prior stricter Save.
+        return events
+
+    # Pass B: apply the new mask. Only spectral events with
+    # snap_delta ≤ threshold are FILTERED. Energy events
+    # (no snap_delta) are skipped — they were never subject to
+    # the snap mask.
+    for event in events:
+        if event.get('override'):
+            continue
+        sd = event.get('snap_delta')
+        if sd is None:
+            # No snap_delta field → energy event, not applicable.
+            continue
+        if sd <= threshold:
+            event['status'] = 'FILTERED'
+
     return events
 
 
@@ -619,12 +751,23 @@ def rebuild_events_from_analysis(
 
             # Apply reverb continuation filter (post-pass, uses stored metadata)
             _apply_reverb_continuation_filter(events, config)
+
+            # Apply the snap_delta mask (2026-06-09). Runs after all
+            # other passes so masked events show as FILTERED in
+            # events_configured and are excluded from the saved MIDI.
+            _apply_snap_mask(events, config, stem_type)
         else:
             # Thresholds unchanged — trust stored statuses from full pipeline
             events = list(configured_events)
 
             # Still apply manual overrides (user may have toggled individual events)
             _apply_overrides(events, stem_overrides)
+
+            # Apply the snap_delta mask (2026-06-09). Even when other
+            # thresholds are unchanged, the user may have moved the
+            # snap_mask slider in the tuning panel — re-evaluate on
+            # every rebuild so the saved MIDI matches the slider.
+            _apply_snap_mask(events, config, stem_type)
 
         # Extract kept events for MIDI generation
         kept_events = [e for e in events if e.get('status') == 'KEPT']
@@ -739,5 +882,24 @@ def _build_logic_block(
             cluster_note_map = stem_config.get('cluster_note_map')
             if cluster_note_map:
                 logic['cluster_note_map'] = cluster_note_map
+
+            # Persist the snap-mask toggle and threshold for toms so
+            # the WebUI's tuning panel can read the user's last
+            # choice back from the sidecar (logic block is the
+            # frontend's source of truth for "configured value").
+            # The toggle defaults to None (legacy) — preserved as
+            # None so the back-compat path stays intact; explicit
+            # true/false from the user gets persisted verbatim.
+            # 2026-06-10.
+            if stem_type == 'toms':
+                enabled = stem_config.get('snap_mask_enabled', None)
+                threshold = stem_config.get('snap_mask_threshold', None)
+                # Only set the logic field if the user has an
+                # explicit value (None means "legacy — apply the
+                # back-compat default of ON at filter time").
+                if enabled is not None:
+                    logic['snap_mask_enabled'] = bool(enabled)
+                if threshold is not None:
+                    logic['snap_mask_threshold'] = float(threshold)
 
     return logic

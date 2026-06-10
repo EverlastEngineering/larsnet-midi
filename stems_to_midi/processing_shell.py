@@ -39,6 +39,10 @@ from .stereo_core import calculate_stereo_features
 # Import config structures
 from .config import DrumMapping
 from .note_classification_core import classify_notes
+from .spectral_transient_core import (
+    SpectralTransientConfig,
+    detect_spectral_transients,
+)
 
 __all__ = [
     'process_stem_to_midi',
@@ -736,6 +740,46 @@ def _run_sensitive_detection(
     return sensitive_onset_data
 
 
+def build_spectral_config_for_stem(
+    stem_type: str,
+    project_config: dict,
+) -> "SpectralTransientConfig":
+    """Build a per-stem ``SpectralTransientConfig`` from the project
+    config, reading the per-stem ``spectral_snap_bands`` and
+    ``spectral_snap_min_delta`` settings.
+
+    User requirement (2026-06-09): the toms detection lags the
+    attack onset by 50-100ms because the detector fires on the B0
+    RING, which develops AFTER the attack. The fix is a per-stem
+    "snap" signal — the broadband percussive transient at the
+    attack onset, in a stem-specific frequency range:
+      - toms: snap_bands=(1, 2) — 200-1200Hz, the "head snap" range
+      - hihat: snap_bands=(3, 4) — 1200-8000Hz, the cymbal range
+      - snare: snap_bands=(1, 2) — 200-1200Hz, the wire/body snap
+      - kick: snap_bands=(0,) — 60-200Hz, the kick fundamental
+      - cymbals: snap_bands=(3, 4) — 1200-8000Hz, cymbal range
+
+    The per-stem threshold ``spectral_snap_min_delta`` is the
+    find_peaks height for the snap signal. Lower than the ring
+    threshold because the snap signal has a smaller dynamic range
+    (it fires on broadband content, not single-band dominance).
+
+    Falls back to the module defaults (all 5 bands, 0.05) when
+    the per-stem settings are missing — backward compat.
+    """
+    stem_cfg = project_config.get(stem_type, {}) if project_config else {}
+    snap_bands = stem_cfg.get('spectral_snap_bands', None)
+    snap_min_delta = stem_cfg.get('spectral_snap_min_delta', None)
+    # Schema delivers the snap_bands as either a list (CLI/JSON)
+    # or a comma-separated string (UI form input). Normalize.
+    if isinstance(snap_bands, str):
+        snap_bands = [int(x.strip()) for x in snap_bands.split(',') if x.strip()]
+    return SpectralTransientConfig(
+        snap_bands=tuple(snap_bands) if snap_bands else (0, 1, 2, 3, 4),
+        snap_min_delta=float(snap_min_delta) if snap_min_delta is not None else 0.05,
+    )
+
+
 def _run_spectral_detection(
     audio: np.ndarray,
     audio_mono: np.ndarray,
@@ -788,13 +832,6 @@ def _run_spectral_detection(
 
         Empty list on error or no events.
     """
-    # Local import — kept inside the function so importing this module
-    # doesn't pull numpy.fft machinery into the cold path.
-    from .spectral_transient_core import (
-        SpectralTransientConfig,
-        detect_spectral_transients,
-    )
-
     # The detector is mono-only; use audio_mono regardless of is_stereo
     # (audio_mono is guaranteed to exist by the caller). We keep
     # `audio` and `is_stereo` in the signature for future per-stem
@@ -823,17 +860,21 @@ def _run_spectral_detection(
     if not events:
         return []
 
-    # The 167 denominator matches the high-freq band (800-8000Hz at
-    # n_fft=1024 / sr=44100) — the count signal can never exceed this.
-    # See spectral_transient_core.py:compute_stft_db for bin math.
-    BAND_BIN_COUNT = 167
-
+    # The per-band profile (band_powers, band_max_idx, band_max_ratio)
+    # is the new quality signal (2026-06-09). Strength is now derived
+    # from band_max_ratio clipped to [0, 1] — a unitless indicator of
+    # how clearly one band dominated at the hit. Values < 1.0 indicate
+    # broadband / decaying frames; values >= 1.0 indicate clear
+    # band dominance (the ratio is itself >= 1 by construction).
     return [
         {
             'time': float(e.time_sec),
-            'strength': float(e.bins_above_floor) / BAND_BIN_COUNT,
-            'bins_above_floor': int(e.bins_above_floor),
-            'max_db': float(e.max_db),
+            'strength': min(1.0, max(0.0, float(e.band_max_ratio) / 10.0)),
+            'band_powers': list(e.band_powers),
+            'band_max_idx': int(e.band_max_idx),
+            'band_max_ratio': float(e.band_max_ratio),
+            'band_delta': float(e.band_delta),
+            'snap_delta': float(e.snap_delta),
             'method': 'spectral',
         }
         for e in events
@@ -845,6 +886,8 @@ def _build_events_configured(
     spectral_onset_data: list,
     midi_events: list,
     detection_method: str,
+    stem_type: str = None,
+    config: dict = None,
 ) -> list:
     """
     Build the ``events_configured`` list for the analysis.json sidecar.
@@ -904,18 +947,28 @@ def _build_events_configured(
         the KEPT counter, so the order of energy events here must match
         the order of KEPT events in ``midi_events``.
     """
-    # Spectral quality floor: only events with at least this many
-    # high-freq bins above the -50dB floor (out of 167 possible) are
-    # treated as real hits. Events below this are post-hit tail / decay
-    # artefacts — the energy in the high band is real but the audio
-    # is already decaying, so the broadband strike signature is gone.
-    # Filter applies to 'both' and 'spectral' modes; the 'energy' mode
-    # is unchanged (no coupling to spectral data).
+    # Spectral quality floor: only events with band_max_ratio at or
+    # above this threshold are treated as real hits. Events below
+    # this are post-hit tail / decay artefacts — the energy in some
+    # bands is real but the audio is already decaying, so the clear
+    # band-dominance signature is gone. Replaces the old "bins >=
+    # 159" floor (2026-06-09 — the band-power profile supersedes the
+    # bins count signal). Filter applies to 'both' and 'spectral'
+    # modes; the 'energy' mode is unchanged (no coupling to spectral
+    # data).
     # User direction (2026-06-09): "spectral data should NOT use ANY
     # data from the original system. for now, JUST use spectral data
     # for the spectral events." So this filter is purely on the
     # spectral signal itself — no reference to the energy detector.
-    SPECTRAL_BINS_FLOOR = 159
+    # Note: the band_max_ratio field is top/SECOND-highest (per user
+    # spec 2026-06-09), which is smaller than the detection signal's
+    # top/MEDIAN. Floor is 1.0 (calibrated 2026-06-09 on project 4):
+    # real hits (toms) are 2.9-1548, real hits (snare) are 1.7-10.7,
+    # wire-tail artefacts are < 1.05. The NMS+wire-tail filter in
+    # spectral_transient_core handles the bulk of the work; this
+    # floor is a safety net for the rare case where wire-tail
+    # survives the NMS.
+    SPECTRAL_BAND_RATIO_FLOOR = 1.0
 
     # Defensive: unknown / None → 'energy' (preserve legacy behavior).
     if detection_method not in ('energy', 'spectral', 'both'):
@@ -927,12 +980,13 @@ def _build_events_configured(
         return list(all_onset_data)
 
     # Build the spectral-candidate list as onset-shaped dicts, applying
-    # the bins quality floor. Spectral events that don't meet the
-    # floor are dropped (they're tail / decay artefacts, not real hits).
+    # the band-ratio quality floor. Spectral events that don't meet
+    # the floor are dropped (they're tail / decay artefacts, not real
+    # hits).
     spectral_as_onsets = []
     for sp in spectral_onset_data:
-        bins = sp.get('bins_above_floor') or 0
-        if bins < SPECTRAL_BINS_FLOOR:
+        ratio = sp.get('band_max_ratio') or 0.0
+        if ratio < SPECTRAL_BAND_RATIO_FLOOR:
             # Weak spectral event — drop silently.
             continue
         # Carry through the spectral-only fields the user wants to keep
@@ -943,9 +997,42 @@ def _build_events_configured(
             'status': 'KEPT',
             'method': 'spectral',
             'strength': sp.get('strength'),
-            'bins_above_floor': sp.get('bins_above_floor'),
-            'max_db': sp.get('max_db'),
+            'band_powers': sp.get('band_powers'),
+            'band_max_idx': sp.get('band_max_idx'),
+            'band_max_ratio': sp.get('band_max_ratio'),
+            'band_delta': sp.get('band_delta'),
+            'snap_delta': sp.get('snap_delta'),
         })
+
+    # Apply the snap_delta mask to spectral events (2026-06-09;
+    # toggle-gated 2026-06-10). Mirrors the client-side filter in
+    # webui/static/js/threshold-tuning.js::applySnapDeltaMask so the
+    # saved MIDI matches what the tuning panel shows.
+    #
+    # Gate: respects the `snap_mask_enabled` bool per stem. OFF
+    # (explicit false) → skip the mask entirely; missing (legacy
+    # analysis.json pre-dates the toggle) → default ON for back-compat.
+    # The threshold field has its own range: 0.001 (schema default)
+    # catches floating-point zeros; 0.05–0.1 keeps only the strongest
+    # attacks. The mask is still skipped if the threshold is missing
+    # or negative.
+    snap_mask_enabled = None
+    snap_mask_threshold = None
+    if config is not None and stem_type is not None:
+        stem_cfg = config.get(stem_type, {})
+        snap_mask_enabled = stem_cfg.get('snap_mask_enabled', None)
+        snap_mask_threshold = stem_cfg.get('snap_mask_threshold', None)
+    # Back-compat: missing bool = ON (legacy behavior). Explicit false = OFF.
+    if snap_mask_enabled is None:
+        snap_mask_enabled = True
+    if snap_mask_enabled and snap_mask_threshold is not None and snap_mask_threshold >= 0:
+        for ev in spectral_as_onsets:
+            sd = ev.get('snap_delta')
+            if sd is None:
+                # Energy events with no snap_delta: not applicable.
+                continue
+            if sd <= snap_mask_threshold:
+                ev['status'] = 'FILTERED'
 
     if detection_method == 'spectral':
         return spectral_as_onsets
@@ -957,10 +1044,10 @@ def _build_events_configured(
     # isolation from the other for now." So we no longer couple the
     # spectral output to the energy event list — no dedup, no
     # promotion. Energy events pass through as-is; strong spectral
-    # events (bins >= SPECTRAL_BINS_FLOOR, already filtered above)
-    # are added alongside. The WebUI will show overlapping markers
-    # when both detectors fire near the same time — that's the
-    # diagnostic value of the A/B view.
+    # events (band_max_ratio >= SPECTRAL_BAND_RATIO_FLOOR, already
+    # filtered above) are added alongside. The WebUI will show
+    # overlapping markers when both detectors fire near the same
+    # time — that's the diagnostic value of the A/B view.
     return list(all_onset_data) + list(spectral_as_onsets)
 
 
@@ -1498,14 +1585,18 @@ def process_stem_to_midi(
     # signal. This always runs on every stem regardless of detection
     # method — the configured method only controls which candidate list
     # becomes events_configured, not whether the spectral detector runs.
-    # See stems_to_midi/spectral_transient_core.py for the algorithm.
+    # The per-stem SpectralTransientConfig is built from the project
+    # config (spectral_snap_bands, spectral_snap_min_delta); falls back
+    # to module defaults when not set. See
+    # stems_to_midi/spectral_transient_core.py for the algorithm.
+    spectral_cfg = build_spectral_config_for_stem(stem_type, config or {})
     spectral_onset_data = _run_spectral_detection(
         audio=audio,
         audio_mono=audio_mono,
         sr=sr,
         is_stereo=is_stereo,
         stem_type=stem_type,
-        config=None,  # Use module defaults (calibrated for tom-like signals)
+        config=spectral_cfg,
     )
     if spectral_onset_data:
         print(f"    Spectral detection: {len(spectral_onset_data)} candidate onsets")
@@ -1523,6 +1614,8 @@ def process_stem_to_midi(
         spectral_onset_data=spectral_onset_data,
         midi_events=events,
         detection_method=detection_method,
+        stem_type=stem_type,
+        config=config,
     )
     print(f"    Detection method '{detection_method}': "
           f"{len(events_configured)} events in events_configured "

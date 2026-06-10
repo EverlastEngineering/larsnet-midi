@@ -710,6 +710,96 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         cli_flag='--toms-cluster-feature',
     ),
 
+    # Spectral snap settings — per-stem configuration of the
+    # "head snap" frequency range for the spectral-transient
+    # detector. The detector fires on the broadband percussive
+    # transient at the attack onset (in the snap range) AND on
+    # the per-band-dominant ring (in the full 5 bands). The
+    # snap signal is what catches the attack onset within a few
+    # ms instead of 50-100ms after (which is what the ring-only
+    # detector does).
+    #
+    # User insight (2026-06-09): the toms attack onset is
+    # broadband in 200-1200Hz (B1+B2). The B0 ring develops
+    # 50-100ms later. Default for toms: snap_bands=[1, 2].
+    SettingDefinition(
+        key='toms_spectral_snap_bands',
+        type=SettingType.STRING,
+        default='1,2',
+        label='Snap Bands (Toms)',
+        description='Comma-separated band indices for the snap detection signal (e.g. "1,2" for 200-1200Hz). The detector fires on the broadband percussive transient in these bands at the attack onset. Use "0,1,2,3,4" to disable snap detection (fall back to ring-only).',
+        category=SettingCategory.TOMS,
+        ui_control=UIControl.TEXT,
+        yaml_path=['toms', 'spectral_snap_bands'],
+        cli_flag='--toms-snap-bands',
+    ),
+    SettingDefinition(
+        key='toms_spectral_snap_min_delta',
+        type=SettingType.FLOAT,
+        default=0.05,
+        label='Snap Min Delta (Toms)',
+        description='find_peaks height for the toms snap signal. Lower = more sensitive (catches quieter snaps, but more FPs). Default 0.05 — calibrated on project 4 funk track (2026-06-09).',
+        category=SettingCategory.TOMS,
+        ui_control=UIControl.NUMBER,
+        min_value=0.0,
+        max_value=10.0,
+        step=0.01,
+        yaml_path=['toms', 'spectral_snap_min_delta'],
+        cli_flag='--toms-snap-min-delta',
+    ),
+
+    # Snap-delta mask for toms (2026-06-09; toggle added 2026-06-10).
+    # The mask is OFF by default — the user explicitly opted-in by
+    # adding the toggle, because (a) masking is a one-way ratchet
+    # (filtered events are physically removed from the saved MIDI
+    # and there's no "unfilter" path that restores them), and (b) the
+    # previous default of 0.001 silently hid legitimate spectral
+    # events on the first Save. The threshold is the value the
+    # snap_mask pass uses when enabled: filter any spectral event
+    # whose snap_delta ≤ threshold. 0.001 (schema default) catches
+    # floating-point zeros; 0.05–0.1 keeps only the strongest
+    # broadband attacks.
+    SettingDefinition(
+        key='toms_snap_mask_enabled',
+        type=SettingType.BOOL,
+        default=False,
+        label='Enable Snap Mask (Toms)',
+        description=(
+            'When on, spectral events whose snap_delta is below the '
+            'Snap Mask Threshold are filtered from the saved MIDI. '
+            'Off by default — turn on to clean up wire-tail / decay '
+            'events that fired the RING signal but not the SNAP. '
+            'WARNING: filtering is a one-way operation per Save; you '
+            'cannot restore the masked events by turning the mask off '
+            'in a later Save (the sidecar has already lost them).'
+        ),
+        category=SettingCategory.TOMS,
+        ui_control=UIControl.CHECKBOX,
+        yaml_path=['toms', 'snap_mask_enabled'],
+        cli_flag='--toms-snap-mask-enabled',
+    ),
+    SettingDefinition(
+        key='toms_snap_mask_threshold',
+        type=SettingType.FLOAT,
+        default=0.001,
+        label='Snap Mask Threshold (Toms)',
+        description=(
+            'Filter spectral events whose snap_delta ≤ this threshold from '
+            'the saved MIDI (toms only, requires the Snap Mask toggle to be '
+            'on). 0 = filter only snap_delta==0 events (wire-tail / decay '
+            'kill). 0.001 = same plus a tiny epsilon to catch floating-point '
+            'zeros (default). 0.05–0.1 = keep only events with strong '
+            'broadband attack.'
+        ),
+        category=SettingCategory.TOMS,
+        ui_control=UIControl.SLIDER,
+        min_value=0.0,
+        max_value=0.5,
+        step=0.01,
+        yaml_path=['toms', 'snap_mask_threshold'],
+        cli_flag='--toms-snap-mask',
+    ),
+
     # Hi-hat settings
     SettingDefinition(
         key='hihat_midi_note_closed',

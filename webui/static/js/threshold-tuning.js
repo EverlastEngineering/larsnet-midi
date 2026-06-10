@@ -67,7 +67,17 @@ const STEM_SLIDER_CONFIGS = {
     toms: [
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 500, step: 1, fallback: 80, unit: '' },
         { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' },
-        { key: 'expected_clusters', label: '🥁 Sound Types', min: 1, max: 4, step: 1, fallback: 3, unit: '', classification: true }
+        { key: 'expected_clusters', label: '🥁 Sound Types', min: 1, max: 4, step: 1, fallback: 3, unit: '', classification: true },
+        // Snap-delta mask (2026-06-09; toggle+conditional slider 2026-06-10).
+        // The mask is OFF by default and the slider is only visible when
+        // the toggle is on — see buildSlidersForStem. The mask is
+        // server-side-applied in processing_shell._build_events_configured
+        // and rebuild_core._apply_snap_mask, so saved MIDI matches the
+        // tuning panel. Both the toggle and the threshold need
+        // `_buildConfigOverrides` / `buildConfigUpdates` to forward them
+        // on Save (so the YAML midiconfig.yaml records the user's choice).
+        { key: 'snap_mask_enabled', label: '🎯 Snap Mask (Toms)', type: 'toggle', fallback: false, unit: '' },
+        { key: 'snap_mask_threshold', label: 'Snap Δ Mask Threshold (Toms)', min: 0, max: 0.5, step: 0.01, fallback: 0.001, unit: '', dependsOn: 'snap_mask_enabled' }
     ],
     hihat: [
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 200, step: 0.5, fallback: 8, unit: '' },
@@ -221,13 +231,49 @@ function buildSlidersForStem(stemType) {
         if (!tuningSliderValues[stemType]) tuningSliderValues[stemType] = {};
         tuningSliderValues[stemType][slider.key] = currentVal;
 
+        // Toggle control (e.g. snap_mask_enabled). Rendered as a
+        // switch; when off, dependent rows (dependsOn=this key) are
+        // hidden via CSS class + JS visibility update below.
+        if (slider.type === 'toggle') {
+            const checked = currentVal ? 'checked' : '';
+            return `
+                <div class="tuning-slider-row" data-slider-key="${slider.key}">
+                    <div class="flex items-center justify-between">
+                        <div class="flex-1">
+                            <label class="text-xs text-gray-300">${slider.label}</label>
+                            <p class="text-[10px] text-gray-500">When on, spectral events with snap_delta below the threshold are filtered out</p>
+                        </div>
+                        <label class="relative inline-flex items-center cursor-pointer flex-shrink-0 ml-2">
+                            <input type="checkbox" id="tuning-slider-${slider.key}"
+                                   class="sr-only peer"
+                                   ${checked}
+                                   data-key="${slider.key}"
+                                   data-toggle="true">
+                            <div class="w-9 h-5 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-larsnet-primary"></div>
+                        </label>
+                    </div>
+                </div>`;
+        }
+
+        // Determine visibility: hidden if this slider depends on a
+        // toggle that's currently off.
+        let hidden = '';
+        if (slider.dependsOn) {
+            const depVal = tuningSliderValues[stemType]?.[slider.dependsOn];
+            // Treat null/undefined as 'off' for a fresh project that
+            // has no stored toggle value (schema default for
+            // snap_mask_enabled is false, so OFF is the safe default).
+            const depOn = depVal === true;
+            if (!depOn) hidden = ' style="display: none"';
+        }
+
         const unitLabel = slider.unit ? ` <span class="text-gray-500">${slider.unit}</span>` : '';
         const defaultLabel = logicValue != null
             ? `<span class="text-gray-600 text-xs ml-1">(configured: ${logicValue})</span>`
             : '';
 
         return `
-            <div class="tuning-slider-row" data-slider-key="${slider.key}">
+            <div class="tuning-slider-row" data-slider-key="${slider.key}" data-depends-on="${slider.dependsOn || ''}"${hidden}>
                 <div class="flex items-center justify-between mb-1">
                     <label class="text-xs text-gray-300">${slider.label}${defaultLabel}</label>
                     <span class="text-xs text-larsnet-primary font-mono" id="tuning-val-${slider.key}">${formatSliderValue(currentVal)}${unitLabel}</span>
@@ -311,6 +357,11 @@ function buildSlidersForStem(stemType) {
         input.addEventListener('input', onSliderInput);
     });
 
+    // Attach change listeners for toggle controls (e.g. snap_mask_enabled)
+    container.querySelectorAll('input[type=checkbox][data-toggle="true"]').forEach(input => {
+        input.addEventListener('change', onToggleInput);
+    });
+
     // Update save button visibility for this stem
     updateTuningSaveButton();
 }
@@ -351,7 +402,7 @@ function _buildConfigOverrides(stemType, stored) {
     for (const key of [
         'geomean_threshold', 'min_sustain_ms', 'min_strength_threshold',
         'open_geomean_min', 'open_sustain_ms', 'expected_clusters',
-        'cluster_feature',
+        'cluster_feature', 'snap_mask_enabled', 'snap_mask_threshold',
     ]) {
         if (stored[key] != null) {
             overrides[`${stemType}.${key}`] = stored[key];
@@ -405,6 +456,46 @@ function onSliderInput(e) {
             scheduleReclassify();
         });
     }
+}
+
+/**
+ * Handle toggle control change (e.g. snap_mask_enabled).
+ *
+ * Stores the bool in tuningSliderValues, shows/hides dependent
+ * slider rows (those with `data-depends-on="<this key>"`), and
+ * re-runs the local filter. The threshold-tuning.js filter
+ * (`applyTuningFilter` → `applySnapDeltaMask`) only applies the
+ * mask when the toggle is on, so the user can disable the mask
+ * mid-session to recover filtered events client-side.
+ */
+function onToggleInput(e) {
+    const key = e.target.dataset.key;
+    const enabled = e.target.checked;
+
+    if (waveformActiveStem) {
+        if (!tuningSliderValues[waveformActiveStem]) tuningSliderValues[waveformActiveStem] = {};
+        tuningSliderValues[waveformActiveStem][key] = enabled;
+    }
+
+    // Show/hide dependent slider rows. CSS visibility via inline
+    // style is the most robust path — display:none drops the row
+    // from layout, matching the hidden state of the closed panel.
+    document.querySelectorAll(`[data-depends-on="${key}"]`).forEach(row => {
+        row.style.display = enabled ? '' : 'none';
+    });
+
+    updateTuningSaveButton();
+
+    // Re-run the local filter so the user sees the snap-mask
+    // effect change live (mask on → red bars appear; mask off →
+    // red bars recover). Uses the existing RAF debouncer so
+    // rapid toggling doesn't thrash.
+    if (tuningRafId) cancelAnimationFrame(tuningRafId);
+    tuningRafId = requestAnimationFrame(() => {
+        applyTuningFilter();
+        tuningRafId = null;
+        scheduleReclassify();
+    });
 }
 
 /**
@@ -751,7 +842,7 @@ function updateTuningSaveButton() {
     for (const slider of sliderConfigs) {
         const configuredVal = logic[slider.key] != null ? logic[slider.key] : slider.fallback;
         const currentVal = stored[slider.key];
-        if (currentVal != null && Math.abs(currentVal - configuredVal) > slider.step * 0.01) {
+        if (_sliderValueChanged(slider, currentVal, configuredVal)) {
             hasChanges = true;
             break;
         }
@@ -782,6 +873,30 @@ function updateTuningSaveButton() {
 const GLOBAL_FILTERING_KEYS = new Set(['reverb_continuation_attack_threshold']);
 
 /**
+ * Compare a stored slider/toggle value against its configured value
+ * to decide whether the Save button should light up.
+ *
+ * Toggles (slider.type === 'toggle'): exact boolean equality.
+ * Sliders: existing tolerance (slider.step * 0.01) so floating-point
+ * drift doesn't trigger spurious Save indicators.
+ *
+ * Returns true if the value is meaningfully different (Save is dirty),
+ * false otherwise. Returns false when currentVal is null/undefined
+ * (we don't treat "no value" as a change — only an explicit value
+ * difference counts).
+ */
+function _sliderValueChanged(slider, currentVal, configuredVal) {
+    if (currentVal == null) return false;
+    if (slider.type === 'toggle') {
+        // Booleans: treat as different only on an explicit mismatch.
+        // null/undefined currentVal is filtered above.
+        return currentVal !== configuredVal;
+    }
+    if (slider.step == null) return currentVal !== configuredVal;
+    return Math.abs(currentVal - configuredVal) > slider.step * 0.01;
+}
+
+/**
  * Build config update paths for the current stem's tuned values.
  * Maps slider keys to their YAML paths: per-stem keys go to [stemType, key],
  * global filtering keys go to ["filtering", key].
@@ -798,13 +913,12 @@ function buildConfigUpdates(stemType) {
     for (const slider of sliderConfigs) {
         const configuredVal = logic[slider.key] != null ? logic[slider.key] : slider.fallback;
         const currentVal = stored[slider.key];
-        if (currentVal != null && Math.abs(currentVal - configuredVal) > slider.step * 0.01) {
-            // Route to correct YAML section
-            const path = GLOBAL_FILTERING_KEYS.has(slider.key)
-                ? ['filtering', slider.key]
-                : [stemType, slider.key];
-            updates.push({ path, value: currentVal });
-        }
+        if (!_sliderValueChanged(slider, currentVal, configuredVal)) continue;
+        // Route to correct YAML section
+        const path = GLOBAL_FILTERING_KEYS.has(slider.key)
+            ? ['filtering', slider.key]
+            : [stemType, slider.key];
+        updates.push({ path, value: currentVal });
     }
 
     // Include cluster note overrides if any
@@ -892,10 +1006,12 @@ async function saveTuningAndReconvert() {
 
                 // Bug C: surface any data-integrity warnings from the loader
                 // (e.g. events_configured has events not in events_sensitive).
+                // Logged to console only — toasts were too noisy on every
+                // rebuild and the warnings are diagnostic, not blocking.
                 if (Array.isArray(result.data_integrity_warnings) &&
                     result.data_integrity_warnings.length > 0) {
                     for (const warning of result.data_integrity_warnings) {
-                        showToast(warning, 'warning');
+                        console.warn('Data integrity warning:', warning);
                     }
                 }
 
@@ -1039,6 +1155,26 @@ function applyTuningFilter() {
         applyMinSustainFilter(tuningBaseEvents, minSustainMs);
     }
 
+    // Pass 4: Snap-delta mask for toms (2026-06-09; toggle-gated 2026-06-10).
+    // Only runs when the user has explicitly enabled the snap mask via
+    // the toggle in the tuning panel. When the toggle is off, the
+    // server-side `events_configured` statuses are shown as-is — so a
+    // user who wants to inspect a previously-masked event can flip the
+    // toggle off client-side and see it again (the server-side sidecar
+    // is unchanged until they Save with the toggle on again).
+    //
+    // Backward-compat (2026-06-10): if the project has no recorded
+    // value for `snap_mask_enabled` (older analysis.json that pre-dates
+    // the toggle), treat it as ENABLED. This preserves the old behavior
+    // for projects that were tuned under the previous default. Projects
+    // saved after this change will have the explicit bool recorded and
+    // follow the new "off-by-default" semantics.
+    const snapMaskEnabled = params.snap_mask_enabled !== false;
+    const snapMaskThreshold = params.snap_mask_threshold;
+    if (snapMaskEnabled && snapMaskThreshold != null && snapMaskThreshold >= 0 && stemType === 'toms') {
+        applySnapDeltaMask(tuningBaseEvents, snapMaskThreshold);
+    }
+
     // Re-apply any cached classification data (note colors, types)
     reapplyClassification(tuningBaseEvents);
 
@@ -1052,6 +1188,16 @@ function applyTuningFilter() {
 
 /**
  * Pass 1: Spectral filter — replicates filter_onsets_by_spectral() logic.
+ *
+ * Note (2026-06-09, bug fix): spectral events (method='spectral') are
+ * EXEMPT from the geomean / sustain / strength filters. Those signals
+ * are properties of the energy-detector output (filter_onsets_by_spectral
+ * computes geomean, sustain_ms, strength from the per-band energies).
+ * Spectral-transient events have none of those fields — they carry
+ * band_powers / band_max_ratio / band_delta / snap_delta instead. The
+ * previous implementation filtered them out whenever geomean was null
+ * (which it always is for spectral events), which silently destroyed
+ * all magenta events when the user dragged the geomean slider.
  */
 function applySpectralFilter(events, params, filterMode) {
     const geomeanThreshold = params.geomean_threshold;
@@ -1061,6 +1207,14 @@ function applySpectralFilter(events, params, filterMode) {
     for (const event of events) {
         // Start as KEPT (re-evaluate from scratch each pass)
         event.status = 'KEPT';
+
+        // Spectral events are not subject to the energy-derived
+        // filters (geomean / sustain / strength). They have their
+        // own quality signal (band_max_ratio) which the server-side
+        // band-ratio quality floor already enforces. Keep them
+        // unconditionally here; the snap_mask pass handles the
+        // low-snap-delta FPs.
+        if (event.method === 'spectral') continue;
 
         // Strength gate (applies first, all modes)
         if (minStrength != null && event.strength != null) {
@@ -1179,8 +1333,46 @@ function applyMinSustainFilter(events, minSustainMs) {
             event.status = 'FILTERED';
         }
     }
-    
+
     return events;
+}
+
+/**
+ * Pass 4: Snap-delta mask for toms (2026-06-09).
+ *
+ * Mark any KEPT event as FILTERED if its snap_delta is ≤ the
+ * threshold. snap_delta is the per-frame minimum per-bin-mean linear
+ * power across the snap_bands (see spectral_transient_core.py). At the
+ * event's peak frame, this is the diagnostic value the WebUI tooltip
+ * shows as "Snap Δ (min of snap_bands)".
+ *
+ * Mask interpretation (threshold is INCLUSIVE — ≤):
+ *   - snap_delta == 0  : the RING signal fired but the SNAP signal
+ *                        did not. Typical of wire-tail / decay events
+ *                        where the broadband attack component had
+ *                        already decayed. Threshold 0 catches all of
+ *                        these; the schema default is 0.001 (a tiny
+ *                        epsilon to catch floating-point zeros).
+ *   - snap_delta >= X : both RING and SNAP signals fired with
+ *                        broadband per-bin power >= X. Higher X =
+ *                        stricter mask (only the strongest attacks
+ *                        pass).
+ *
+ * Events without a snap_delta field (non-spectral detection methods)
+ * are left untouched — this filter only affects spectral events.
+ *
+ * The same mask is applied server-side in
+ * ``stems_to_midi.processing_shell._build_events_configured`` so the
+ * saved MIDI is consistent with what the tuning panel shows.
+ */
+function applySnapDeltaMask(events, threshold) {
+    for (const event of events) {
+        if (event.status !== 'KEPT') continue;
+        if (event.snap_delta == null) continue;
+        if (event.snap_delta <= threshold) {
+            event.status = 'FILTERED';
+        }
+    }
 }
 
 // ─── UI Updates ──────────────────────────────────────────────────────────
