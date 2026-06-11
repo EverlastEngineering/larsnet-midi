@@ -17,8 +17,8 @@ The 5 events in the 14.25-14.97s toms fill:
 - Strike 1 (14.25s): rise = 23ms — real
 - Strike 2 (14.44s): rise = **203ms** — *would be flagged as FP by a 200ms cutoff, but it's a real strike*
 - Strike 3 (14.62s): rise = 17ms — real
-- Soft hit 1 (14.84s): rise = 610ms — actual FP
-- Soft hit 2 (14.97s): rise = 714ms — actual FP
+- Soft hit 1 (14.847s per user listening; PGA detector reports 14.838s — 9ms Hann-bias offset): rise = 610ms — actual FP
+- Soft hit 2 (14.97s per user listening; PGA detector reports 14.973s): rise = 714ms — actual FP
 
 The strike 2 measurement is bad because the previous strike's ring is still loud
 in the broadband envelope when the algorithm tries to find strike 2's attack peak.
@@ -153,3 +153,46 @@ look up `onset_detection.pga_freq_band_min_hz` /
 
 This is a small wiring change. Save it for after the attack_delta work
 above.
+
+---
+
+## Issue 5: Audio corruption point scan (queue for next session)
+
+The 14.846s artifact is **visible at the normal pipeline resolution**
+(n_fft=1024, hop=256). Verified: flatness rises 7× (0.027 → 0.182)
+over 3 frames, col_min rises 43 dB (broadband content lights up).
+
+### Goal
+
+The whole point of the flatness investigation is to **mark the
+artifacts in the sidecar so the duration re-measurement can skip
+them**. The 14.846s artifact is a 3-frame event in the middle of
+strike 3's ring decay — when the duration walk-forward reaches it,
+it sees a broad-spectrum spike, decides "this is the next event,"
+and stops. The result: strike 3's measured duration is 200ms (to the
+artifact) instead of 1500ms (to the natural ring end).
+
+### Proposed implementation
+
+1. **`event_features.py`**: add `spectral_flatness` to the per-event
+   feature dict. Use n_fft=1024, hop=256 (same as the rest of the
+   pipeline). Compute per-frame flatness on the 200-8000Hz band
+   envelope. This is a 5-line addition to `compute_event_features`.
+
+2. **`processing_shell.py`**: add a "fast audio corruption scan"
+   that runs once per project (not per stem), producing a list of
+   `audio_corruption_points` (frame indices in the n_fft=1024 hop=256
+   grid where flatness > 5× neighborhood median).
+
+3. **`midi.py`**: serialize `audio_corruption_points` to the sidecar
+   as a top-level field (not per-stem — it's an audio-level property).
+
+4. **`event_features.py`** (`compute_duration_ms`): when walking
+   forward from a strike peak, skip over `audio_corruption_points`.
+   The cap becomes the next non-corruption column.
+
+5. **WebUI**: add a small marker for the corruption points on the
+   waveform (gray X marks) so the user can see what was filtered.
+
+This is the data-driven fix for the 14.846s-cut-strike-3-ring
+problem. Estimated 50-100 lines of code, no new architecture.
