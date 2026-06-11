@@ -1765,6 +1765,7 @@ def process_stem_to_midi(
                     'pitch_confidence': None,
                     'decay_t60_ms': None,
                     'spectral_centroid_hz': None,
+                    'spectral_flatness': None,
                     'inter_onset_ms': None,
                 }
             ev.update(feats)

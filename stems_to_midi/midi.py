@@ -415,6 +415,7 @@ def _serialize_pga_events(pga_events: list) -> list:
             'pitch_confidence': float,  # 0-1
             'decay_t60_ms': float,    # T60 in the broad band
             'spectral_centroid_hz': float,  # brightness
+            'spectral_flatness': float,  # 0-1 attack-region flatness
             'inter_onset_ms': float,  # time to next event
         }
     """
@@ -438,6 +439,7 @@ def _serialize_pga_events(pga_events: list) -> list:
             'pitch_confidence': _round_value(ev.get('pitch_confidence'), 4),
             'decay_t60_ms': _round_value(ev.get('decay_t60_ms'), 2),
             'spectral_centroid_hz': _round_value(ev.get('spectral_centroid_hz'), 2),
+            'spectral_flatness': _round_value(ev.get('spectral_flatness'), 4),
             'inter_onset_ms': _round_value(ev.get('inter_onset_ms'), 2),
         })
     return out

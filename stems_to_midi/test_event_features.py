@@ -34,6 +34,7 @@ from stems_to_midi.event_features import (
     compute_root_pitch,
     compute_decay_t60_ms,
     compute_spectral_centroid_hz,
+    compute_spectral_flatness,
     compute_event_features,
     compute_event_features_for_list,
 )
@@ -454,3 +455,119 @@ class TestRobustness:
             assert 80 < feats['root_pitch_hz'] < 500, (
                 f"pitch should be 80-500Hz, got {feats['root_pitch_hz']}"
             )
+
+
+class TestSpectralFlatness:
+    """Tests for the per-event spectral flatness diagnostic (2026-06-11).
+
+    Flatness is the textbook geometric-mean-over-arithmetic-mean
+    ratio of the (linear) magnitude spectrum, restricted to a
+    frequency band. Values are in [0, 1]:
+
+      * ~0.0: very tonal (one or a few bins dominate)
+      * ~1.0: noise-like (all bins approximately equal)
+
+    This is a DIAGNOSTIC, not a filter. The tests below
+    verify the math is correct, not that any threshold
+    works for any specific music.
+    """
+
+    def test_tonal_signal_low_flatness(self):
+        """A single sine in 600-3000 Hz should have very
+        low flatness — one bin dominates the band."""
+        t = np.arange(SR) / SR
+        audio = 0.5 * np.sin(2 * np.pi * 1000.0 * t).astype(np.float32)
+        # Pass an explicit body_window_ms so the segment
+        # is long enough for n_fft=1024 even at the test
+        # sample rate (SR=22050 → 50ms = 1102 samples).
+        flatness = compute_spectral_flatness(
+            audio, SR, 0.01, body_window_ms=50.0,
+        )
+        assert flatness is not None
+        # Single tone in band → one bin at 0.5, all others
+        # at the 1e-12 floor → geometric mean ≈ 1e-12,
+        # arithmetic mean ≈ 0.5/N → ratio is essentially 0.
+        # Realistic value should be < 0.05.
+        assert flatness < 0.05, (
+            f"single tone should have flatness < 0.05, got {flatness}"
+        )
+
+    def test_white_noise_high_flatness(self):
+        """White noise bandpass-restricted to 600-3000 Hz
+        should have flatness close to 1 — all bins equal."""
+        rng = np.random.default_rng(42)
+        audio = rng.normal(0, 0.1, SR).astype(np.float32)
+        flatness = compute_spectral_flatness(
+            audio, SR, 0.01, body_window_ms=50.0,
+        )
+        assert flatness is not None
+        # White noise → all bins approximately equal →
+        # geometric mean ≈ arithmetic mean → ratio ≈ 1.
+        # Realistic value for a finite sample is ~ 0.6-1.0.
+        assert flatness > 0.5, (
+            f"white noise should have flatness > 0.5, got {flatness}"
+        )
+
+    def test_silence_returns_none(self):
+        """Pure silence should return None — no signal
+        to measure."""
+        audio = np.zeros(SR, dtype=np.float32)
+        flatness = compute_spectral_flatness(
+            audio, SR, 0.1, body_window_ms=50.0,
+        )
+        assert flatness is None
+
+    def test_short_audio_returns_none(self):
+        """Audio shorter than the analysis window should
+        not crash — return None."""
+        audio = np.zeros(100, dtype=np.float32)
+        flatness = compute_spectral_flatness(audio, SR, 0.0)
+        assert flatness is None
+
+    def test_band_outside_signal(self):
+        """A tone BELOW the band (e.g. 100 Hz, band is
+        600-3000) — the band sees only spectral leakage
+        from the tone. The test asserts the function
+        returns *some* value (doesn't crash) — the exact
+        flatness depends on FFT bin spreading and is
+        not a meaningful diagnostic for this case."""
+        t = np.arange(SR) / SR
+        audio = 0.5 * np.sin(2 * np.pi * 100.0 * t).astype(np.float32)
+        flatness = compute_spectral_flatness(
+            audio, SR, 0.01, body_window_ms=50.0,
+        )
+        assert flatness is not None
+        # The value is in [0, 1] (clamped) but we don't
+        # assert any specific magnitude — the test is
+        # just a "doesn't crash" guard.
+        assert 0.0 <= flatness <= 1.0
+
+    def test_clamped_to_unit_interval(self):
+        """Flatness must be in [0, 1] by construction.
+        Floating-point noise can push it slightly outside;
+        the function clamps. Sanity check on a mixed
+        signal (tone + noise)."""
+        rng = np.random.default_rng(123)
+        t = np.arange(SR) / SR
+        tone = 0.3 * np.sin(2 * np.pi * 1000.0 * t)
+        noise = 0.05 * rng.normal(0, 1, SR)
+        audio = (tone + noise).astype(np.float32)
+        flatness = compute_spectral_flatness(
+            audio, SR, 0.01, body_window_ms=50.0,
+        )
+        assert flatness is not None
+        assert 0.0 <= flatness <= 1.0
+
+    def test_attached_to_compute_event_features(self):
+        """The flatness value should appear in the dict
+        returned by compute_event_features — it's
+        automatic, no special wiring needed."""
+        audio = _make_tone(200.0, 0.3, decay_tau_ms=200.0)
+        feats = compute_event_features(audio, SR, 0.01)
+        # The key must exist (even if value is None on
+        # edge cases like very short audio).
+        assert 'spectral_flatness' in feats
+        # The value should be a float or None, not raise.
+        assert feats['spectral_flatness'] is None or isinstance(
+            feats['spectral_flatness'], float
+        )

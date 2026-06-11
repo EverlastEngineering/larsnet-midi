@@ -577,6 +577,140 @@ def compute_spectral_centroid_hz(
     return centroid
 
 
+def compute_spectral_flatness(
+    audio: np.ndarray,
+    sr: int,
+    event_time_sec: float,
+    flat_min_hz: float = 600.0,
+    flat_max_hz: float = 3000.0,
+    body_window_ms: float = 30.0,
+    skip_ms: float = 0.0,
+    n_fft: int = 1024,
+    hop: int = 256,
+) -> Optional[float]:
+    """Spectral flatness of the attack region (2026-06-11).
+
+    Flatness = geometric mean of the (linear) magnitude
+    spectrum divided by the arithmetic mean, computed over
+    a narrow time window centered at the event time and
+    restricted to a frequency band.
+
+    This is the textbook spectral-flatness definition
+    (Johnston 1988), normalized to [0, 1]:
+
+      * 1.0 = perfectly flat (white-noise-like spectrum)
+      * ~0.0 = highly tonal (single-tone or harmonic
+        stack — geometric mean of a peaked spectrum is
+        much smaller than its arithmetic mean)
+
+    For drum attacks specifically, we expect a DIFFERENT
+    signature than for sustained tones:
+
+      * Real toms/snare/kick strikes have a strong low
+        fundamental + harmonics — TONAL signature, low
+        flatness (geometric mean << arithmetic mean).
+      * "Pop" or "click" artifacts (one-frame transient
+        noise bursts) have broadband energy spread over
+        many bins with no clear fundamental — high
+        flatness (geometric mean ≈ arithmetic mean).
+
+    We restrict the band to [flat_min_hz, flat_max_hz]
+    (default 600-3000 Hz) to focus on the "attack
+    transient" range. The full 0-22050 Hz spectrum is
+    dominated by low-frequency toms rings; the 3-8 kHz
+    "air" range is dominated by hihat/cymbal bleed; only
+    the 600-3000 Hz band is mostly percussive attack
+    content for this kind of music.
+
+    The diagnostic value here is a PER-EVENT property
+    (computed for each event that survives the prominence
+    filter), not a filter threshold. Attaching the raw
+    value to the sidecar lets the user (or a future
+    classifier) see what the pipeline sees. No magic
+    numbers — the value is whatever the math gives.
+
+    Args:
+        audio: mono or stereo audio array
+        sr: sample rate
+        event_time_sec: time of the onset
+        flat_min_hz, flat_max_hz: inclusive Hz band for
+            the flatness calculation. Default 600-3000 Hz.
+        body_window_ms: length of audio segment to take
+            the STFT over. Default 30 ms (~ 5 STFT frames
+            at hop=256) — matches the default for
+            ``compute_spectral_centroid_hz``; long enough
+            to span the attack transient, short enough
+            not to include the ring.
+        skip_ms: skip the first N ms of the segment
+            (useful for attacks with leading noise).
+            Default 0 — start at the onset sample itself.
+        n_fft, hop: STFT parameters. Defaults match the
+            rest of the larsnet pipeline (see
+            ``compute_stft_db``).
+
+    Returns:
+        float in [0, 1] or None if the segment is too
+        short or the spectrum is silent.
+    """
+    from .spectral_transient_core import compute_stft_db
+
+    onset_sample = int(event_time_sec * sr) + int(skip_ms * sr / 1000.0)
+    window_samples = int(body_window_ms * sr / 1000.0)
+    if onset_sample + window_samples > len(audio):
+        window_samples = len(audio) - onset_sample
+    if window_samples < 512:
+        return None
+
+    audio_mono = _ensure_mono(audio)
+    segment = audio_mono[onset_sample:onset_sample + window_samples]
+
+    try:
+        freqs, times, s_db = compute_stft_db(segment, sr, n_fft=n_fft, hop=hop)
+    except ValueError:
+        # Segment shorter than n_fft (e.g. very low sample
+        # rate or audio at the tail). Flatness is
+        # undefined here — return None rather than raise.
+        return None
+    # Convert dB to linear magnitude for the flatness math
+    # (flatness is defined on linear magnitude). Floor at
+    # 1e-12 to avoid log/0 — the geometric mean is computed
+    # via exp(mean(log(x))), so a single zero would zero
+    # the whole mean.
+    S = np.maximum(10 ** (s_db / 20.0), 1e-12)
+    # Restrict to the [flat_min_hz, flat_max_hz] band
+    band_mask = (freqs >= flat_min_hz) & (freqs <= flat_max_hz)
+    if not band_mask.any():
+        return None
+    band_spec = S[band_mask, :]
+    # Mean over time to get a single mean spectrum for the
+    # whole attack region
+    mean_spectrum = band_spec.mean(axis=1)
+    arith_mean = mean_spectrum.mean()
+    # Below ~120 dB in linear terms (1e-6), the band is
+    # effectively silent — the spectrum is just the
+    # numerical FFT floor. Reporting flatness ≈ 1.0 here
+    # would be misleading (would look like a white-noise
+    # event). Return None instead.
+    if arith_mean < 1e-6:
+        return None
+    # Flatness = (∏ x_i)^(1/N) / (1/N ∑ x_i)
+    # Implemented in log space for numerical safety:
+    #   log(geo) = mean(log(x_i))
+    #   flatness = exp(log(geo) - log(arith))
+    log_geo_mean = np.log(mean_spectrum).mean()
+    log_arith_mean = np.log(arith_mean)
+    flatness = float(np.exp(log_geo_mean - log_arith_mean))
+    # Clamp to [0, 1] for cleanliness — by construction
+    # geo ≤ arith for non-negative x with equality iff all
+    # bins are equal, so the value is always in [0, 1]
+    # but floating-point noise can push it slightly outside.
+    if flatness < 0.0:
+        flatness = 0.0
+    elif flatness > 1.0:
+        flatness = 1.0
+    return flatness
+
+
 def compute_attack_rise_ms(
     audio: np.ndarray,
     sr: int,
@@ -678,6 +812,10 @@ def compute_event_features(
       - ``pitch_confidence``: 0-1 (pYIN voiced_prob mean; YIN fraction-valid)
       - ``decay_t60_ms``: time for body energy to drop 60dB
       - ``spectral_centroid_hz``: weighted-mean frequency of body
+      - ``spectral_flatness``: 0-1 broadband-flatness in 600-3000 Hz
+        attack region (1=white-noise-like, 0=tonal). Diagnostic only;
+        not used as a filter. Useful for spotting pop/click artifacts
+        vs real strikes.
       - ``inter_onset_ms``: time to next event (if provided);
         explicitly reported so the WebUI can show "duration
         was bounded by next event at X ms" alongside the
@@ -710,6 +848,7 @@ def compute_event_features(
         'pitch_confidence': None,
         'decay_t60_ms': None,
         'spectral_centroid_hz': None,
+        'spectral_flatness': None,
         'inter_onset_ms': None,
     }
     # Wrap each computation in try/except so a failure in
@@ -760,6 +899,12 @@ def compute_event_features(
         pass
     try:
         features['spectral_centroid_hz'] = compute_spectral_centroid_hz(
+            audio_mono, sr, event_time_sec,
+        )
+    except Exception:
+        pass
+    try:
+        features['spectral_flatness'] = compute_spectral_flatness(
             audio_mono, sr, event_time_sec,
         )
     except Exception:

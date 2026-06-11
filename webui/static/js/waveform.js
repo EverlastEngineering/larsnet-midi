@@ -1433,6 +1433,11 @@ function drawTooltip(event, W, H) {
         //                  snare 80-250, toms 300-800, cymbals 800-2000
         //   spectral_centroid_hz:  kick/toms 200-1500, snare 800-3000,
         //                         cymbals/hihat 4000-8000
+        //   spectral_flatness:  real strikes tend low (tonal:
+        //                       fundamental + harmonics); broadband
+        //                       "pop" / "click" artifacts tend high
+        //                       (noise-like). Diagnostic only —
+        //                       not used as a filter.
         if (event.duration_ms != null) lines.push(`Duration: ${event.duration_ms.toFixed(1)} ms (ring time, slope-of-decline)`);
         if (event.attack_rise_ms != null) lines.push(`Attack rise: ${event.attack_rise_ms.toFixed(1)} ms (10-90% of peak)`);
         if (event.inter_onset_ms != null) lines.push(`Inter-onset: ${event.inter_onset_ms.toFixed(1)} ms (time to next event)`);
@@ -1442,6 +1447,7 @@ function drawTooltip(event, W, H) {
         }
         if (event.decay_t60_ms != null) lines.push(`Decay T60: ${event.decay_t60_ms.toFixed(0)} ms (200-4000Hz band)`);
         if (event.spectral_centroid_hz != null) lines.push(`Centroid: ${event.spectral_centroid_hz.toFixed(0)} Hz (brightness)`);
+        if (event.spectral_flatness != null) lines.push(`Flatness: ${event.spectral_flatness.toFixed(4)} (600-3000Hz attack region; 0=tonal, 1=noise-like)`);
     }
     if (event.geomean != null) lines.push(`Geomean: ${event.geomean}`);
     if (event.amplitude != null) lines.push(`Amplitude: ${event.amplitude}`);
