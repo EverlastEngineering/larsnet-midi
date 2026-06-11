@@ -27,6 +27,7 @@ const WAVEFORM_COLORS = {
     thresholdLine: 'rgba(251, 191, 36, 0.7)',   // amber dashed
     markerKept: '#10b981',       // green  (energy-detected events)
     markerSpectral: '#ec4899',   // magenta (spectral-detected events, method='spectral')
+    markerPga: '#8b5cf6',        // violet (percentile-gated broad-attack, method='percentile_gated')
     markerFiltered: '#ef4444',   // red
     markerReverbCont: '#f59e0b', // orange/amber
     markerSensitive: 'rgba(156, 163, 175, 0.3)',
@@ -342,6 +343,7 @@ function drawWaveform() {
     const stemData = waveformAnalysisData.stems[waveformActiveStem];
     const configuredEvents = getEventsForStem(stemData);
     const sensitiveEvents = getSensitiveEventsForStem(stemData);
+    const pgaEvents = getPgaEventsForStem(stemData);
     const envelope = waveformEnvelopeCache[waveformActiveStem];
 
     const displayEvents = (waveformTuningActive && waveformTuningEvents)
@@ -360,8 +362,14 @@ function drawWaveform() {
     // that the spec calls out.
     const spectralOverlayActive = hasMixedDetectionMethods(displayEvents);
 
-    // Full time range (for zoom reference)
-    const { tMin: tMinFull, tMax: tMaxFull } = computeTimeRange(configuredEvents, sensitiveEvents, envelope);
+    // Full time range (for zoom reference). PGA events are
+    // included in the range so the auto-zoom covers them when the
+    // user has no other events to anchor the timeline. Without this,
+    // a project that hasn't generated any configured events (a
+    // broken pipeline) would still zoom to the PGA events.
+    const { tMin: tMinFull, tMax: tMaxFull } = computeTimeRange(
+        configuredEvents, sensitiveEvents, envelope, pgaEvents,
+    );
     if (tMaxFull <= tMinFull) return;
 
     // Visible time range (affected by zoom/pan)
@@ -371,10 +379,10 @@ function drawWaveform() {
     drawEnvelopePanel(envelope, tMin, tMax, stemData, configuredEvents, sensitiveEvents);
 
     // Draw events panel
-    drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, tMin, tMax, stemData, spectralOverlayActive);
+    drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, pgaEvents, tMin, tMax, stemData, spectralOverlayActive);
 
     // Update legend bar (HTML, outside canvas)
-    updateLegendBar(stemData, displayEvents, spectralOverlayActive);
+    updateLegendBar(stemData, displayEvents, pgaEvents, spectralOverlayActive);
 
     // Draw crosshair on both panels
     if (waveformMouseX != null) {
@@ -463,7 +471,7 @@ function drawEnvelopeAxis(ctx, PAD, plotH) {
 
 // ─── Events Panel ────────────────────────────────────────────────────────
 
-function drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, tMin, tMax, stemData, spectralOverlayActive) {
+function drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, pgaEvents, tMin, tMax, stemData, spectralOverlayActive) {
     const canvas = eventsCanvas;
     const ctx = eventsCtx;
     const dpr = window.devicePixelRatio || 1;
@@ -507,6 +515,16 @@ function drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, tMin,
         ? displayEvents
         : displayEvents.filter(e => e.status === 'KEPT');
     drawEventBars(ctx, eventsToRender, timeToX, PAD, plotW, plotH, false, spectralOverlayActive);
+
+    // PGA events layer (2026-06-10). The third complementary
+    // detector — always drawn last so it sits on top of the
+    // configured-event bars, in violet. The events themselves are
+    // KEPT-only and never participate in the energy-vs-spectral
+    // A/B overlay, so we draw them with a fixed bar width
+    // (matching the main layer) and skip the velocity-axis label.
+    if (pgaEvents && pgaEvents.length > 0) {
+        drawPgaEventBars(ctx, pgaEvents, timeToX, PAD, plotW, plotH);
+    }
 }
 
 function drawVelocityAxis(ctx, PAD, plotW, plotH) {
@@ -615,6 +633,44 @@ function drawEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer
     }
 }
 
+// PGA events have a minimal shape (time + method + status — no
+// velocity, no strength). Render them as fixed-height violet
+// markers near the top of the events panel so they don't
+// collide visually with the velocity bars. Bar height is
+// intentionally NOT derived from velocity (PGA events have no
+// velocity) — they sit at a constant mid-height to look like
+// a third-color marker, not a competing velocity bar.
+function drawPgaEventBars(ctx, events, timeToX, PAD, plotW, plotH) {
+    const barWidth = 2;
+    // Position the PGA bars at a fixed mid-plot height (45-55% of
+    // plotH) — above the velocity=0 baseline but below the top
+    // axis. The visual rule: green = velocity bar (full height),
+    // magenta = spectral A/B (full height), violet = PGA marker
+    // (mid-height). PGA fires on a different signal entirely
+    // (broadband percussive attack, not velocity), so a different
+    // visual treatment helps the user read the three signals at
+    // a glance without confusing them.
+    const markerH = Math.max(8, plotH * 0.1);
+    const markerTop = PAD.top + plotH * 0.45;
+
+    for (const event of events) {
+        if (event.time == null) continue;
+        const x = timeToX(event.time);
+        if (x < PAD.left - barWidth || x > PAD.left + plotW + barWidth) continue;
+
+        // Filled rectangle
+        ctx.globalAlpha = 0.85;
+        ctx.fillStyle = WAVEFORM_COLORS.markerPga;
+        ctx.fillRect(x - barWidth / 2, markerTop, barWidth, markerH);
+
+        // Outline for crispness at zoom levels
+        ctx.globalAlpha = 1.0;
+        ctx.strokeStyle = WAVEFORM_COLORS.markerPga;
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(x - barWidth / 2, markerTop, barWidth, markerH);
+    }
+}
+
 // ─── Data Helpers ────────────────────────────────────────────────────────
 
 function getEventsForStem(stemData) {
@@ -627,7 +683,15 @@ function getSensitiveEventsForStem(stemData) {
     return stemData.events_sensitive || [];
 }
 
-function computeTimeRange(events, sensitiveEvents, envelope) {
+// PGA events live in their own sidecar field (events_pga) — the
+// third complementary detector. They run alongside energy +
+// spectral but never get promoted to events_configured. Always
+// returned (no toggle); the caller decides whether to render.
+function getPgaEventsForStem(stemData) {
+    return stemData.events_pga || [];
+}
+
+function computeTimeRange(events, sensitiveEvents, envelope, pgaEvents) {
     let tMin = Infinity, tMax = -Infinity;
 
     for (const e of events) {
@@ -635,6 +699,16 @@ function computeTimeRange(events, sensitiveEvents, envelope) {
     }
     for (const e of sensitiveEvents) {
         if (e.time != null) { tMin = Math.min(tMin, e.time); tMax = Math.max(tMax, e.time); }
+    }
+    // PGA events contribute to the zoom range so the auto-zoom
+    // covers them when the project has no other events to anchor
+    // the timeline. The optional-arg pattern is intentional —
+    // pgaEvents may be undefined on older sidecars that predate
+    // the PGA detector (2026-06-10).
+    if (pgaEvents) {
+        for (const e of pgaEvents) {
+            if (e.time != null) { tMin = Math.min(tMin, e.time); tMax = Math.max(tMax, e.time); }
+        }
     }
     if (envelope && envelope.times && envelope.times.length > 0) {
         tMin = Math.min(tMin, envelope.times[0]);
@@ -934,6 +1008,16 @@ function getEventColor(event, spectralOverlayActive) {
     if (spectralOverlayActive && event.method === 'spectral') {
         return WAVEFORM_COLORS.markerSpectral;
     }
+    // Percentile-gated broad-attack events get the dedicated violet
+    // (2026-06-10). PGA is a THIRD complementary detector; it runs
+    // alongside energy + spectral but isn't part of the
+    // energy-vs-spectral A/B comparison. The violet is always-on
+    // for these events — there's no overlay flag because PGA isn't
+    // mixed into the configured pipeline at all. See
+    // percentile_gated_detector.py for the algorithm.
+    if (event.method === 'percentile_gated') {
+        return WAVEFORM_COLORS.markerPga;
+    }
     // Fall back to classification index colors, then to default green.
     if (event.classification != null && CLASSIFICATION_COLORS[event.classification]) {
         return CLASSIFICATION_COLORS[event.classification];
@@ -979,7 +1063,7 @@ function hasMixedDetectionMethods(events) {
 
 // ─── Legend Bar (HTML, outside canvas) ────────────────────────────────────
 
-function updateLegendBar(stemData, displayEvents, spectralOverlayActive) {
+function updateLegendBar(stemData, displayEvents, pgaEvents, spectralOverlayActive) {
     // Tuning indicator
     const tuningLabel = document.getElementById('waveform-tuning-label');
     if (tuningLabel) {
@@ -1076,6 +1160,23 @@ function updateLegendBar(stemData, displayEvents, spectralOverlayActive) {
             color: WAVEFORM_COLORS.markerSpectral,
             label: `Spectral (${spectralKeptCount})`,
             title: "Magenta = spectral-detected candidate (method='spectral'); green = energy-detected",
+        });
+    }
+
+    // PGA legend entry (2026-06-10). The third complementary
+    // detector — always shown (not gated on an overlay flag)
+    // because PGA is its own signal, not an A/B candidate.
+    // Sourced from the sidecar's events_pga list (not from the
+    // configured/sensitive lists above) so the count reflects
+    // what the user is actually seeing as violet bars on the
+    // canvas. Falls back to 0 when the sidecar predates the PGA
+    // detector (pgaEvents undefined on older analyses).
+    const pgaCount = pgaEvents ? pgaEvents.length : 0;
+    if (pgaCount > 0) {
+        items.push({
+            color: WAVEFORM_COLORS.markerPga,
+            label: `PGA (${pgaCount})`,
+            title: "Violet = percentile-gated broad-attack (method='percentile_gated'); broadband percussive onset, fires independently of the energy/RING signal",
         });
     }
 
@@ -1380,12 +1481,13 @@ function onCanvasMouseMove(e) {
     // Event hit testing (on events panel only)
     const isEventsPanel = e.target === eventsCanvas;
     if (isEventsPanel) {
-        const stemData = waveformAnalysisData.stems[waveformActiveStem];
-        const configuredEvents = getEventsForStem(stemData);
-        const sensitiveEvents = getSensitiveEventsForStem(stemData);
-        const envelope = waveformEnvelopeCache[waveformActiveStem];
+    const stemData = waveformAnalysisData.stems[waveformActiveStem];
+    const configuredEvents = getEventsForStem(stemData);
+    const sensitiveEvents = getSensitiveEventsForStem(stemData);
+    const pgaEvents = getPgaEventsForStem(stemData);
+    const envelope = waveformEnvelopeCache[waveformActiveStem];
 
-        const { tMin: tMinFull, tMax: tMaxFull } = computeTimeRange(configuredEvents, sensitiveEvents, envelope);
+        const { tMin: tMinFull, tMax: tMaxFull } = computeTimeRange(configuredEvents, sensitiveEvents, envelope, pgaEvents);
         const { tMin, tMax } = computeVisibleRange(tMinFull, tMaxFull);
 
         const PAD = EVT_PAD;
@@ -1397,9 +1499,14 @@ function onCanvasMouseMove(e) {
         const displayEvents = (waveformTuningActive && waveformTuningEvents)
             ? waveformTuningEvents
             : configuredEvents;
+        // PGA events participate in hover hit-testing (2026-06-10)
+        // — clicking near a violet marker surfaces its info in
+        // the tooltip. The events are KEPT-only and never carry a
+        // velocity, so they show up in the hover state but
+        // otherwise behave like the other event types.
         const allEvents = (!waveformTuningActive && waveformShowSensitive)
-            ? displayEvents.concat(sensitiveEvents)
-            : displayEvents;
+            ? displayEvents.concat(sensitiveEvents).concat(pgaEvents)
+            : displayEvents.concat(pgaEvents);
 
         let closest = null;
         let closestDist = Infinity;

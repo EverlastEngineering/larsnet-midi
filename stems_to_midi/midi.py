@@ -385,6 +385,41 @@ def _serialize_spectral_events(spectral_events: list) -> list:
     return out
 
 
+def _serialize_pga_events(pga_events: list) -> list:
+    """
+    Serialize percentile-gated broad-attack events for the
+    analysis.json sidecar (2026-06-10).
+
+    PGA events have a minimal shape — just time + the two signals
+    that fired (envelope amplitude + broadband change). They are a
+    complementary detector; the energy + spectral events drive the
+    events_configured pipeline, and PGA is shown alongside them in
+    the WebUI waveform viewer as a violet marker.
+
+    Each event has at least::
+
+        {
+            'time': float,
+            'method': 'percentile_gated',
+            'status': 'KEPT',
+        }
+
+    The per-bin contrast stats (e.g. ``iqr_threshold``,
+    ``envelope_max``) are NOT serialized here — they are diagnostic
+    signals used by the algorithm and don't have a WebUI
+    consumer. If you ever need to surface them in the sidecar,
+    add fields here and document them in the schema.
+    """
+    out = []
+    for ev in pga_events:
+        out.append({
+            'time': _round_value(ev.get('time'), 4),
+            'method': ev.get('method', 'percentile_gated'),
+            'status': ev.get('status', 'KEPT'),
+        })
+    return out
+
+
 def save_analysis_sidecar(
     events_by_stem: Dict[str, List[Dict]],
     midi_path: Union[str, Path],
@@ -537,6 +572,17 @@ def save_analysis_sidecar(
         spectral_onset_data = analysis.get('spectral_onset_data', [])
         spectral_events = _serialize_spectral_events(spectral_onset_data) if spectral_onset_data else []
 
+        # Serialize percentile-gated broad-attack events (2026-06-10).
+        # PGA events have a simple shape — time, method, status. The
+        # WebUI waveform viewer uses them as another color in the
+        # marker stack, showing where the broadband percussive attack
+        # fired independent of the energy/RING signal. PGA is the
+        # THIRD complementary detector; it runs alongside energy +
+        # spectral but isn't part of the 'promoted to configured'
+        # pipeline.
+        pga_onset_data = analysis.get('pga_onset_data', [])
+        pga_events = _serialize_pga_events(pga_onset_data) if pga_onset_data else []
+
         # Count totals
         total_configured += len(configured_events)
         total_filtered += sum(1 for e in configured_events if e.get('status') == 'FILTERED')
@@ -548,6 +594,7 @@ def save_analysis_sidecar(
             'events_configured': configured_events,
             'events_sensitive': sensitive_events,
             'events_spectral': spectral_events,
+            'events_pga': pga_events,
         }
 
     # Write JSON

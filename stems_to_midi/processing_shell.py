@@ -43,6 +43,7 @@ from .spectral_transient_core import (
     SpectralTransientConfig,
     detect_spectral_transients,
 )
+from .percentile_gated_detector import detect_percentile_gated_broad_attacks
 
 __all__ = [
     'process_stem_to_midi',
@@ -1647,6 +1648,29 @@ def process_stem_to_midi(
     if spectral_onset_data:
         print(f"    Spectral detection: {len(spectral_onset_data)} candidate onsets")
 
+    # Step 11.5: Percentile-Gated Broad Attack detector (2026-06-10).
+    # Complementary to spectral — the spectral detector measures
+    # absolute band levels (good for the RING signal), this one
+    # measures broadband *change* relative to a per-bin noise
+    # floor (good for the ATTACK signal). Robust to saturated
+    # bands where the spectral detector's absolute level is
+    # misleading. Always runs alongside the other detectors;
+    # surfaces as ``events_pga`` / ``pga_onset_data`` in the
+    # sidecar. The WebUI uses the PGA events as another color
+    # in the waveform viewer — they show where the broadband
+    # percussive attack fired independent of the energy/RING
+    # signal. See ``percentile_gated_detector.py`` for the
+    # algorithm.
+    pga_event_times, _pga_debug = detect_percentile_gated_broad_attacks(
+        audio_mono, sr,
+    )
+    pga_onset_data = [
+        {'time': float(t), 'method': 'percentile_gated', 'status': 'KEPT'}
+        for t in pga_event_times
+    ]
+    if pga_onset_data:
+        print(f"    Percentile-gated detection: {len(pga_onset_data)} candidate onsets")
+
     # Step 12: Build events_configured based on the configured
     # detection_method. The energy and spectral detectors BOTH always
     # ran above; this is just a promotion step that picks which list
@@ -1676,5 +1700,6 @@ def process_stem_to_midi(
         'sensitive_onset_data': sensitive_onset_data,
         'spectral_onset_data': spectral_onset_data,
         'spectral_config': spectral_config,
+        'pga_onset_data': pga_onset_data,
         'envelope_data': envelope_data
     }

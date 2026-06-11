@@ -259,7 +259,8 @@ def _process_stems_to_midi(
                     'all_onset_data': result.get('all_onset_data', []),
                     'sensitive_onset_data': result.get('sensitive_onset_data', []),
                     'spectral_onset_data': result.get('spectral_onset_data', []),
-                    'spectral_config': result.get('spectral_config')
+                    'spectral_config': result.get('spectral_config'),
+                    'pga_onset_data': result.get('pga_onset_data', []),
                 }
                 # Store envelope data for waveform visualization
                 if result.get('envelope_data'):
