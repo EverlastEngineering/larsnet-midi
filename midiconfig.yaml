@@ -203,7 +203,21 @@ toms:
   geomean_threshold: 80.0        # Geometric mean of fundamental+body energy
                                   # Real toms: 150-600, Artifacts: 20-80
                                   # Set to 80 to be conservative
-  
+
+  # Spectral-transient detector tuning (2026-06-09, required for the
+  # toms sidecar to fire at the actual attack onset).
+  # Without these the detector falls back to its (0,1,2,3,4)
+  # default — the B0 RING signal — which develops 50-100ms AFTER
+  # the strike and produces events that lag the audio by that
+  # amount. The toms "head snap" lives in B1 (200-600Hz) and B2
+  # (600-1200Hz); peak-picking the SNAP signal in those two bands
+  # gives event times within one STFT frame (~5.8ms) of the true
+  # attack. snap_min_delta is the height threshold; 0.05 is the
+  # module default and is calibrated for the toms head-snap
+  # amplitude on a 44.1kHz signal.
+  spectral_snap_bands: [1, 2]
+  spectral_snap_min_delta: 0.05
+
   # Spectral ranges for analysis (Hz)
   fundamental_freq_min: 60       # Start of fundamental range (deep toms)
   fundamental_freq_max: 150      # End of fundamental range
