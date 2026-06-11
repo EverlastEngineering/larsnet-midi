@@ -748,35 +748,89 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         cli_flag='--toms-snap-min-delta',
     ),
 
-    # Snap-delta mask for toms (2026-06-09; toggle added 2026-06-10).
-    # The mask is OFF by default — the user explicitly opted-in by
-    # adding the toggle, because (a) masking is a one-way ratchet
-    # (filtered events are physically removed from the saved MIDI
-    # and there's no "unfilter" path that restores them), and (b) the
-    # previous default of 0.001 silently hid legitimate spectral
-    # events on the first Save. The threshold is the value the
-    # snap_mask pass uses when enabled: filter any spectral event
-    # whose snap_delta ≤ threshold. 0.001 (schema default) catches
-    # floating-point zeros; 0.05–0.1 keeps only the strongest
-    # broadband attacks.
+    # "Show Only Snap Events" toggle for toms (2026-06-10).
+    # Replaces the 2026-06-09 snap_mask_enabled/threshold pair
+    # (which had a lossy "0.001 default" that silently hid events
+    # on first Save) and the Stage-1 snap/ring floor from the
+    # 2026-06-10 advanced filter. When ON, any spectral event
+    # whose snap_delta is zero (or null) is filtered from the
+    # saved MIDI. snap_delta > 0 means the broadband attack
+    # signal fired in the snap bands at the event's peak frame
+    # — typical of a real percussive attack. snap_delta == 0 is
+    # the classic wire-tail / decay signature (the RING signal
+    # fired but the broadband attack had already decayed).
+    #
+    # Off by default — the user opts in. The filter is
+    # idempotent across rebuilds (turning it off restores any
+    # previously-filtered snap-zero events, unlike the old
+    # snap-mask which was effectively a one-way ratchet).
     SettingDefinition(
-        key='toms_snap_mask_enabled',
+        key='toms_show_only_snap_events',
         type=SettingType.BOOL,
         default=False,
-        label='Enable Snap Mask (Toms)',
+        label='Show Only Snap Events (Toms)',
         description=(
-            'When on, spectral events whose snap_delta is below the '
-            'Snap Mask Threshold are filtered from the saved MIDI. '
-            'Off by default — turn on to clean up wire-tail / decay '
-            'events that fired the RING signal but not the SNAP. '
-            'WARNING: filtering is a one-way operation per Save; you '
-            'cannot restore the masked events by turning the mask off '
-            'in a later Save (the sidecar has already lost them).'
+            'When on, spectral events whose snap_delta is zero '
+            'or null are filtered from the saved MIDI. This is '
+            'the typical wire-tail / decay kill switch — events '
+            'where the RING signal fired but the broadband '
+            'attack had already decayed. Off by default. '
+            'Idempotent: turning it off restores the filtered '
+            'events on the next rebuild.'
         ),
         category=SettingCategory.TOMS,
         ui_control=UIControl.CHECKBOX,
-        yaml_path=['toms', 'snap_mask_enabled'],
-        cli_flag='--toms-snap-mask-enabled',
+        yaml_path=['toms', 'show_only_snap_events'],
+        cli_flag='--toms-show-only-snap-events',
+    ),
+
+    # "Filter Events with Top/2nd Ratio Greater Than" slider for
+    # toms (2026-06-10). Replaces the lossy
+    # `advanced_filter_high_strength` toggle (which operated on
+    # the strength field that was clamped to [0, 1] and therefore
+    # could not distinguish a band_max_ratio of 11 from one of
+    # 459). This slider reads the RAW band_max_ratio and drops
+    # any spectral event whose top/second-highest-band ratio is
+    # strictly greater than the threshold.
+    #
+    # The slider is a "ceiling on extreme dominance" gate — the
+    # user's calibration case (a real hit with ratio 18.99 vs an
+    # FP with ratio 459.12) is now expressible directly. The
+    # slider max is the dataset's actual max ratio (set at UI
+    # build time in threshold-tuning.js), and the step is
+    # derived from the max so the user gets full resolution
+    # across whatever range the data exhibits. The 0 value is
+    # a special "Off / Disabled" sentinel — the filter is a
+    # no-op when 0.
+    SettingDefinition(
+        key='toms_band_max_ratio_max',
+        type=SettingType.FLOAT,
+        default=0.0,
+        label='Filter Events with Top/2nd Ratio Greater Than (Toms)',
+        description=(
+            'Spectral events whose band_max_ratio (top band / '
+            'second-highest band at the event frame) is strictly '
+            'greater than this value are filtered from the saved '
+            'MIDI. Use to drop the "extreme dominance" FP '
+            'signature — events where one band beats the others '
+            'by 100x or more (real hits are typically <20x; the '
+            'user\'s calibration case had FPs at 459x). 0 (the '
+            'default) disables the filter — the slider in the '
+            'sidecar shows "Off" at this position. The slider '
+            'max is set to the dataset\'s max ratio so the full '
+            'range is expressible without losing precision.'
+        ),
+        category=SettingCategory.TOMS,
+        ui_control=UIControl.SLIDER,
+        min_value=0.0,
+        # Server-side upper bound. The WebUI overrides `max` at
+        # build time to the actual dataset max; this default
+        # just prevents the server from accepting absurdly huge
+        # values via the CLI / config-file path.
+        max_value=10000.0,
+        step=0.1,
+        yaml_path=['toms', 'band_max_ratio_max'],
+        cli_flag='--toms-band-max-ratio-max',
     ),
 
     # Master onset-filter gate (2026-06-10). When ON (default),
@@ -789,151 +843,53 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
     # from), flip this toggle off for a one-off A/B comparison and
     # flip it back on to restore the strict filtering. The snap
     # mask is independent and still applies when this is off.
+    # Onset events visibility gate (2026-06-10, renamed 2026-06-10
+    # round 2). Originally called 'onset_events_enabled' and
+    # implemented as a filter-bypass — wrong semantics. Correct
+    # semantics: ON (default) = energy-detected onset events are
+    # included in events_configured. OFF = energy-detected events
+    # are REMOVED from events_configured entirely. Spectral events
+    # are unaffected. Use case: when the energy detector is
+    # producing too much noise, the user can suppress the entire
+    # onset stream and rely on the spectral detector alone.
+    # Direction is one-way per save: turning OFF drops the events,
+    # and the user must re-run full detection to get them back
+    # (the per-event override and the events_sensitive list remain
+    # on disk, but events_configured is no longer the source of
+    # truth for them). This aligns with the user's plan to
+    # deprecate the energy detector for toms.
     SettingDefinition(
-        key='toms_onset_filter_enabled',
+        key='toms_onset_events_enabled',
         type=SettingType.BOOL,
         default=True,
-        label='Enable Onset Filter (Toms)',
+        label='Show Onset Events (Toms)',
         description=(
-            'Master gate for the toms Geomean / Sustain / Strength '
-            'filter passes. ON (default): the filter sliders are '
-            'enforced — events below threshold are dropped. OFF: '
-            'those passes are skipped and every detected onset is '
-            'kept. Useful for A/B comparison without having to drag '
-            'the geomean threshold to an extreme value (which is '
-            'one-way and hard to recover from). The snap-mask toggle '
-            'is independent — it still applies when this is off.'
+            'ON (default): energy-detected onset events are included '
+            'in events_configured and the waveform view. OFF: '
+            'energy-detected events are REMOVED from '
+            'events_configured and the view (spectral events are '
+            'unaffected). One-way per save — re-run full detection '
+            'to restore dropped events. Use this when the energy '
+            'detector is producing too much noise and you want to '
+            'rely on the spectral detector alone. The snap mask, '
+            'advanced filter, and other tuning are independent.'
         ),
         category=SettingCategory.TOMS,
         ui_control=UIControl.CHECKBOX,
-        yaml_path=['toms', 'onset_filter_enabled'],
-        cli_flag='--toms-onset-filter-enabled',
+        yaml_path=['toms', 'onset_events_enabled'],
+        cli_flag='--toms-onset-events-enabled',
     ),
 
-    # Advanced filter (2026-06-10, opt-in). Two-stage filter
-    # designed for the cases where the basic snap-mask isn't
-    # enough:
-    #
-    # Stage 1 — snap_delta floor (overrides the snap-mask).
-    # Spectral events with snap_delta > this floor are ALWAYS
-    # kept, even if the snap-mask would have filtered them.
-    # Use case: "I want to keep any spectral event that has a
-    # real broadband attack, regardless of whether the snap
-    # signal also fired." The floor acts as a 'rescue' for
-    # spectral events.
-    #
-    # Stage 2 — snap/ring ratio filter.
-    # Spectral events whose snap/ring ratio is on the wrong side
-    # of the threshold (per the direction setting) are filtered.
-    # Use case: "I want to drop events where the broadband snap
-    # is way weaker than the per-band-dominant ring" — those
-    # are typical wire-tails or decay events that the snap
-    # signal missed entirely (the user's calibration case:
-    # ring=665, snap=0.01 → ratio 0.000015, filtered).
-    #
-    # Both stages only apply to spectral events. Energy events
-    # are unaffected. Off by default — opt in when the basic
-    # mask isn't getting the job done.
-    SettingDefinition(
-        key='toms_advanced_filter_enabled',
-        type=SettingType.BOOL,
-        default=False,
-        label='Enable Advanced Filter (Toms)',
-        description=(
-            'Off by default. When on, two extra filters apply to '
-            'spectral events: (1) snap_delta > Snap Floor are always '
-            'kept regardless of the snap-mask; (2) events whose '
-            'snap/ring ratio is on the wrong side of the Snap/Ring '
-            'Threshold (per the direction setting) are filtered. '
-            'Use when the basic snap-mask leaves in too much noise '
-            'or drops real hits. Energy events are unaffected.'
-        ),
-        category=SettingCategory.TOMS,
-        ui_control=UIControl.CHECKBOX,
-        yaml_path=['toms', 'advanced_filter_enabled'],
-        cli_flag='--toms-advanced-filter-enabled',
-    ),
-    SettingDefinition(
-        key='toms_advanced_min_snap_delta',
-        type=SettingType.FLOAT,
-        default=0.01,
-        label='Snap Δ Floor (Toms)',
-        description=(
-            'Advanced-filter Stage 1: spectral events with snap_delta '
-            'strictly greater than this value are ALWAYS kept, '
-            'overriding the snap-mask. Use to rescue real hits that '
-            'the basic mask dropped. Only takes effect when the '
-            'Advanced Filter toggle is on.'
-        ),
-        category=SettingCategory.TOMS,
-        ui_control=UIControl.SLIDER,
-        min_value=0.0,
-        max_value=1.0,
-        step=0.01,
-        yaml_path=['toms', 'advanced_min_snap_delta'],
-        cli_flag='--toms-advanced-min-snap-delta',
-    ),
-    SettingDefinition(
-        key='toms_advanced_snap_ring_threshold',
-        type=SettingType.FLOAT,
-        default=0.001,
-        label='Snap/Ring Threshold (Toms)',
-        description=(
-            'Advanced-filter Stage 2: spectral events whose '
-            'snap_to_ring_ratio is on the wrong side of this '
-            'threshold (per the direction setting) are filtered. '
-            'The ratio is snap_delta / band_delta — a low value '
-            'means the broadband attack is much weaker than the '
-            'sustained ring (typical wire-tail / decay).'
-        ),
-        category=SettingCategory.TOMS,
-        ui_control=UIControl.SLIDER,
-        min_value=0.0,
-        max_value=1.0,
-        step=0.0001,
-        yaml_path=['toms', 'advanced_snap_ring_threshold'],
-        cli_flag='--toms-advanced-snap-ring-threshold',
-    ),
-    SettingDefinition(
-        key='toms_advanced_snap_ring_direction',
-        type=SettingType.STRING,
-        default='under',
-        label='Snap/Ring Filter Direction (Toms)',
-        description=(
-            'Which side of the Snap/Ring Threshold is filtered. '
-            '"under" (default): events with snap/ring BELOW the '
-            'threshold are filtered (catches wire-tails and '
-            'decay with very weak broadband attack). "over": '
-            'events with snap/ring ABOVE the threshold are '
-            'filtered (catches events with overly strong snap '
-            'relative to ring — usually a misclassification).'
-        ),
-        category=SettingCategory.TOMS,
-        ui_control=UIControl.TEXT,
-        yaml_path=['toms', 'advanced_snap_ring_direction'],
-        cli_flag='--toms-advanced-snap-ring-direction',
-    ),
-    SettingDefinition(
-        key='toms_snap_mask_threshold',
-        type=SettingType.FLOAT,
-        default=0.001,
-        label='Snap Mask Threshold (Toms)',
-        description=(
-            'Filter spectral events whose snap_delta ≤ this threshold from '
-            'the saved MIDI (toms only, requires the Snap Mask toggle to be '
-            'on). 0 = filter only snap_delta==0 events (wire-tail / decay '
-            'kill). 0.001 = same plus a tiny epsilon to catch floating-point '
-            'zeros (default). 0.05–0.1 = keep only events with strong '
-            'broadband attack.'
-        ),
-        category=SettingCategory.TOMS,
-        ui_control=UIControl.SLIDER,
-        min_value=0.0,
-        max_value=0.5,
-        step=0.01,
-        yaml_path=['toms', 'snap_mask_threshold'],
-        cli_flag='--toms-snap-mask',
-    ),
+    # 2026-06-10: removed the legacy advanced-filter + snap-mask
+    # settings (toms_advanced_filter_enabled, toms_advanced_min_snap_delta,
+    # toms_advanced_snap_ring_threshold, toms_advanced_snap_ring_direction,
+    # toms_advanced_filter_high_strength, toms_snap_mask_threshold). They
+    # were replaced by `toms_show_only_snap_events` and
+    # `toms_band_max_ratio_max` above. Back-compat: any existing project
+    # YAML that still has the old keys is ignored — the new filters
+    # are off by default, so nothing happens to the saved MIDI unless
+    # the user explicitly sets the new keys.
+
 
     # Hi-hat settings
     SettingDefinition(

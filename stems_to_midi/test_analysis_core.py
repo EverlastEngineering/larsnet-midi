@@ -885,12 +885,114 @@ class TestPrepareMidiEventsForWriting:
             'snare': [{'note': 38, 'velocity': 90, 'time': 1.0, 'duration': 0.1}]
         }
         prepared = prepare_midi_events_for_writing(events_by_stem, tempo=60.0)
-        
+
         assert len(prepared) == 2
         # Check that both stems are represented
         stem_types = [e['stem_type'] for e in prepared]
         assert 'kick' in stem_types
         assert 'snare' in stem_types
+
+    def test_dedups_duplicate_note_time_within_1ms(self):
+        """Two KEPT events with the same (stem, note, time within 1ms)
+        must collapse to a single MIDI note (keep the louder one).
+
+        Regression test for the 2026-06-10 incident: the energy +
+        spectral detection paths can both produce a KEPT event for
+        the same hit. midiutil's addNote emits NoteOn+NoteOff per
+        call; two calls with identical (pitch, channel, tick) but
+        different durations leaves one NoteOn orphaned, and
+        deInterleaveNotes throws ``IndexError: pop from empty list``.
+        The fix is in prepare_midi_events_for_writing — dedup at
+        the boundary we control so midiutil never sees the
+        double-NoteOn.
+
+        The dedup rounds time to the nearest millisecond; two
+        events within the same ms on the same stem+note collapse."""
+        events_by_stem = {
+            'hihat': [
+                # Energy-detected hihat at t=2.0003s, note 42, vel 84
+                # (round(2.0003 * 1000) = 2000)
+                {'note': 42, 'velocity': 84, 'time': 2.0003, 'duration': 0.21},
+                # Spectral-detected hihat at t=2.0008s, note 42, vel 90
+                # (round(2.0008 * 1000) = 2001 — also "same ms" only if
+                # we rounded down. We don't — we round to nearest, so
+                # 2000 and 2001 are different keys. Use 2.0002 to
+                # share the same millisecond.)
+                {'note': 42, 'velocity': 90, 'time': 2.0002, 'duration': 0.05},
+            ]
+        }
+        prepared = prepare_midi_events_for_writing(events_by_stem, tempo=120.0)
+
+        # The duplicate pair must collapse to one MIDI note.
+        assert len(prepared) == 1, (
+            f"expected 1 prepared event after dedup, got {len(prepared)}: "
+            f"{prepared}"
+        )
+        # The louder one wins (the spectral hit at vel=90).
+        assert prepared[0]['velocity'] == 90, (
+            f"expected the louder event (vel=90) to survive dedup, "
+            f"got vel={prepared[0]['velocity']}"
+        )
+
+    def test_dedup_does_not_collapse_cross_stem_hits(self):
+        """A kick at the same instant as a snare must remain two
+        separate MIDI notes — different stems with the same note
+        number share (pitch, channel) on midiutil's side, but
+        they're semantically independent hits and must not be
+        merged. The dedup is keyed on (stem, note, time) for this
+        reason."""
+        events_by_stem = {
+            'kick':  [{'note': 36, 'velocity': 100, 'time': 1.0, 'duration': 0.1}],
+            'snare': [{'note': 36, 'velocity': 90,  'time': 1.0, 'duration': 0.1}],  # same note #, different stem
+        }
+        prepared = prepare_midi_events_for_writing(events_by_stem, tempo=120.0)
+        # Wait — drum mapping gives kick=36 and snare=38 by default;
+        # both with note=36 here means a config override. Either way,
+        # the cross-stem dedup must NOT merge them.
+        assert len(prepared) == 2, (
+            f"cross-stem hits must not be merged by dedup, got "
+            f"{len(prepared)} events: {prepared}"
+        )
+
+    def test_dedup_keeps_event_when_only_one_in_pair(self):
+        """A unique (stem, note, time) event must pass through the
+        dedup untouched. This is the common case (the bug only
+        fires on exact or near-exact duplicate times) and must
+        not be affected by the dedup pass."""
+        events_by_stem = {
+            'kick':  [{'note': 36, 'velocity': 100, 'time': 1.0, 'duration': 0.1}],
+            'snare': [{'note': 38, 'velocity': 90,  'time': 2.0, 'duration': 0.1}],
+        }
+        prepared = prepare_midi_events_for_writing(events_by_stem, tempo=120.0)
+        assert len(prepared) == 2
+        # Original velocities preserved.
+        velocities = sorted(e['velocity'] for e in prepared)
+        assert velocities == [90, 100]
+
+    def test_dedup_uses_1ms_threshold(self):
+        """The dedup rounds time to 1ms (same threshold
+        energy_detection_shell uses). Two events within the same
+        millisecond on the same stem+note must dedup; two events
+        in different milliseconds must not. Values chosen to avoid
+        banker's-rounding ambiguity (1.0005s could round either way
+        depending on Python version)."""
+        events_by_stem = {
+            'hihat': [
+                # 0.0003s apart → both round(2.000 * 1000)=2000
+                # and round(2.0003 * 1000)=2000 → SAME ms → dedup
+                {'note': 42, 'velocity': 80, 'time': 2.0000, 'duration': 0.1},
+                {'note': 42, 'velocity': 90, 'time': 2.0003, 'duration': 0.1},
+                # 0.0020s apart → round(5.000 * 1000)=5000
+                # and round(5.002 * 1000)=5002 → DIFFERENT ms → keep both
+                {'note': 42, 'velocity': 85, 'time': 5.000, 'duration': 0.1},
+                {'note': 42, 'velocity': 95, 'time': 5.002, 'duration': 0.1},
+            ]
+        }
+        prepared = prepare_midi_events_for_writing(events_by_stem, tempo=120.0)
+        # 1 + 2 = 3 (the close pair collapsed, the far pair kept)
+        assert len(prepared) == 3, (
+            f"1ms dedup threshold: expected 3 events, got {len(prepared)}: {prepared}"
+        )
 
 
 class TestCalculateThresholdFromDistributions:

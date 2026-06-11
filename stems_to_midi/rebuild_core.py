@@ -49,7 +49,7 @@ def _thresholds_changed(
     Determine if current config thresholds differ from stored analysis logic.
 
     Compares geomean_threshold, min_sustain_ms, min_strength_threshold,
-    and the onset_filter_enabled master gate (2026-06-10) — the
+    and the onset_events_enabled master gate (2026-06-10) — the
     parameters that the user can tune via sliders.
 
     Args:
@@ -80,8 +80,8 @@ def _thresholds_changed(
     # changed — the master gate is the path that bypasses
     # _refilter_events entirely. Use the spectral_config's value
     # (which carries the per-stem gate via get_spectral_config_for_stem).
-    current_master = spectral_config.get('onset_filter_enabled', None)
-    stored_master = stored_logic.get('onset_filter_enabled', None)
+    current_master = spectral_config.get('onset_events_enabled', None)
+    stored_master = stored_logic.get('onset_events_enabled', None)
     # Both None → unchanged (legacy project, gate is missing on
     # both sides, _refilter_events runs as before). Any other
     # combination → changed.
@@ -314,15 +314,20 @@ def _refilter_events(
     band_max_ratio / band_delta / snap_delta instead. The previous
     implementation filtered them out whenever geomean was None (which
     ``event.get('geomean', 0.0)`` produces), which silently destroyed all
-    magenta events when the user dragged the geomean slider. The snap-delta
-    mask pass (``_apply_snap_mask``) handles low-snap-delta spectral FPs.
+    magenta events when the user dragged the geomean slider. The
+    show-only-snap pass (``_apply_show_only_snap_events``) handles
+    low-snap-delta spectral FPs.
 
-    Master onset-filter gate (2026-06-10): when the stem's
-    ``onset_filter_enabled`` bool is False, this function is a
-    no-op — every event that wasn't already FILTERED by another
-    pass (reverb continuation, override, snap-mask) stays KEPT.
-    Missing bool = ON (back-compat) for legacy projects. The
-    snap-mask pass is independent and still runs.
+    Onset events visibility gate (2026-06-10 round 2): the
+    ``onset_events_enabled`` bool does NOT change the behavior of
+    this function — the geomean/sustain/strength filter still
+    runs and produces the same statuses. The gate's effect
+    happens later in ``rebuild_events_from_analysis``: after
+    all filter passes, energy events (``method != 'spectral'``)
+    are dropped from the events list entirely. This keeps the
+    per-event filter logic simple and idempotent (re-evaluating
+    the same inputs gives the same outputs) while letting the
+    user "show only spectral" by flipping the gate.
 
     Args:
         events: Event dicts with pre-computed geomean, sustain_ms, strength, etc.
@@ -335,30 +340,6 @@ def _refilter_events(
     min_sustain_ms = spectral_config.get('min_sustain_ms')
     filter_mode = spectral_config.get('filter_mode', 'geomean_only')
     min_strength_threshold = spectral_config.get('min_strength_threshold')
-
-    # Master onset-filter gate (2026-06-10). spectral_config is
-    # the per-stem threshold bundle; the gate lives in the full
-    # config dict. Caller passes it via spectral_config so we
-    # don't have to change the function signature. Missing bool
-    # defaults to ON (back-compat).
-    if spectral_config.get('onset_filter_enabled') is False:
-        # Idempotent reset (2026-06-10): the master gate bypass
-        # is two-way. Any energy event that was FILTERED by a
-        # prior geomean/sustain/strength pass must be restored to
-        # KEPT so the user can recover previously-hidden events
-        # by toggling the master off (and flip back on to
-        # re-apply the strict filter). Without this reset, the
-        # bypass is one-way — the user could turn the filter
-        # off but never see the events come back. Overrides and
-        # REVERB_CONTINUATION statuses are untouched.
-        for event in events:
-            if event.get('override'):
-                continue
-            if event.get('method') == 'spectral':
-                continue  # snap-mask and advanced filter handle spectral events
-            if event.get('status') == 'FILTERED':
-                event['status'] = 'KEPT'
-        return events
 
     for event in events:
         # Skip overridden events — user decision is authoritative
@@ -438,59 +419,36 @@ def _apply_reverb_continuation_filter(
     return events
 
 
-def _apply_snap_mask(
+def _apply_show_only_snap_events(
     events: List[Dict],
     config: Dict,
     stem_type: str,
 ) -> List[Dict]:
     """
-    Apply the snap_delta mask to spectral events (2026-06-09;
-    toggle-gated 2026-06-10; idempotent re-evaluation 2026-06-10).
+    Drop spectral events whose snap_delta is zero (2026-06-10).
 
-    Mirrors the client-side filter in
-    webui/static/js/threshold-tuning.js::applySnapDeltaMask and the
-    full-pipeline filter in
-    processing_shell._build_events_configured so the saved MIDI is
-    consistent with what the tuning panel shows.
+    Replaces the 2026-06-09 snap-mask + 2026-06-10 advanced-filter
+    chain with a single, easy-to-reason-about toggle: "Show Only Snap
+    Events" — when on, only events with snap_delta > 0 survive. When
+    off (default), the filter is a no-op.
 
-    Gate: respects ``config[stem_type].snap_mask_enabled``. OFF
-    (explicit false) → reset any prior snap-mask FILTERED statuses
-    on spectral events back to KEPT, then return. Missing (legacy
-    projects pre-date the toggle) → default ON for back-compat.
-    Once a project has been saved with the explicit bool recorded,
-    the user's choice sticks across subsequent rebuilds.
+    Rationale: snap_delta > 0 means the broadband attack signal
+    fired in the snap bands (see spectral_transient_core snap_delta
+    definition). snap_delta == 0 typically indicates a wire-tail /
+    decay event where the per-band-dominant ring has outlasted the
+    broadband attack — these were the events the old snap-mask was
+    catching. With the ratio slider below handling the "extreme
+    dominance" FP case (events like band_max_ratio 459), this
+    filter is sufficient for the user's typical tom tuning.
 
-    Threshold semantics (when the gate is ON): reads
-    ``config[stem_type].snap_mask_threshold``:
-      - INCLUSIVE (≤)
-      - default 0.001 (a tiny epsilon) cleans up zero-snap tail events
-      - 0 keeps all zero-snap events
-      - 0.05–0.1 keeps only the strongest attacks
-      - negative disables the mask (independent of the toggle)
+    Gate: respects ``config[stem_type].show_only_snap_events``.
+    Missing key (legacy projects) → False (no-op). Explicit True
+    applies the filter. The filter is idempotent across rebuilds
+    (it doesn't add a status that another pass would then need to
+    undo).
 
     Only events with a non-None ``snap_delta`` are evaluated. Energy
-    events that don't carry snap_delta (the majority of
-    ``events_configured`` in 'energy' or 'both' mode) are untouched.
-
-    IDEMPOTENT RE-EVALUATION (Bug-2 fix, 2026-06-10): the previous
-    implementation only acted on already-KEPT events, so once an
-    event was FILTERED by the snap mask it was stuck FILTERED across
-    subsequent rebuilds even if the user loosened the threshold.
-    This version:
-      1. Resets the snap-mask-derived FILTERED status on every
-         spectral event back to KEPT (it does NOT touch overrides,
-         REVERB_CONTINUATION statuses from another pass, or
-         energy-event statuses — those are authoritative).
-      2. Then re-applies the new mask: any spectral event whose
-         snap_delta ≤ threshold becomes FILTERED again.
-    The result is that toggling the threshold or the mask is fully
-    reversible: events that were masked at 0.5 but have
-    snap_delta=0.1 recover when the user dials the threshold down
-    to 0.001.
-
-    The filter respects the ``override`` flag — events the user has
-    manually kept via the WebUI's per-event override system retain
-    KEPT status regardless of the mask.
+    events (no snap_delta) and overridden events are untouched.
 
     Args:
         events: Event dicts with status field. Mutated in place.
@@ -498,93 +456,55 @@ def _apply_snap_mask(
         stem_type: Stem name (e.g. 'toms', 'snare').
 
     Returns:
-        Same event list with snap-masked events set to FILTERED.
+        Same event list with snap-zero events set to FILTERED.
     """
     stem_cfg = config.get(stem_type, {})
-    enabled = stem_cfg.get('snap_mask_enabled', None)
-    threshold = stem_cfg.get('snap_mask_threshold', None)
-
-    # Back-compat: missing bool defaults to ON (legacy behavior).
-    if enabled is None:
-        enabled = True
-
-    # Pass A: reset prior snap-mask status on every spectral event.
-    # A spectral event is one with a snap_delta field. We reset
-    # FILTERED → KEPT for these so the next pass re-evaluates from
-    # a clean slate. Events without snap_delta (energy events) and
-    # overridden events are left alone — they came from other
-    # passes and we don't want to second-guess them.
-    for event in events:
-        if event.get('override'):
-            continue
-        if 'snap_delta' not in event:
-            continue
-        # Only undo a FILTERED status — don't touch REVERB_CONTINUATION
-        # or KEPT.
-        if event.get('status') == 'FILTERED':
-            event['status'] = 'KEPT'
-
+    enabled = stem_cfg.get('show_only_snap_events', False)
     if not enabled:
         return events
-    if threshold is None or threshold < 0:
-        # No mask configured, or explicitly disabled via the
-        # threshold. After the reset above, spectral events are
-        # correctly KEPT; energy events and overrides are
-        # untouched. The Pass A reset is the value-add here even
-        # when the mask is "off" — the user gets back any events
-        # that were masked in a prior stricter Save.
-        return events
 
-    # Pass B: apply the new mask. Only spectral events with
-    # snap_delta ≤ threshold are FILTERED. Energy events
-    # (no snap_delta) are skipped — they were never subject to
-    # the snap mask.
     for event in events:
         if event.get('override'):
             continue
-        sd = event.get('snap_delta')
-        if sd is None:
-            # No snap_delta field → energy event, not applicable.
+        if event.get('method') != 'spectral':
             continue
-        if sd <= threshold:
+        sd = event.get('snap_delta')
+        if sd is None or sd <= 0:
             event['status'] = 'FILTERED'
 
     return events
 
 
-def _apply_advanced_filter(
+def _apply_band_max_ratio_max(
     events: List[Dict],
     config: Dict,
     stem_type: str,
 ) -> List[Dict]:
     """
-    Apply the advanced spectral filter (2026-06-10, opt-in).
+    Drop spectral events whose band_max_ratio exceeds a user-set
+    ceiling (2026-06-10).
 
-    Two-stage filter for spectral events (energy events pass
-    through unchanged). The advanced filter is OFF by default —
-    the user opts in via ``toms_advanced_filter_enabled``. Stage 1
-    (rescue floor) and Stage 2 (snap/ring ratio filter) both run
-    in order when the master toggle is on.
+    Replaces the old "Filter High-Strength FPs" stage 3 of the
+    advanced filter. The previous implementation was lossy — it
+    operated on the clamp-to-1.0 `strength` field, so a band_max_ratio
+    of 11 and a band_max_ratio of 459 were indistinguishable. This
+    filter reads the RAW band_max_ratio, so the user can finally
+    tell those events apart and keep the real one (18.99) while
+    dropping the FP (459.12).
 
-    Stage 1 — snap_delta rescue floor. Spectral events with
-    ``snap_delta > config[toms].advanced_min_snap_delta`` are
-    restored to KEPT regardless of the snap-mask. This rescues
-    real hits that the basic mask dropped. Only applies to
-    spectral events (energy events have no snap_delta).
+    Gate: respects ``config[stem_type].band_max_ratio_max``.
+    Missing key (legacy projects) → 0 (no-op, disabled). The slider
+    in the WebUI sidecar labels 0 as "Off" / "Disabled" so the user
+    can confirm the filter is inactive. Any positive value is the
+    ceiling — events with band_max_ratio strictly greater than the
+    threshold are FILTERED. The slider max is the dataset's actual
+    max ratio (computed at UI build time) so the user can express
+    the full range without losing precision.
 
-    Stage 2 — snap/ring ratio filter. Spectral events whose
-    ``snap_to_ring_ratio`` is on the wrong side of
-    ``config[toms].advanced_snap_ring_threshold`` (per
-    ``advanced_snap_ring_direction``: 'under' or 'over') are
-    marked FILTERED. The ratio is snap_delta / band_delta — a
-    low value means the broadband attack is much weaker than
-    the sustained ring. The user's calibration event
-    (ring=665, snap=0.01 → ratio 0.000015) gets filtered when
-    the threshold is 0.001 and direction is 'under'.
-
-    Both stages respect the ``override`` flag — events the user
-    has manually kept via the WebUI's per-event override system
-    retain KEPT status regardless of the advanced filter.
+    Only spectral events with a non-None ``band_max_ratio`` are
+    evaluated. Energy events and overridden events are untouched.
+    Other event statuses (REVERB_CONTINUATION, etc.) are preserved
+    when not in the "above ceiling" bucket.
 
     Args:
         events: Event dicts with status field. Mutated in place.
@@ -592,63 +512,30 @@ def _apply_advanced_filter(
         stem_type: Stem name (e.g. 'toms', 'snare').
 
     Returns:
-        Same event list with advanced-filtered events set to
-        FILTERED and snap-rescued events set to KEPT.
+        Same event list with above-ceiling events set to FILTERED.
     """
     stem_cfg = config.get(stem_type, {})
-    enabled = stem_cfg.get('advanced_filter_enabled', None)
-    if enabled is None:
-        # Back-compat: missing bool = OFF (the new default).
-        enabled = False
-    if not enabled:
+    threshold = stem_cfg.get('band_max_ratio_max', None)
+    if threshold is None:
+        return events
+    try:
+        threshold = float(threshold)
+    except (TypeError, ValueError):
+        return events
+    # 0 or negative = disabled. The UI slider labels this "Off" so
+    # the user always knows the filter is inactive.
+    if threshold <= 0:
         return events
 
-    floor = stem_cfg.get('advanced_min_snap_delta', None)
-    ratio_threshold = stem_cfg.get('advanced_snap_ring_threshold', None)
-    direction = stem_cfg.get('advanced_snap_ring_direction', 'under')
-
-    # Validate direction — defensive. Unknown values fall back
-    # to 'under' so we never silently do nothing.
-    if direction not in ('under', 'over'):
-        direction = 'under'
-
     for event in events:
-        # Respect manual per-event overrides.
         if event.get('override'):
             continue
-        # Only spectral events are subject to this filter. Energy
-        # events have no snap_delta / band_delta / ratios.
         if event.get('method') != 'spectral':
             continue
-
-        sd = event.get('snap_delta')
-        if sd is None:
-            continue
-
-        # Stage 1: rescue floor. Strictly-greater-than so the
-        # floor value itself doesn't qualify (matches the user's
-        # spec: "events with snap delta over X").
-        if floor is not None and sd > floor:
-            event['status'] = 'KEPT'
-            continue
-
-        # Stage 2: snap/ring ratio filter. Compute the ratio
-        # defensively in case the field wasn't populated by an
-        # older analysis.json — fall back to a manual division.
-        ratio = event.get('snap_to_ring_ratio')
+        ratio = event.get('band_max_ratio')
         if ratio is None:
-            band_delta = event.get('band_delta')
-            if band_delta is None or band_delta == 0:
-                # Can't compute the ratio — skip this event for
-                # Stage 2. Stage 1 still applies.
-                continue
-            ratio = sd / band_delta
-
-        if ratio_threshold is None:
             continue
-        if direction == 'under' and ratio < ratio_threshold:
-            event['status'] = 'FILTERED'
-        elif direction == 'over' and ratio > ratio_threshold:
+        if ratio > threshold:
             event['status'] = 'FILTERED'
 
     return events
@@ -900,16 +787,15 @@ def rebuild_events_from_analysis(
             # Apply reverb continuation filter (post-pass, uses stored metadata)
             _apply_reverb_continuation_filter(events, config)
 
-            # Apply the snap_delta mask (2026-06-09). Runs after all
-            # other passes so masked events show as FILTERED in
-            # events_configured and are excluded from the saved MIDI.
-            _apply_snap_mask(events, config, stem_type)
-
-            # Apply the advanced spectral filter (2026-06-10, opt-in).
-            # Runs AFTER the snap-mask so the floor can rescue events
-            # that the basic mask just dropped. The advanced filter is
-            # off by default — the user opts in via the tuning panel.
-            _apply_advanced_filter(events, config, stem_type)
+            # 2026-06-10: the legacy snap-mask + advanced-filter chain
+            # is replaced by the two simple toggles below. Both are
+            # idempotent and run last so the user can flip either one
+            # without re-running the detector. The order doesn't
+            # matter — they act on disjoint attributes (snap_delta vs
+            # band_max_ratio) — but snap-first matches the WebUI order
+            # for predictability.
+            _apply_show_only_snap_events(events, config, stem_type)
+            _apply_band_max_ratio_max(events, config, stem_type)
         else:
             # Thresholds unchanged — trust stored statuses from full pipeline
             events = list(configured_events)
@@ -917,17 +803,23 @@ def rebuild_events_from_analysis(
             # Still apply manual overrides (user may have toggled individual events)
             _apply_overrides(events, stem_overrides)
 
-            # Apply the snap_delta mask (2026-06-09). Even when other
-            # thresholds are unchanged, the user may have moved the
-            # snap_mask slider in the tuning panel — re-evaluate on
-            # every rebuild so the saved MIDI matches the slider.
-            _apply_snap_mask(events, config, stem_type)
+            # 2026-06-10: same two new filters as above — re-evaluate
+            # them on every rebuild so toggles / slider changes the
+            # user makes in the WebUI sidecar land in the saved MIDI
+            # even when no other threshold changed.
+            _apply_show_only_snap_events(events, config, stem_type)
+            _apply_band_max_ratio_max(events, config, stem_type)
 
-            # Apply the advanced spectral filter (2026-06-10, opt-in).
-            # Same as above: runs after the snap-mask so the floor can
-            # rescue events, before the events flow into MIDI
-            # generation.
-            _apply_advanced_filter(events, config, stem_type)
+        # Onset events visibility gate (2026-06-10 round 2). When
+        # the user has turned the toms onset_events toggle OFF,
+        # energy-detected events are removed from the
+        # events_configured list entirely. Spectral events are
+        # unaffected. This is the "I want a spectral-only toms
+        # view" path. The dropped events are NOT in events_sensitive
+        # either — they're gone from the saved MIDI and the view.
+        # The user must re-run full detection to restore them.
+        if spectral_config.get('onset_events_enabled') is False:
+            events = [e for e in events if e.get('method') == 'spectral']
 
         # Extract kept events for MIDI generation
         kept_events = [e for e in events if e.get('status') == 'KEPT']
@@ -1043,45 +935,40 @@ def _build_logic_block(
             if cluster_note_map:
                 logic['cluster_note_map'] = cluster_note_map
 
-            # Persist the snap-mask toggle and threshold for toms so
-            # the WebUI's tuning panel can read the user's last
-            # choice back from the sidecar (logic block is the
-            # frontend's source of truth for "configured value").
-            # The toggle defaults to None (legacy) — preserved as
-            # None so the back-compat path stays intact; explicit
-            # true/false from the user gets persisted verbatim.
-            # 2026-06-10.
+            # Persist the user's tuning panel choices back to the
+            # sidecar (logic block). The WebUI's tuning panel reads
+            # the user's last choice from the logic block, so anything
+            # that can be set in the sidecar must be persisted here
+            # for the next page load to see it.
+            #
+            # 2026-06-10: the snap-mask + advanced-filter chain was
+            # replaced by `show_only_snap_events` and
+            # `band_max_ratio_max`. We persist the new keys (so the
+            # user's slider position + toggle state survive a
+            # rebuild) and also continue to persist the legacy keys
+            # for any older project that still has them set — those
+            # legacy keys are simply ignored by the new filter chain.
             if stem_type == 'toms':
-                enabled = stem_config.get('snap_mask_enabled', None)
-                threshold = stem_config.get('snap_mask_threshold', None)
-                # Only set the logic field if the user has an
-                # explicit value (None means "legacy — apply the
-                # back-compat default of ON at filter time").
-                if enabled is not None:
-                    logic['snap_mask_enabled'] = bool(enabled)
-                if threshold is not None:
-                    logic['snap_mask_threshold'] = float(threshold)
-                # Persist the master onset-filter gate (2026-06-10)
-                # for the same reason: the WebUI's tuning panel
-                # reads the user's last choice back from logic.
+                # Onset events visibility gate (2026-06-10 round 2).
                 # Default is True (the schema default); missing key
                 # means "use the schema default" so we only persist
                 # when the user has set it explicitly.
-                master = stem_config.get('onset_filter_enabled', None)
+                master = stem_config.get('onset_events_enabled', None)
                 if master is not None:
-                    logic['onset_filter_enabled'] = bool(master)
-                # Advanced filter (2026-06-10): same pattern.
-                adv_enabled = stem_config.get('advanced_filter_enabled', None)
-                if adv_enabled is not None:
-                    logic['advanced_filter_enabled'] = bool(adv_enabled)
-                adv_floor = stem_config.get('advanced_min_snap_delta', None)
-                if adv_floor is not None:
-                    logic['advanced_min_snap_delta'] = float(adv_floor)
-                adv_threshold = stem_config.get('advanced_snap_ring_threshold', None)
-                if adv_threshold is not None:
-                    logic['advanced_snap_ring_threshold'] = float(adv_threshold)
-                adv_direction = stem_config.get('advanced_snap_ring_direction', None)
-                if adv_direction is not None:
-                    logic['advanced_snap_ring_direction'] = str(adv_direction)
+                    logic['onset_events_enabled'] = bool(master)
+                # New spectrogram filters (2026-06-10).
+                show_only_snap = stem_config.get('show_only_snap_events', None)
+                if show_only_snap is not None:
+                    logic['show_only_snap_events'] = bool(show_only_snap)
+                # Persist ratio_max even when it's 0 (the "Off"
+                # sentinel). The slider's value of 0 is a meaningful
+                # user choice — "I checked, the filter is off" — and
+                # must survive a rebuild. The fall-through `is not
+                # None` check below would also let 0 through, but we
+                # be explicit.
+                if 'band_max_ratio_max' in stem_config:
+                    logic['band_max_ratio_max'] = float(
+                        stem_config['band_max_ratio_max']
+                    )
 
     return logic

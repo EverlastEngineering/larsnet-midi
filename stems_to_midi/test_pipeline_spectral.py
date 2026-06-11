@@ -157,18 +157,24 @@ class TestRunSpectralDetection:
 
         assert isinstance(result, list)
         assert len(result) > 0, "spectral detector should find the 4 hits"
-        required_fields = {'time', 'strength', 'band_powers',
+        required_fields = {'time', 'band_powers',
                            'band_max_idx', 'band_max_ratio', 'method'}
         for event in result:
             assert required_fields.issubset(event.keys()), (
                 f"missing fields: {required_fields - event.keys()}"
             )
             assert event['method'] == 'spectral'
-            assert 0.0 <= event['strength'] <= 1.0
+            # 2026-06-10: `strength` was removed (it was the lossy
+            # clamp-to-1.0 of band_max_ratio/10). band_max_ratio
+            # itself is the raw top/second-highest band ratio —
+            # always >= 1 by construction. The back-compat alias
+            # `band_max_ratio_10` is also emitted (= band_max_ratio
+            # / 10) but is intentionally NOT in required_fields
+            # since no current filter consumes it.
+            assert event['band_max_ratio'] >= 1.0
             assert isinstance(event['band_powers'], list)
             assert len(event['band_powers']) == 5
             assert 0 <= event['band_max_idx'] <= 4
-            assert event['band_max_ratio'] >= 1.0
 
     def test_band_powers_and_band_max_consistent(self, synthetic_toms_audio):
         """For each event, band_max_idx must equal argmax(band_powers)."""
@@ -304,7 +310,12 @@ class TestSaveAnalysisSidecarWritesSpectral:
                 'spectral_onset_data': [
                     {
                         'time': 0.502,
-                        'strength': 0.95,
+                        # 2026-06-10: `strength` was the lossy
+                        # clamp-to-1.0 field. The detector now
+                        # emits the raw band_max_ratio and a
+                        # back-compat `band_max_ratio_10` alias.
+                        # Test fixtures follow the same shape.
+                        'band_max_ratio_10': 0.95,
                         'band_powers': [1.0e+00, 5.0e-04, 1.0e-04, 2.0e-05, 1.0e-05],
                         'band_max_idx': 0,
                         'band_max_ratio': 2000.0,
@@ -429,6 +440,12 @@ class TestEndToEndPipelineEmitsSpectralEvents:
         # Each spectral event has the required shape.
         for event in stem_data['events_spectral']:
             assert 'time' in event
-            assert 'strength' in event
+            # 2026-06-10: `strength` was removed in favor of
+            # the raw `band_max_ratio` (and a back-compat
+            # `band_max_ratio_10` alias). No current filter
+            # consumes the alias; the test only checks that
+            # the raw ratio is present so the new sidecar
+            # ratio slider has data to read.
+            assert 'band_max_ratio' in event
             assert 'method' in event
             assert event['method'] == 'spectral'

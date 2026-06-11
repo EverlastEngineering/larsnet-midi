@@ -65,44 +65,48 @@ const STEM_SLIDER_CONFIGS = {
         { key: 'expected_clusters', label: '🥁 Sound Types', min: 1, max: 3, step: 1, fallback: 2, unit: '', classification: true }
     ],
     toms: [
-        // Master onset-filter gate (2026-06-10). When OFF, the
-        // Geomean / Sustain / Strength filter passes are skipped
-        // and every detected onset is kept regardless of slider
-        // values. Default ON to preserve existing behavior. The
-        // three filter sliders below carry `dependsOn:
-        // 'onset_filter_enabled'` so the UI shows them grayed
-        // (visually disabled) when the master gate is off — but
+        // Onset events visibility gate (2026-06-10 round 2). When
+        // OFF, energy-detected events are removed from
+        // events_configured entirely (spectral events unchanged).
+        // The dependent filter sliders below carry
+        // `dependsOn: 'onset_events_enabled'` so the UI shows them
+        // grayed (visually disabled) when the gate is off — but
         // they still exist in the DOM for the buildConfigUpdates
-        // path. The snap mask is independent and applies even
-        // when the master gate is off.
-        { key: 'onset_filter_enabled', label: '🚦 Onset Filter (Toms)', type: 'toggle', fallback: true, unit: '',
-          help: 'When on, the Geomean / Sustain / Strength filters apply. When off, every detected onset is kept (use for A/B comparison).' },
-        { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 500, step: 1, fallback: 80, unit: '', dependsOn: 'onset_filter_enabled' },
-        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '', dependsOn: 'onset_filter_enabled' },
-        { key: 'expected_clusters', label: '🥁 Sound Types', min: 1, max: 4, step: 1, fallback: 3, unit: '', classification: true, dependsOn: 'onset_filter_enabled' },
-        // Snap-delta mask (2026-06-09; toggle+conditional slider 2026-06-10).
-        // The mask is OFF by default and the slider is only visible when
-        // the toggle is on — see buildSlidersForStem. The mask is
-        // server-side-applied in processing_shell._build_events_configured
-        // and rebuild_core._apply_snap_mask, so saved MIDI matches the
-        // tuning panel. Both the toggle and the threshold need
-        // `_buildConfigOverrides` / `buildConfigUpdates` to forward them
-        // on Save (so the YAML midiconfig.yaml records the user's choice).
-        { key: 'snap_mask_enabled', label: '🎯 Snap Mask (Toms)', type: 'toggle', fallback: false, unit: '',
-          help: 'When on, spectral events with snap_delta below the threshold are filtered out' },
-        { key: 'snap_mask_threshold', label: 'Snap Δ Mask Threshold (Toms)', min: 0, max: 0.5, step: 0.01, fallback: 0.001, unit: '', dependsOn: 'snap_mask_enabled' },
-        // Advanced spectral filter (2026-06-10, opt-in). Two-stage
-        // filter applied AFTER the basic snap-mask. The floor
-        // rescues events the basic mask dropped (snap_delta > X
-        // are always kept); the ratio filter drops events whose
-        // snap/ring ratio is on the wrong side of the threshold
-        // (per the direction setting). Both stages only apply to
-        // spectral events. Off by default.
-        { key: 'advanced_filter_enabled', label: '🔬 Advanced Filter (Toms)', type: 'toggle', fallback: false, unit: '',
-          help: 'When on: events with snap_delta > floor are always kept; events with snap/ring ratio on the wrong side of the threshold are filtered' },
-        { key: 'advanced_min_snap_delta', label: 'Snap Δ Floor (Toms)', min: 0, max: 1.0, step: 0.01, fallback: 0.01, unit: '', dependsOn: 'advanced_filter_enabled' },
-        { key: 'advanced_snap_ring_threshold', label: 'Snap/Ring Threshold (Toms)', min: 0, max: 1.0, step: 0.0001, fallback: 0.001, unit: '', dependsOn: 'advanced_filter_enabled' },
-        { key: 'advanced_snap_ring_direction', label: 'Snap/Ring Direction (under|over)', type: 'text', fallback: 'under', unit: '', dependsOn: 'advanced_filter_enabled' }
+        // path. The two new spectrogram filters below are
+        // independent (no dependsOn) because they only act on
+        // spectral events which are unaffected by the gate.
+        { key: 'onset_events_enabled', label: '🚦 Onset Events (Toms)', type: 'toggle', fallback: true, unit: '',
+          help: 'When on, energy-detected onset events are shown. When off, they are removed from the data (spectral events unaffected).' },
+        { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 500, step: 1, fallback: 80, unit: '', dependsOn: 'onset_events_enabled' },
+        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '', dependsOn: 'onset_events_enabled' },
+        { key: 'expected_clusters', label: '🥁 Sound Types', min: 1, max: 4, step: 1, fallback: 3, unit: '', classification: true, dependsOn: 'onset_events_enabled' },
+
+        // Spectrogram filters (2026-06-10, replacement set).
+        // The previous implementation had a snap-mask with a tiny
+        // default threshold (0.001) that silently hid events on
+        // first Save, plus a 3-stage advanced filter that operated
+        // on a clamp-to-1.0 strength field and therefore couldn't
+        // distinguish band_max_ratio 18.99 from 459.12. The user
+        // asked for "simple" — these two controls express the
+        // intent directly on the RAW spectral data:
+        //
+        //   1. Show Only Snap Events — drop spectral events with
+        //      snap_delta == 0 (wire-tail / decay kill switch).
+        //   2. Top/2nd Ratio Greater Than — drop spectral events
+        //      whose band_max_ratio exceeds the slider value. The
+        //      slider is 0 = Off / Disabled, and the max is the
+        //      dataset's actual max ratio so the user can express
+        //      the full range without losing precision.
+        //
+        // The slider's max and step are computed dynamically at
+        // build time (see buildSlidersForStem — it walks
+        // events_spectral for the active stem and derives the
+        // max from the data). The static `max`/`step` here are
+        // fallbacks for when no events are available.
+        { key: 'show_only_snap_events', label: '🎯 Show Only Snap Events (Toms)', type: 'toggle', fallback: false, unit: '',
+          help: 'When on, spectral events whose snap_delta is zero or null are filtered out. Typical wire-tail / decay kill switch.' },
+        { key: 'band_max_ratio_max', label: 'Filter Events with Top/2nd Ratio Greater Than (Toms)', min: 0, max: 1000, step: 0.1, fallback: 0, unit: '',
+          help: 'Drop spectral events whose band_max_ratio (top band / second-highest band) is greater than this value. 0 = Off / Disabled. The slider max is the dataset\'s actual max ratio so the full range is expressible.' },
     ],
     hihat: [
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 200, step: 0.5, fallback: 8, unit: '' },
@@ -243,6 +247,26 @@ function buildSlidersForStem(stemType) {
     const stemData = waveformAnalysisData?.stems?.[stemType];
     const logic = stemData?.logic || {};
 
+    // Compute the dataset's actual band_max_ratio max (2026-06-10).
+    // The ratio slider in the sidecar exposes the full range so
+    // the user can distinguish band_max_ratio 18.99 from 459.12
+    // (a difference the old clamp-to-1.0 strength field masked).
+    // We walk events_spectral for the active stem and pick the
+    // max observed value; the slider uses that as `max` and
+    // max/1000 as `step` so the user gets full resolution.
+    // Falls back to the slider's static config when no events are
+    // available (first-load state).
+    let dataMaxBandMaxRatio = null;
+    const spectralEventsForMax = stemData?.events_spectral || [];
+    for (const ev of spectralEventsForMax) {
+        const r = ev?.band_max_ratio;
+        if (typeof r === 'number' && Number.isFinite(r) && r >= 1) {
+            if (dataMaxBandMaxRatio == null || r > dataMaxBandMaxRatio) {
+                dataMaxBandMaxRatio = r;
+            }
+        }
+    }
+
     // Get stored values or use defaults
     const stored = tuningSliderValues[stemType] || {};
 
@@ -322,7 +346,7 @@ function buildSlidersForStem(stemType) {
             // Treat null/undefined as 'off' for a fresh project that
             // has no stored toggle value (schema default for
             // snap_mask_enabled is false, so OFF is the safe default).
-            // Exception: for `onset_filter_enabled`, the default is
+            // Exception: for `onset_events_enabled`, the default is
             // true, so missing-bool = ON — that means the filter
             // sliders are ACTIVE by default. We handle that here by
             // using the slider's `fallback` (which is the schema
@@ -357,6 +381,26 @@ function buildSlidersForStem(stemType) {
             ? `<span class="text-gray-600 text-xs ml-1">(configured: ${logicValue})</span>`
             : '';
 
+        // Dynamic range for the band_max_ratio slider (2026-06-10).
+        // The slider's static `max`/`step` (1000 / 0.1) are
+        // fallbacks for the no-data first-load case. When we have
+        // spectral events, we substitute the dataset's actual max
+        // (rounded up to the next "nice" number for a clean
+        // UI) and a step that gives ~1000 increments so the user
+        // can express the full range without losing precision.
+        // 0 remains the "Off / Disabled" sentinel — that special
+        // case is handled in the filter logic, not the range.
+        let sliderMin = slider.min;
+        let sliderMax = slider.max;
+        let sliderStep = slider.step;
+        if (slider.key === 'band_max_ratio_max' && dataMaxBandMaxRatio != null) {
+            sliderMax = niceCeil(dataMaxBandMaxRatio);
+            // 1000 increments across the full range; minimum
+            // step of 0.01 so the user can express very small
+            // values when the dataset max is small.
+            sliderStep = Math.max(0.01, sliderMax / 1000);
+        }
+
         return `
             <div class="${rowClass}" data-slider-key="${slider.key}" data-depends-on="${slider.dependsOn || ''}"${hidden}>
                 <div class="flex items-center justify-between mb-1">
@@ -366,9 +410,9 @@ function buildSlidersForStem(stemType) {
                 <input type="range"
                        id="tuning-slider-${slider.key}"
                        class="tuning-range w-full"
-                       min="${slider.min}"
-                       max="${slider.max}"
-                       step="${slider.step}"
+                       min="${sliderMin}"
+                       max="${sliderMax}"
+                       step="${sliderStep}"
                        value="${currentVal}"${disabledAttr}
                        data-key="${slider.key}"
                        data-unit="${slider.unit || ''}"
@@ -461,9 +505,43 @@ function buildSlidersForStem(stemType) {
  */
 function formatSliderValue(val) {
     if (val == null) return '—';
+    // 2026-06-10: the band_max_ratio_max slider uses 0 as the
+    // "Off / Disabled" sentinel (the filter is a no-op at 0).
+    // Show the user an explicit "Off" label at that position
+    // so they can confirm the filter is inactive — important
+    // because the slider's visible value alone doesn't reveal
+    // whether the filter is on or off.
+    if (val === 0) return 'Off';
     if (Number.isInteger(val) || val >= 10) return Math.round(val).toString();
     if (val >= 1) return val.toFixed(1);
     return val.toFixed(2);
+}
+
+/**
+ * Round a positive number UP to the next "nice" round number for
+ * a UI slider max. E.g. 459.12 → 500, 18.99 → 20, 1.05 → 2.
+ * Used to compute the band_max_ratio slider's max from the
+ * dataset's actual max ratio (2026-06-10). 1.0 itself is the
+ * floor (band_max_ratio is always >= 1 by construction — see
+ * spectral_transient_core._band_max_from_powers).
+ */
+function niceCeil(v) {
+    if (!Number.isFinite(v) || v <= 0) return 1;
+    if (v <= 1) return 1;
+    if (v <= 2) return 2;
+    if (v <= 5) return 5;
+    if (v <= 10) return 10;
+    if (v <= 20) return 20;
+    if (v <= 50) return 50;
+    if (v <= 100) return 100;
+    if (v <= 200) return 200;
+    if (v <= 500) return 500;
+    if (v <= 1000) return 1000;
+    if (v <= 2000) return 2000;
+    if (v <= 5000) return 5000;
+    if (v <= 10000) return 10000;
+    // For very large ratios, round to the next 10k.
+    return Math.ceil(v / 10000) * 10000;
 }
 
 /**
@@ -489,13 +567,17 @@ function _buildConfigOverrides(stemType, stored) {
     if (!stored) return overrides;
 
     // Per-stem keys (each stem has its own section in the YAML).
+    // Note: the 2026-06-10 replacement set removed snap_mask_* and
+    // advanced_filter_* in favor of `show_only_snap_events` and
+    // `band_max_ratio_max` (which read the raw band_max_ratio
+    // instead of the lossy strength clamp). The keys below are
+    // the only ones that propagate to the YAML midiconfig.yaml on
+    // Save & Reconvert.
     for (const key of [
         'geomean_threshold', 'min_sustain_ms', 'min_strength_threshold',
         'open_geomean_min', 'open_sustain_ms', 'expected_clusters',
-        'cluster_feature', 'snap_mask_enabled', 'snap_mask_threshold',
-        'onset_filter_enabled',
-        'advanced_filter_enabled', 'advanced_min_snap_delta',
-        'advanced_snap_ring_threshold', 'advanced_snap_ring_direction',
+        'cluster_feature', 'onset_events_enabled',
+        'show_only_snap_events', 'band_max_ratio_max',
     ]) {
         if (stored[key] != null) {
             overrides[`${stemType}.${key}`] = stored[key];
@@ -598,14 +680,14 @@ function onToggleInput(e) {
     //   - snap_mask_enabled: toggle hides/shows the threshold
     //     slider row entirely (its value is meaningless without
     //     the mask enabled).
-    //   - onset_filter_enabled: toggle disables+grays the filter
+    //   - onset_events_enabled: toggle disables+grays the filter
     //     sliders but keeps them visible — the user can see what
     //     the current values are, just not adjust them. This is
     //     the "I can read the slider but it's grayed" UX.
     // The two cases are distinguished by which key the row
     // depends on (the row's data-depends-on attribute).
     document.querySelectorAll(`[data-depends-on="${key}"]`).forEach(row => {
-        if (key === 'onset_filter_enabled') {
+        if (key === 'onset_events_enabled') {
             // Disable the input and gray the row.
             const input = row.querySelector('input[type=range]');
             if (input) input.disabled = !enabled;
@@ -1279,27 +1361,57 @@ function applyTuningFilter() {
     const filterMode = STEM_FILTER_MODES[stemType] || 'geomean_only';
 
     // Master onset-filter gate (2026-06-10). When OFF (explicit
-    // false), skip the energy-derived filter passes (geomean /
-    // sustain / strength) entirely — every event is treated as
-    // KEPT before the snap-mask pass runs. Missing bool = ON
-    // (back-compat) — preserves the old behavior for projects
-    // that pre-date the toggle.
+    // Onset events visibility gate (2026-06-10 round 2). When
+    // the user has turned the toms onset_events toggle OFF, the
+    // energy-detected events are DROPPED from the tuning view
+    // entirely. Spectral events are unaffected. The
+    // geomean/sustain/strength filter and the reverb continuation
+    // filter still run on the remaining (spectral + remaining
+    // energy) events before the drop, so the user sees a
+    // consistent picture: filter rules applied → drop energy →
+    // display. The snap-mask pass is independent and still runs.
     //
-    // The reverb continuation filter is part of the "onset
-    // filter" group (it's the post-pass on the energy-detector
-    // output) so it also gets bypassed when the master is off.
-    // The snap-mask pass is independent — it still runs.
-    const onsetFilterEnabled = params.onset_filter_enabled !== false;
+    // The drop here is local to the tuning view (the displayed
+    // waveform). The sidecar-level drop (which removes them from
+    // events_configured on Save) happens on the server in
+    // rebuild_events_from_analysis. So the user can preview the
+    // spectral-only view by toggling here without committing the
+    // drop to the saved MIDI.
+    const onsetEventsEnabled = params.onset_events_enabled !== false;
 
-    if (onsetFilterEnabled) {
-        // Pass 1: Spectral filter (geomean + sustain + strength)
-        applySpectralFilter(tuningBaseEvents, params, filterMode);
+    // Run the energy-derived filters (Pass 1 and Pass 2) so
+    // their statuses are consistent with the saved sidecar.
+    // Pass 1: Spectral filter (geomean + sustain + strength)
+    applySpectralFilter(tuningBaseEvents, params, filterMode);
 
-        // Pass 2: Reverb continuation filter
-        const attackThreshold = params.reverb_continuation_attack_threshold;
-        if (attackThreshold != null) {
-            applyReverbContinuationFilter(tuningBaseEvents, attackThreshold);
+    // Pass 2: Reverb continuation filter
+    const attackThreshold = params.reverb_continuation_attack_threshold;
+    if (attackThreshold != null) {
+        applyReverbContinuationFilter(tuningBaseEvents, attackThreshold);
+    }
+
+    // If the onset events gate is off, drop energy events from
+    // the tuning view (in-place so subsequent passes operate on
+    // the spectral-only set). This is purely a display drop —
+    // the sidecar is unchanged until the user Saves with the
+    // toggle off. After this filter, downstream passes (snap
+    // mask, advanced filter) only see spectral events.
+    if (!onsetEventsEnabled) {
+        // Mutate in place: replace contents of tuningBaseEvents
+        // with the spectral-only subset. We use a manual
+        // splice because Array.prototype.filter creates a new
+        // array and the rest of the function expects the same
+        // reference.
+        let writeIdx = 0;
+        for (let readIdx = 0; readIdx < tuningBaseEvents.length; readIdx++) {
+            if (tuningBaseEvents[readIdx].method === 'spectral') {
+                if (writeIdx !== readIdx) {
+                    tuningBaseEvents[writeIdx] = tuningBaseEvents[readIdx];
+                }
+                writeIdx++;
+            }
         }
+        tuningBaseEvents.length = writeIdx;
     }
 
     // Pass 3: Final min_sustain filter for hihat (after reverb filtering)
@@ -1309,37 +1421,29 @@ function applyTuningFilter() {
         applyMinSustainFilter(tuningBaseEvents, minSustainMs);
     }
 
-    // Pass 4: Snap-delta mask for toms (2026-06-09; toggle-gated 2026-06-10).
-    // Only runs when the user has explicitly enabled the snap mask via
-    // the toggle in the tuning panel. When the toggle is off, the
-    // server-side `events_configured` statuses are shown as-is — so a
-    // user who wants to inspect a previously-masked event can flip the
-    // toggle off client-side and see it again (the server-side sidecar
-    // is unchanged until they Save with the toggle on again).
-    //
-    // Backward-compat (2026-06-10): if the project has no recorded
-    // value for `snap_mask_enabled` (older analysis.json that pre-dates
-    // the toggle), treat it as ENABLED. This preserves the old behavior
-    // for projects that were tuned under the previous default. Projects
-    // saved after this change will have the explicit bool recorded and
-    // follow the new "off-by-default" semantics.
-    const snapMaskEnabled = params.snap_mask_enabled !== false;
-    const snapMaskThreshold = params.snap_mask_threshold;
-    if (snapMaskEnabled && snapMaskThreshold != null && snapMaskThreshold >= 0 && stemType === 'toms') {
-        applySnapDeltaMask(tuningBaseEvents, snapMaskThreshold);
+    // Pass 4: "Show Only Snap Events" toggle (2026-06-10, opt-in).
+    // Replaces the 2026-06-09 snap-mask chain. When on, drop any
+    // spectral event whose snap_delta is zero or null — the
+    // classic wire-tail / decay signature. Idempotent: turning
+    // it off restores any previously-filtered snap-zero events
+    // (the old snap-mask was effectively a one-way ratchet).
+    if (params.show_only_snap_events === true && stemType === 'toms') {
+        applyShowOnlySnapEvents(tuningBaseEvents);
     }
 
-    // Pass 5: Advanced spectral filter (2026-06-10, opt-in). Runs
-    // AFTER the basic snap-mask so the rescue floor can recover
-    // events the mask just dropped. Off by default — opt in via
-    // the tuning panel toggle.
-    if (params.advanced_filter_enabled === true && stemType === 'toms') {
-        applyAdvancedFilter(
-            tuningBaseEvents,
-            params.advanced_min_snap_delta,
-            params.advanced_snap_ring_threshold,
-            params.advanced_snap_ring_direction || 'under',
-        );
+    // Pass 5: "Filter Events with Top/2nd Ratio Greater Than"
+    // ceiling (2026-06-10, opt-in). Replaces the lossy
+    // `advanced_filter_high_strength` Stage 3 (which operated on
+    // the clamp-to-1.0 strength field). When the slider is > 0,
+    // drop any spectral event whose band_max_ratio exceeds the
+    // threshold. When 0 (the default), the filter is a no-op —
+    // the slider in the sidecar shows "Off" at this position
+    // so the user can confirm it's inactive.
+    if (stemType === 'toms') {
+        const ratioMax = params.band_max_ratio_max;
+        if (ratioMax != null && ratioMax > 0) {
+            applyBandMaxRatioMax(tuningBaseEvents, ratioMax);
+        }
     }
 
     // Re-apply any cached classification data (note colors, types)
@@ -1505,91 +1609,79 @@ function applyMinSustainFilter(events, minSustainMs) {
 }
 
 /**
- * Pass 4: Snap-delta mask for toms (2026-06-09).
+ * Pass 4: "Show Only Snap Events" filter (2026-06-10).
  *
- * Mark any KEPT event as FILTERED if its snap_delta is ≤ the
- * threshold. snap_delta is the per-frame minimum per-bin-mean linear
- * power across the snap_bands (see spectral_transient_core.py). At the
- * event's peak frame, this is the diagnostic value the WebUI tooltip
- * shows as "Snap Δ (min of snap_bands)".
+ * Mark any KEPT spectral event as FILTERED if its snap_delta is
+ * zero or null. snap_delta is the per-frame minimum per-bin-mean
+ * linear power across the snap_bands (see
+ * spectral_transient_core.py). At the event's peak frame, this is
+ * the diagnostic value the WebUI tooltip shows as
+ * "Snap Δ (min of snap_bands)".
  *
- * Mask interpretation (threshold is INCLUSIVE — ≤):
- *   - snap_delta == 0  : the RING signal fired but the SNAP signal
- *                        did not. Typical of wire-tail / decay events
- *                        where the broadband attack component had
- *                        already decayed. Threshold 0 catches all of
- *                        these; the schema default is 0.001 (a tiny
- *                        epsilon to catch floating-point zeros).
- *   - snap_delta >= X : both RING and SNAP signals fired with
- *                        broadband per-bin power >= X. Higher X =
- *                        stricter mask (only the strongest attacks
- *                        pass).
+ * Interpretation:
+ *   - snap_delta == 0 : the RING signal fired but the SNAP signal
+ *                       did not. Typical of wire-tail / decay
+ *                       events where the broadband attack
+ *                       component had already decayed.
+ *   - snap_delta > 0  : both RING and SNAP signals fired with a
+ *                       real broadband percussive attack in the
+ *                       snap bands. The events the user wants to
+ *                       keep.
  *
- * Events without a snap_delta field (non-spectral detection methods)
- * are left untouched — this filter only affects spectral events.
+ * Energy events (no snap_delta) and overridden events are
+ * untouched. Idempotent across rebuilds — turning the toggle off
+ * restores any previously-filtered snap-zero events, unlike the
+ * old snap-mask which was effectively a one-way ratchet.
  *
- * The same mask is applied server-side in
- * ``stems_to_midi.processing_shell._build_events_configured`` so the
- * saved MIDI is consistent with what the tuning panel shows.
+ * Mirrors the server-side pass in
+ * ``rebuild_core._apply_show_only_snap_events`` so the tuning
+ * panel matches the saved MIDI.
  */
-function applySnapDeltaMask(events, threshold) {
+function applyShowOnlySnapEvents(events) {
     for (const event of events) {
+        if (event._overridden) continue;
+        if (event.method !== 'spectral') continue;
         if (event.status !== 'KEPT') continue;
-        if (event.snap_delta == null) continue;
-        if (event.snap_delta <= threshold) {
+        const sd = event.snap_delta;
+        if (sd == null || sd <= 0) {
             event.status = 'FILTERED';
         }
     }
 }
 
 /**
- * Pass 5: Advanced spectral filter (2026-06-10, opt-in).
+ * Pass 5: "Filter Events with Top/2nd Ratio Greater Than"
+ * ceiling (2026-06-10).
  *
- * Two stages. Both stages only act on spectral events (energy
- * events don't have snap_delta / band_delta and pass through
- * unchanged).
+ * Mark any KEPT spectral event as FILTERED if its band_max_ratio
+ * is strictly greater than the threshold. band_max_ratio is the
+ * ratio of the loudest of the 5 frequency bands to the
+ * second-loudest band at the event's peak frame (top / 1e-20 if
+ * all bands are zero). The user identified this as the
+ * "extreme dominance" FP signature — a real tom hit is typically
+ * <20×; their calibration case had FPs at 459×.
  *
- * Stage 1 — snap_delta rescue floor. Spectral events with
- * snap_delta > floor are restored to KEPT regardless of the
- * snap-mask. The "always show" override.
+ * Replaces the lossy Stage 3 of the old advanced filter, which
+ * operated on the clamp-to-1.0 `strength` field and therefore
+ * could not distinguish a band_max_ratio of 11 from 459. This
+ * filter reads the RAW band_max_ratio directly.
  *
- * Stage 2 — snap/ring ratio filter. Spectral events whose
- * snap_to_ring_ratio is on the wrong side of the threshold
- * (per direction) are marked FILTERED. The ratio is
- * snap_delta / band_delta — low values mean the broadband
- * attack is much weaker than the sustained ring (typical
- * wire-tail / decay).
+ * The threshold is 0 (the default) when the slider is at the
+ * "Off" position. The UI labels this as "Off / Disabled" so the
+ * user always knows the filter is inactive.
  *
- * Mirrors the server-side pass in
- * ``rebuild_core._apply_advanced_filter`` so the tuning panel
- * matches the saved MIDI.
+ * Energy events (no band_max_ratio) and overridden events are
+ * untouched. Mirrors the server-side pass in
+ * ``rebuild_core._apply_band_max_ratio_max``.
  */
-function applyAdvancedFilter(events, floor, ratioThreshold, direction) {
+function applyBandMaxRatioMax(events, threshold) {
     for (const event of events) {
         if (event._overridden) continue;
         if (event.method !== 'spectral') continue;
-        if (event.snap_delta == null) continue;
-
-        // Stage 1: rescue floor. Strictly-greater-than so the
-        // floor value itself doesn't qualify.
-        if (floor != null && event.snap_delta > floor) {
-            event.status = 'KEPT';
-            continue;
-        }
-
-        // Stage 2: ratio filter. Compute the ratio defensively
-        // in case the field wasn't populated.
-        let ratio = event.snap_to_ring_ratio;
-        if (ratio == null) {
-            if (event.band_delta == null || event.band_delta === 0) continue;
-            ratio = event.snap_delta / event.band_delta;
-        }
-
-        if (ratioThreshold == null) continue;
-        const dir = direction === 'over' ? 'over' : 'under';
-        if (dir === 'under' && ratio < ratioThreshold) {
-            event.status = 'FILTERED';
-        } else if (dir === 'over' && ratio > ratioThreshold) {
+        if (event.status !== 'KEPT') continue;
+        const ratio = event.band_max_ratio;
+        if (ratio == null) continue;
+        if (ratio > threshold) {
             event.status = 'FILTERED';
         }
     }

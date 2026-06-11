@@ -555,11 +555,28 @@ function drawEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer
             : getEventColor(event, spectralOverlayActive);
 
         // Bar height from velocity (0-127)
-        // When velocity is missing (sensitive/tuning events), estimate from strength
-        // using the same formula as Python's estimate_velocity(strength, min_vel=40, max_vel=127)
+        // When velocity is missing (sensitive/tuning events),
+        // estimate it from the available quality signal:
+        //   - energy events:   event.strength is the energy
+        //                       detector's [0, 1] normalized
+        //                       onset strength (already 0-1).
+        //   - spectral events: the lossy clamp-to-1.0
+        //                       `strength` field is gone (replaced
+        //                       by raw band_max_ratio). Use
+        //                       min(1, band_max_ratio / 10) as a
+        //                       soft saturation — the same
+        //                       intent as the old formula but
+        //                       without collapsing everything
+        //                       above 10× to the same value.
+        //   - missing both:    fall back to 64 (the typical
+        //                       mid-velocity default).
         let velocity;
         if (event.velocity != null) {
             velocity = event.velocity;
+        } else if (event.method === 'spectral' && event.band_max_ratio != null) {
+            const v = Math.min(1, Math.max(0, event.band_max_ratio / 10));
+            velocity = Math.round(40 + v * (127 - 40));
+            velocity = Math.max(1, Math.min(127, velocity));
         } else if (event.strength != null) {
             velocity = Math.round(40 + event.strength * (127 - 40));
             velocity = Math.max(1, Math.min(127, velocity));
@@ -1257,9 +1274,14 @@ function drawTooltip(event, W, H) {
         if (event.snap_to_top_ratio != null) {
             lines.push(`Snap/Top ratio: ${event.snap_to_top_ratio.toExponential(2)} (closer to 1 = real hit)`);
         }
-        if (event.strength != null) {
-            lines.push(`Strength (ratio/10): ${event.strength.toFixed(2)}`);
-        }
+        // 2026-06-10: the lossy "Strength (ratio/10)" line was
+        // removed — the "Top/2nd ratio" line directly above shows
+        // the raw band_max_ratio, which is what the user actually
+        // wants to see (the clamp-to-1.0 strength field masked
+        // everything >= 10). For energy events, fall through to
+        // the strength display below — that strength is the
+        // energy detector's [0, 1] normalized onset strength, not
+        // the spectral one, so it's still meaningful.
     } else if (event.strength != null) {
         lines.push(`Strength: ${event.strength}`);
     }

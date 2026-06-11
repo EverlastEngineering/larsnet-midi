@@ -861,11 +861,19 @@ def _run_spectral_detection(
         return []
 
     # The per-band profile (band_powers, band_max_idx, band_max_ratio)
-    # is the new quality signal (2026-06-09). Strength is now derived
-    # from band_max_ratio clipped to [0, 1] — a unitless indicator of
-    # how clearly one band dominated at the hit. Values < 1.0 indicate
-    # broadband / decaying frames; values >= 1.0 indicate clear
-    # band dominance (the ratio is itself >= 1 by construction).
+    # is the new quality signal (2026-06-09). We emit the RAW
+    # band_max_ratio (top / second-highest band) with no normalization,
+    # no clamp, and no rescale — the previous /10→clip-to-1.0 formula
+    # silently collapsed every event with band_max_ratio >= 10 to the
+    # same value, which masked real differences (e.g. 18.99 vs 459.12
+    # both reported as strength=1.0). The WebUI sidecar now drives a
+    # ratio slider whose max is the dataset max, so keeping the raw
+    # value is the only way the user can distinguish those events.
+    #
+    # The `strength` field is preserved (as `band_max_ratio_10`) for
+    # back-compat with older analysis.json consumers, but no longer
+    # feeds any filter. The filter chain in rebuild_core now reads
+    # `band_max_ratio` directly.
     #
     # Derived ratios (2026-06-10): snap_to_ring_ratio and
     # snap_to_top_ratio are stored on the event for the WebUI
@@ -875,10 +883,12 @@ def _run_spectral_detection(
     return [
         {
             'time': float(e.time_sec),
-            'strength': min(1.0, max(0.0, float(e.band_max_ratio) / 10.0)),
+            'band_max_ratio': float(e.band_max_ratio),
+            # Back-compat: emitted but not used by any current filter.
+            # Retained so older analysis.json readers don't break.
+            'band_max_ratio_10': float(e.band_max_ratio) / 10.0,
             'band_powers': list(e.band_powers),
             'band_max_idx': int(e.band_max_idx),
-            'band_max_ratio': float(e.band_max_ratio),
             'band_delta': float(e.band_delta),
             'snap_delta': float(e.snap_delta),
             'snap_to_ring_ratio': float(e.snap_to_ring_ratio),
@@ -976,6 +986,12 @@ def _build_events_configured(
     # spectral_transient_core handles the bulk of the work; this
     # floor is a safety net for the rare case where wire-tail
     # survives the NMS.
+    #
+    # 2026-06-10: the WebUI toms sidecar now exposes a user-driven
+    # `band_max_ratio_max` slider (default 0 = disabled, otherwise
+    # "drop events above this ratio"). The 1.0 floor below is
+    # untouched — it remains a "minimum quality" gate; the new
+    # slider is a separate "ceiling on extreme dominance" gate.
     SPECTRAL_BAND_RATIO_FLOOR = 1.0
 
     # Defensive: unknown / None → 'energy' (preserve legacy behavior).
@@ -1022,48 +1038,50 @@ def _build_events_configured(
             'time': float(sp.get('time', 0.0)),
             'status': 'KEPT',
             'method': 'spectral',
-            'strength': sp.get('strength'),
+            'band_max_ratio': sp.get('band_max_ratio'),
+            # Back-compat: keep emitting band_max_ratio_10 (was
+            # `strength` pre-2026-06-10) so older readers that look
+            # at the old name don't break. Not used by any filter.
+            'band_max_ratio_10': sp.get('band_max_ratio_10') or sp.get('strength'),
             'band_powers': sp.get('band_powers'),
             'band_max_idx': sp.get('band_max_idx'),
-            'band_max_ratio': sp.get('band_max_ratio'),
             'band_delta': sp.get('band_delta'),
             'snap_delta': sp.get('snap_delta'),
             'snap_to_ring_ratio': snap_to_ring,
             'snap_to_top_ratio': snap_to_top,
         })
 
-    # Apply the snap_delta mask to spectral events (2026-06-09;
-    # toggle-gated 2026-06-10). Mirrors the client-side filter in
-    # webui/static/js/threshold-tuning.js::applySnapDeltaMask so the
-    # saved MIDI matches what the tuning panel shows.
-    #
-    # Gate: respects the `snap_mask_enabled` bool per stem. OFF
-    # (explicit false) → skip the mask entirely; missing (legacy
-    # analysis.json pre-dates the toggle) → default ON for back-compat.
-    # The threshold field has its own range: 0.001 (schema default)
-    # catches floating-point zeros; 0.05–0.1 keeps only the strongest
-    # attacks. The mask is still skipped if the threshold is missing
-    # or negative.
-    snap_mask_enabled = None
-    snap_mask_threshold = None
-    if config is not None and stem_type is not None:
-        stem_cfg = config.get(stem_type, {})
-        snap_mask_enabled = stem_cfg.get('snap_mask_enabled', None)
-        snap_mask_threshold = stem_cfg.get('snap_mask_threshold', None)
-    # Back-compat: missing bool = ON (legacy behavior). Explicit false = OFF.
-    if snap_mask_enabled is None:
-        snap_mask_enabled = True
-    if snap_mask_enabled and snap_mask_threshold is not None and snap_mask_threshold >= 0:
-        for ev in spectral_as_onsets:
-            sd = ev.get('snap_delta')
-            if sd is None:
-                # Energy events with no snap_delta: not applicable.
-                continue
-            if sd <= snap_mask_threshold:
-                ev['status'] = 'FILTERED'
+    # 2026-06-10: the toms snap-mask + advanced-filter chain was
+    # removed from the toms sidecar (replaced by a simple
+    # "Show Only Snap Events" toggle + a raw band_max_ratio_max
+    # ceiling). The full-pipeline path now delegates to the same
+    # two filters via rebuild_core._apply_show_only_snap_events
+    # and rebuild_core._apply_band_max_ratio_max — applied AFTER
+    # this function returns (the server's rebuild path calls them
+    # in rebuild_events_from_analysis). The legacy snap_mask_*
+    # fields are still parsed here only to keep old analysis.json
+    # data structures intact; they're no longer consumed.
 
     if detection_method == 'spectral':
         return spectral_as_onsets
+
+    # Onset events visibility gate (2026-06-10 round 2). When
+    # the user has turned the toms onset_events toggle OFF,
+    # energy onsets are dropped from the full-pipeline output
+    # too — only spectral survivors make it into
+    # events_configured. This is the "spectral-only" path; the
+    # user is migrating the toms view to rely on the spectral
+    # detector alone.
+    onset_events_enabled = None
+    if config is not None and stem_type is not None:
+        onset_events_enabled = config.get(stem_type, {}).get(
+            'onset_events_enabled', None
+        )
+    # Back-compat: missing bool = ON (legacy).
+    if onset_events_enabled is None:
+        onset_events_enabled = True
+    if not onset_events_enabled:
+        return list(spectral_as_onsets)
 
     # detection_method == 'both': union without dedup.
     # User direction (2026-06-09): "spectral data should NOT use ANY

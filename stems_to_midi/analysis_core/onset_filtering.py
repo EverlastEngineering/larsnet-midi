@@ -367,17 +367,17 @@ def filter_onsets_by_spectral(
             min_strength_threshold=spectral_config.get('min_strength_threshold')
         )
 
-        # Master onset-filter gate (2026-06-10). When OFF, every
-        # onset is treated as KEPT regardless of geomean / sustain /
-        # strength. Missing bool = ON (back-compat) for projects that
-        # pre-date this toggle. Use case: A/B comparison without
-        # having to drag the geomean threshold to an extreme value
-        # (the snap-mask toggle is independent and still applies).
-        onset_filter_enabled = config.get(stem_type, {}).get('onset_filter_enabled', None)
-        if onset_filter_enabled is None:
-            onset_filter_enabled = True
-        master_gate_bypasses_filter = not onset_filter_enabled
-        
+        # Note: the onset_events_enabled visibility gate (2026-06-10
+        # round 2) is NOT applied here. This function still applies
+        # the geomean/sustain/strength filter to every onset — its
+        # job is to produce the per-onset KEPT/FILTERED status from
+        # the spectral signals. The gate is a separate "drop from
+        # output" step that happens in processing_shell.
+        # _build_events_configured (and in rebuild_core.
+        # rebuild_events_from_analysis). This keeps the filter
+        # function's contract: re-evaluating with the same inputs
+        # always gives the same statuses, regardless of the gate.
+
         # Store all data for this onset (for debug output AND sidecar v2)
         # Uses domain-specific band names (body_energy, wire_energy, etc.)
         onset_data = {
@@ -389,7 +389,7 @@ def filter_onsets_by_spectral(
             'total_energy': total_energy,
             'geomean': geomean,
             'geomean_bands': geomean_bands,
-            'status': 'KEPT' if (learning_mode or master_gate_bypasses_filter or is_real_hit) else 'FILTERED'
+            'status': 'KEPT' if (learning_mode or is_real_hit) else 'FILTERED'
         }
         
         # Add domain-specific band energies and labels
@@ -427,7 +427,7 @@ def filter_onsets_by_spectral(
         # In learning mode, keep ALL detections. Also keep
         # everything when the master onset-filter gate is off
         # (2026-06-10) — same bypass as the status flag above.
-        if learning_mode or master_gate_bypasses_filter or is_real_hit:
+        if learning_mode or is_real_hit:
             filtered_times.append(onset_time)
             filtered_strengths.append(strength)
             filtered_amplitudes.append(peak_amplitude)

@@ -280,10 +280,19 @@ def _serialize_spectral_events(spectral_events: list) -> list:
 
         {
             'time': float,
-            'strength': float,         # in [0, 1] (derived from band_max_ratio)
             'band_powers': [b0, b1, b2, b3, b4],  # linear power per band
             'band_max_idx': int,       # argmax of band_powers, 0-4
-            'band_max_ratio': float,   # top / second-highest band
+            'band_max_ratio': float,   # top / second-highest band, raw
+                                       # (>= 1 by construction; was
+                                       # previously shown to the user
+                                       # as `strength` after a lossy
+                                       # clamp-to-1.0 rescale that
+                                       # masked real differences —
+                                       # see test_tooltip_data_contract
+                                       # 2026-06-10). The detector
+                                       # also emits `band_max_ratio_10`
+                                       # (= ratio / 10, unclamped) as
+                                       # a back-compat alias.
             'method': 'spectral',
         }
 
