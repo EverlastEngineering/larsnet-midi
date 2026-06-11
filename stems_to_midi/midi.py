@@ -399,16 +399,23 @@ def _serialize_pga_events(pga_events: list) -> list:
     Each event has at least::
 
         {
-            'time': float,
+            'time': float,            # 4 decimal places
             'method': 'percentile_gated',
             'status': 'KEPT',
+            'frame': int,             # STFT frame index (2026-06-10, diagnostic)
+            'envelope_value': float,  # contrast-envelope value at peak (diagnostic)
+            'prominence': float,      # scipy find_peaks prominence (diagnostic)
+            'iqr_threshold': float,   # abs threshold used for peak-pick (q3 + 2.5*IQR)
         }
 
-    The per-bin contrast stats (e.g. ``iqr_threshold``,
-    ``envelope_max``) are NOT serialized here — they are diagnostic
-    signals used by the algorithm and don't have a WebUI
-    consumer. If you ever need to surface them in the sidecar,
-    add fields here and document them in the schema.
+    The diagnostic fields are useful for the WebUI tooltip —
+    the user can see WHY a peak fired (envelope value, how
+    much it exceeds the IQR threshold) and compare PGA signals
+    at the same time as the energy/spectral signals in the
+    tooltip. They are also useful for offline postmortem when
+    investigating false positives — the user can sort by
+    envelope_value or prominence to find low-confidence
+    candidates.
     """
     out = []
     for ev in pga_events:
@@ -416,6 +423,10 @@ def _serialize_pga_events(pga_events: list) -> list:
             'time': _round_value(ev.get('time'), 4),
             'method': ev.get('method', 'percentile_gated'),
             'status': ev.get('status', 'KEPT'),
+            'frame': ev.get('frame'),
+            'envelope_value': _round_value(ev.get('envelope_value'), 4),
+            'prominence': _round_value(ev.get('prominence'), 4),
+            'iqr_threshold': _round_value(ev.get('iqr_threshold'), 4),
         })
     return out
 

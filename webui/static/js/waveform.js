@@ -807,6 +807,24 @@ function formatTime(seconds) {
     return `${Math.floor(s)}s`;
 }
 
+// High-precision tooltip time (2026-06-10). Used for the
+// tooltip's "Time" line ONLY — the axis labels still use the
+// compact formatTime() above so they don't get cluttered with
+// 3-decimal digits. Format: "M:SS.mmm" when >= 60s, else
+// "S.mmm s" when < 10s, else "S.mmm s". Always 3 decimal
+// places so the user can A/B-compare PGA / spectral / energy
+// event times against their known ground truth at sub-frame
+// precision (~0.3ms per 0.001 increment at sr=44100).
+function formatTimePrecise(seconds) {
+    if (seconds == null || !isFinite(seconds)) return '?';
+    const m = Math.floor(seconds / 60);
+    const s = seconds - m * 60;
+    if (m > 0) {
+        return `${m}:${s.toFixed(3).padStart(6, '0')}`;
+    }
+    return `${s.toFixed(3)}s`;
+}
+
 /**
  * Draw energy envelope as a mirrored DAW-style waveform.
  * Left channel extends upward from center, right channel extends downward.
@@ -1302,7 +1320,7 @@ function drawTooltip(event, W, H) {
     // the tooltip height accurately (used for vertical centering
     // within the panels container).
     const lines = [];
-    lines.push(`Time: ${formatTime(event.time)}`);
+    lines.push(`Time: ${formatTimePrecise(event.time)}`);
     lines.push(`Status: ${event.status}`);
     // Detection method: 'spectral' = spectral-transient detector,
     // everything else (rms, peak_hold, spectral_flux, etc.) is the
@@ -1385,6 +1403,23 @@ function drawTooltip(event, W, H) {
         // the spectral one, so it's still meaningful.
     } else if (event.strength != null) {
         lines.push(`Strength: ${event.strength}`);
+    }
+    // PGA (percentile-gated broad attack) diagnostic fields
+    // (2026-06-10). The PGA detector measures broadband change
+    // above a per-bin noise floor and surfaces its key signals
+    // here so the user can see WHY a violet bar appeared (or
+    // didn't) and A/B-compare with the energy/spectral signals
+    // at the same time point. All four fields are diagnostic
+    // and don't gate the configured pipeline.
+    if (event.method === 'percentile_gated') {
+        if (event.frame != null) lines.push(`Frame: ${event.frame}`);
+        if (event.envelope_value != null) lines.push(`Envelope value: ${event.envelope_value.toFixed(2)} (contrast sum, 600-8000 Hz)`);
+        if (event.prominence != null) lines.push(`Prominence: ${event.prominence.toFixed(2)} (find_peaks)`);
+        if (event.iqr_threshold != null) lines.push(`IQR threshold: ${event.iqr_threshold.toFixed(2)} (q3 + 2.5*IQR of envelope)`);
+        if (event.envelope_value != null && event.iqr_threshold != null) {
+            const ratio = event.envelope_value / event.iqr_threshold;
+            lines.push(`Envelope / IQR thr: ${ratio.toFixed(2)}× (higher = more confident strike)`);
+        }
     }
     if (event.geomean != null) lines.push(`Geomean: ${event.geomean}`);
     if (event.amplitude != null) lines.push(`Amplitude: ${event.amplitude}`);

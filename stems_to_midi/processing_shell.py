@@ -1661,13 +1661,44 @@ def process_stem_to_midi(
     # percussive attack fired independent of the energy/RING
     # signal. See ``percentile_gated_detector.py`` for the
     # algorithm.
-    pga_event_times, _pga_debug = detect_percentile_gated_broad_attacks(
+    pga_event_times, pga_debug = detect_percentile_gated_broad_attacks(
         audio_mono, sr,
     )
-    pga_onset_data = [
-        {'time': float(t), 'method': 'percentile_gated', 'status': 'KEPT'}
-        for t in pga_event_times
-    ]
+    # Build per-event diagnostic dicts (2026-06-10). The
+    # WebUI tooltip surfaces envelope_value, prominence, and
+    # the IQR-derived abs_threshold so the user can see WHY a
+    # peak fired (or didn't) and compare energy/spectral/PGA
+    # signals at the same time point. Diagnostic-only fields
+    # that don't affect the configured pipeline. The IQR
+    # threshold is recomputed here for symmetry with the
+    # algorithm — see percentile_gated_detector.py for the
+    # q3 + 2.5*IQR rule.
+    _env = pga_debug.get('envelope') if pga_debug else None
+    _peaks = pga_debug.get('peaks') if pga_debug else None
+    _proms = pga_debug.get('prominences') if pga_debug else None
+    if _env is not None and _env.size > 0:
+        _q1, _q3 = np.percentile(_env, [25, 75])
+        _iqr = _q3 - _q1
+        _abs_thr = _q3 + 2.5 * _iqr
+    else:
+        _abs_thr = None
+    pga_onset_data = []
+    for i, t in enumerate(pga_event_times):
+        ev = {
+            'time': float(t),
+            'method': 'percentile_gated',
+            'status': 'KEPT',
+        }
+        if _peaks is not None and i < len(_peaks):
+            p = int(_peaks[i])
+            ev['frame'] = p
+            if _env is not None and p < len(_env):
+                ev['envelope_value'] = float(_env[p])
+            if _proms is not None and i < len(_proms):
+                ev['prominence'] = float(_proms[i])
+        if _abs_thr is not None:
+            ev['iqr_threshold'] = float(_abs_thr)
+        pga_onset_data.append(ev)
     if pga_onset_data:
         print(f"    Percentile-gated detection: {len(pga_onset_data)} candidate onsets")
 

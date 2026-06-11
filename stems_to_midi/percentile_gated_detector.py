@@ -292,6 +292,7 @@ def detect_percentile_gated_broad_attacks(
         envelope,
         height=abs_envelope_threshold,
         distance=nms_min_frames,
+        prominence=0,  # require any prominence > 0 — kills pure plateau/flat-top FPs
     )
 
     # Step 6: sub-frame refinement + Hann-bias correction.
