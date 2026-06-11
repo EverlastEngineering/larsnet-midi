@@ -81,7 +81,7 @@ Pure functional core - no side effects, no file I/O, no global state.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from scipy.signal import find_peaks
@@ -229,7 +229,147 @@ def compute_stft_db(
     freqs = np.arange(n_bins) * sr / n_fft
     times = np.arange(n_frames) * hop / sr + (n_fft / 2) / sr
     s_db = 20.0 * np.log10(s + 1e-8)
+    # Apply test corruption overlay (2026-06-11) — a hook
+    # for A/B experiments where we want to see how the pipeline
+    # behaves when the spectrogram has a known corruption in a
+    # specific time range. Defaults to no-op. Set via
+    # ``set_spectral_corruption()``. The corruption is applied
+    # to the LOG-MAGNITUDE spectrogram AFTER the FFT, so it
+    # doesn't disturb the audio samples themselves.
+    if _SPECTRAL_CORRUPTION is not None:
+        s_db = _apply_spectral_corruption(s_db, times, _SPECTRAL_CORRUPTION)
     return freqs, times, s_db
+
+
+# ── Spectral corruption test hook ───────────────────────────────────────────
+# Set via set_spectral_corruption(); cleared via clear_spectral_corruption().
+# Used to A/B test how the pipeline reacts to known corruptions in the
+# spectrogram (e.g. a missing 12ms window at 14.840-14.852s, simulating
+# the "soft hit" artifact we observed in the toms audio). The
+# corruption is applied to s_db (the log-magnitude STFT), not the audio
+# samples — so the .wav file on disk is untouched, and we can run the
+# same wav through the pipeline with and without corruption to compare.
+
+_SPECTRAL_CORRUPTION: Optional[Dict[str, Any]] = None
+
+
+def set_spectral_corruption(
+    t_start_sec: float,
+    t_end_sec: float,
+    mode: str = "interpolate",
+    n_fft: int = 1024,
+) -> None:
+    """Activate a spectral corruption overlay.
+
+    The corruption REMOVES a time range from the spectrogram and
+    FILLS it with values derived from the surrounding frames. The
+    original audio is untouched — only the log-magnitude STFT
+    gets patched, AFTER the FFT. This is for A/B experiments where
+    we want to see how the pipeline behaves when a known
+    corruption is removed from the spectrogram (simulating "the
+    artifact was never there").
+
+    Args:
+        t_start_sec, t_end_sec: time range to corrupt, in seconds
+            (relative to the audio start). The frames in this
+            range are replaced.
+        mode: how to fill the corrupt range. Options:
+            - ``"interpolate"`` (default): for each frame in
+              the corrupt range, blend between the pre-corruption
+              column (t_start) and the post-corruption column
+              (t_end) with a linear ramp. Frame at t_start keeps
+              the pre value; frame at t_end keeps the post value;
+              middle frames are linearly interpolated. This
+              simulates "the audio transitioned smoothly from
+              before to after" — appropriate for short gaps.
+            - ``"pre"``: fill the entire corrupt range with copies
+              of the frame at t_start (forward extrapolation).
+            - ``"post"``: fill with copies of the frame at t_end
+              (backward extrapolation).
+        n_fft: STFT window size, for frame-index calculations
+            (must match what the pipeline uses).
+    """
+    global _SPECTRAL_CORRUPTION
+    _SPECTRAL_CORRUPTION = {
+        "t_start_sec": t_start_sec,
+        "t_end_sec": t_end_sec,
+        "mode": mode,
+        "n_fft": n_fft,
+    }
+
+
+def clear_spectral_corruption() -> None:
+    """Deactivate the spectral corruption overlay."""
+    global _SPECTRAL_CORRUPTION
+    _SPECTRAL_CORRUPTION = None
+
+
+def _apply_spectral_corruption(
+    s_db: np.ndarray,
+    times: np.ndarray,
+    cfg: Dict[str, Any],
+) -> np.ndarray:
+    """Apply the corruption overlay to a log-magnitude spectrogram.
+
+    For each frame in the [t_start, t_end] range, replace its
+    column in s_db with values derived from the surrounding
+    frames. The "surrounding frames" are the columns at
+    t_start (just before the corruption) and t_end (just after
+    the corruption). This REMOVES the artifact and FILLS the
+    gap with synthesized data — the audio is untouched, only
+    the log-magnitude STFT is patched.
+    """
+    t_start = cfg["t_start_sec"]
+    t_end = cfg["t_end_sec"]
+    mode = cfg["mode"]
+    n_fft = cfg["n_fft"]
+
+    # Find the frame indices just before t_start and just after
+    # t_end. These are the "anchor" frames that bracket the gap.
+    # We use the center of each frame to decide membership.
+    i_anchor_pre = int(np.searchsorted(times, t_start)) - 1
+    i_anchor_post = int(np.searchsorted(times, t_end))
+    # The corrupt range covers frames strictly between
+    # i_anchor_pre and i_anchor_post.
+    i_corrupt_lo = i_anchor_pre + 1
+    i_corrupt_hi = i_anchor_post
+    if i_corrupt_hi <= i_corrupt_lo:
+        return s_db  # nothing to do
+    if i_anchor_pre < 0 or i_anchor_post >= s_db.shape[1]:
+        return s_db  # can't anchor — give up
+
+    if mode == "interpolate":
+        # Linear blend between the pre anchor and the post
+        # anchor. Frame at i_corrupt_lo gets a tiny bit of the
+        # post value; frame at i_corrupt_hi-1 gets nearly all
+        # the post value. This simulates "the audio
+        # transitioned smoothly from before to after" — the
+        # right model for a 12ms audio gap where the
+        # surrounding signal is continuous toms ring.
+        col_pre = s_db[:, i_anchor_pre].copy()
+        col_post = s_db[:, i_anchor_post].copy()
+        n_corrupt = i_corrupt_hi - i_corrupt_lo
+        for j in range(n_corrupt):
+            # alpha = 0 at the start of the corrupt range, 1 at the end
+            alpha = (j + 1) / (n_corrupt + 1)
+            s_db[:, i_corrupt_lo + j] = (1.0 - alpha) * col_pre + alpha * col_post
+        return s_db
+    elif mode == "pre":
+        # Fill with copies of the pre anchor
+        col_pre = s_db[:, i_anchor_pre].copy()
+        n_corrupt = i_corrupt_hi - i_corrupt_lo
+        for j in range(n_corrupt):
+            s_db[:, i_corrupt_lo + j] = col_pre
+        return s_db
+    elif mode == "post":
+        # Fill with copies of the post anchor
+        col_post = s_db[:, i_anchor_post].copy()
+        n_corrupt = i_corrupt_hi - i_corrupt_lo
+        for j in range(n_corrupt):
+            s_db[:, i_corrupt_lo + j] = col_post
+        return s_db
+    else:
+        raise ValueError(f"Unknown corruption mode: {mode}")
 
 
 def _band_powers_from_db(
