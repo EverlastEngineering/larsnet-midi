@@ -85,17 +85,19 @@ DEFAULT_DB_RISE_THRESHOLD = 10.0
 DEFAULT_P5_PERCENTILE = 5.0
 
 # Minimum absolute envelope value for a peak to be considered a
-# real strike. The toms empirical distribution: quiet frames are
-# ~5000, the smallest real strike is ~12000, the loudest is
-# ~17000. 10000 is the safe floor — well above the noise, well
-# below the smallest strike.
-DEFAULT_ABS_ENVELOPE_THRESHOLD = 10000.0
+# real strike. Computed per-call as ``q3 + 2.5 * IQR`` of the
+# envelope itself (a standard extreme-outlier rule, equivalent
+# to ~99% of a normal distribution) — so the threshold adapts
+# to the song's actual dynamic range rather than a hard-coded
+# constant. Set here as a fallback for the rare case where the
+# IQR-based computation can't be performed.
+DEFAULT_ABS_ENVELOPE_THRESHOLD = None  # computed per-call by default
 
 # Minimum STFT frames between peaks (~116ms at hop=256).
-# Real drum strikes are 100ms+ apart; this is the NMS floor
-# that drops ringing tails within a few frames of a real strike
-# without merging close-but-distinct strikes (e.g. a flam at
-# 50ms would merge, but a typical 16th-note at 125ms would not).
+# 116ms is shorter than a 16th note at 130bpm (115ms) and longer
+# than a typical drum flam (~30ms). It's the "safe NMS floor"
+# for typical drumming — anything tighter would merge flams
+# and double-triggers, anything looser would split sixteenths.
 DEFAULT_NMS_MIN_FRAMES = 20
 
 # Hann window center bias: a transient at sample t lands in
@@ -215,7 +217,7 @@ def detect_percentile_gated_broad_attacks(
     broad_freq_min_hz: float = DEFAULT_BROAD_FREQ_MIN_HZ,
     broad_freq_max_hz: float = DEFAULT_BROAD_FREQ_MAX_HZ,
     db_rise_threshold: float = DEFAULT_DB_RISE_THRESHOLD,
-    abs_envelope_threshold: float = DEFAULT_ABS_ENVELOPE_THRESHOLD,
+    abs_envelope_threshold: float = None,  # IQR-based by default
     nms_min_frames: int = DEFAULT_NMS_MIN_FRAMES,
     strike_offset_sec: float = DEFAULT_STRIKE_OFFSET_SEC,
     n_fft: int = 1024,
@@ -273,12 +275,19 @@ def detect_percentile_gated_broad_attacks(
         db_rise_threshold=db_rise_threshold,
     )
 
-    # Step 5: peak-pick. Two thresholds — an absolute envelope
-    # minimum (drops noise-level peaks) and a minimum-frame NMS
-    # (drops ringing tails within a few frames of a real strike).
-    # Both are absolute values, not fractions of the envelope's
-    # max, so the thresholds don't drift if the loudest hit is
-    # unusually loud or quiet.
+    # Step 5: peak-pick. Two thresholds — an envelope minimum and
+    # a minimum-frame NMS. The envelope minimum defaults to
+    # ``q3 + 2.5 * IQR`` of the envelope itself (a standard
+    # extreme-outlier rule): any peak above the bulk of the
+    # distribution is a candidate. This adapts to the song's
+    # actual dynamic range — a loud kick track and a quiet
+    # acoustic toms track both get sensible thresholds without
+    # hard-coded constants. Override with ``abs_envelope_threshold``
+    # for full control.
+    if abs_envelope_threshold is None:
+        q1, q3 = np.percentile(envelope, [25, 75])
+        iqr = q3 - q1
+        abs_envelope_threshold = q3 + 2.5 * iqr
     peaks, props = find_peaks(
         envelope,
         height=abs_envelope_threshold,
