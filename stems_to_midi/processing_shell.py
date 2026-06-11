@@ -1702,6 +1702,73 @@ def process_stem_to_midi(
     if pga_onset_data:
         print(f"    Percentile-gated detection: {len(pga_onset_data)} candidate onsets")
 
+    # Step 11.6: PGA prominence filter (2026-06-10).
+    # Post-detection filter: drop PGA events with prominence
+    # below ``pga_min_prominence``. The default 1000 was
+    # chosen empirically — real toms strikes in the
+    # project 4 calibration had prominence 2000-15000, the
+    # 14.84/14.97 soft hits had prominence 2127-2727 (so
+    # they survive the default — duration feature catches
+    # them), and the 74.748/74.925 FPs had prominence
+    # 127-432 (so the default kills them).
+    # The threshold is exposed in midiconfig.yaml under
+    # ``onset_detection.pga_min_prominence`` so the user
+    # can tune per-project. See percentile_gated_detector.py
+    # for the prominence definition (scipy.signal.find_peaks).
+    pga_min_prominence = (
+        config.get('onset_detection', {}).get('pga_min_prominence', 1000.0)
+    )
+    pga_kept = [
+        ev for ev in pga_onset_data
+        if (ev.get('prominence') is None
+            or ev.get('prominence', 0) >= pga_min_prominence)
+    ]
+    pga_filtered_count = len(pga_onset_data) - len(pga_kept)
+    if pga_filtered_count:
+        print(f"    PGA prominence filter (min={pga_min_prominence}): "
+              f"dropped {pga_filtered_count}/{len(pga_onset_data)}")
+    pga_onset_data = pga_kept
+
+    # Step 11.7: Per-event feature extraction (2026-06-10).
+    # Compute duration, pitch, decay, brightness, etc. for
+    # each PGA event. The two-pass flow:
+    #   Pass 1: measure features with the FULL detected list
+    #           (so the user can see initial classifications
+    #           and decide which to filter)
+    #   Pass 2 (in the WebUI): re-measure with the FILTERED
+    #           list as input, so a strike's ring extends past
+    #           any filtered-out events
+    # The single-pass initial measurement uses the current
+    # pga_onset_data (post-prominence-filter) as the
+    # "neighbors" — events still in the list at this point
+    # are the ones the user is most likely to keep.
+    if pga_onset_data:
+        from .event_features import compute_event_features
+        for i, ev in enumerate(pga_onset_data):
+            next_t = None
+            if i + 1 < len(pga_onset_data):
+                next_t = pga_onset_data[i + 1].get('time')
+            try:
+                feats = compute_event_features(
+                    audio_mono, sr, ev['time'],
+                    next_event_time_sec=next_t,
+                )
+            except Exception as exc:
+                # Defensive: a bad event shouldn't poison
+                # the rest of the pipeline. The diagnostic
+                # surface in the WebUI will show "N/A" for
+                # features on this event.
+                feats = {
+                    'duration_ms': None,
+                    'attack_rise_ms': None,
+                    'root_pitch_hz': None,
+                    'pitch_confidence': None,
+                    'decay_t60_ms': None,
+                    'spectral_centroid_hz': None,
+                    'inter_onset_ms': None,
+                }
+            ev.update(feats)
+
     # Step 12: Build events_configured based on the configured
     # detection_method. The energy and spectral detectors BOTH always
     # ran above; this is just a promotion step that picks which list

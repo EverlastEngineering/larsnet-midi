@@ -390,32 +390,33 @@ def _serialize_pga_events(pga_events: list) -> list:
     Serialize percentile-gated broad-attack events for the
     analysis.json sidecar (2026-06-10).
 
-    PGA events have a minimal shape — just time + the two signals
-    that fired (envelope amplitude + broadband change). They are a
-    complementary detector; the energy + spectral events drive the
-    events_configured pipeline, and PGA is shown alongside them in
-    the WebUI waveform viewer as a violet marker.
+    PGA events carry both detector-level diagnostic fields
+    (envelope value, prominence, IQR threshold) and
+    per-event feature fields (duration, attack_rise_ms,
+    pitch, decay_t60, centroid). The detector fields
+    explain WHY a peak fired; the feature fields enable
+    classification (kick/snare/hihat/toms/click).
 
-    Each event has at least::
+    Each event has these fields (all may be None)::
 
         {
             'time': float,            # 4 decimal places
             'method': 'percentile_gated',
             'status': 'KEPT',
-            'frame': int,             # STFT frame index (2026-06-10, diagnostic)
-            'envelope_value': float,  # contrast-envelope value at peak (diagnostic)
-            'prominence': float,      # scipy find_peaks prominence (diagnostic)
-            'iqr_threshold': float,   # abs threshold used for peak-pick (q3 + 2.5*IQR)
+            # Detector diagnostic (why the peak fired)
+            'frame': int,             # STFT frame index
+            'envelope_value': float,  # contrast envelope at peak
+            'prominence': float,      # scipy find_peaks prominence
+            'iqr_threshold': float,   # peak-pick threshold (q3 + 2.5*IQR)
+            # Per-event features (for classification)
+            'duration_ms': float,     # ring time via slope-of-decline
+            'attack_rise_ms': float,  # 10-90% rise time
+            'root_pitch_hz': float,   # YIN/pYIN fundamental
+            'pitch_confidence': float,  # 0-1
+            'decay_t60_ms': float,    # T60 in the broad band
+            'spectral_centroid_hz': float,  # brightness
+            'inter_onset_ms': float,  # time to next event
         }
-
-    The diagnostic fields are useful for the WebUI tooltip —
-    the user can see WHY a peak fired (envelope value, how
-    much it exceeds the IQR threshold) and compare PGA signals
-    at the same time as the energy/spectral signals in the
-    tooltip. They are also useful for offline postmortem when
-    investigating false positives — the user can sort by
-    envelope_value or prominence to find low-confidence
-    candidates.
     """
     out = []
     for ev in pga_events:
@@ -423,10 +424,21 @@ def _serialize_pga_events(pga_events: list) -> list:
             'time': _round_value(ev.get('time'), 4),
             'method': ev.get('method', 'percentile_gated'),
             'status': ev.get('status', 'KEPT'),
+            # Detector diagnostic
             'frame': ev.get('frame'),
             'envelope_value': _round_value(ev.get('envelope_value'), 4),
             'prominence': _round_value(ev.get('prominence'), 4),
             'iqr_threshold': _round_value(ev.get('iqr_threshold'), 4),
+            # Per-event features — preserve None if absent,
+            # 4-decimal rounding for floats in the user-facing
+            # range (durations, pitches, frequencies in Hz).
+            'duration_ms': _round_value(ev.get('duration_ms'), 2),
+            'attack_rise_ms': _round_value(ev.get('attack_rise_ms'), 2),
+            'root_pitch_hz': _round_value(ev.get('root_pitch_hz'), 2),
+            'pitch_confidence': _round_value(ev.get('pitch_confidence'), 4),
+            'decay_t60_ms': _round_value(ev.get('decay_t60_ms'), 2),
+            'spectral_centroid_hz': _round_value(ev.get('spectral_centroid_hz'), 2),
+            'inter_onset_ms': _round_value(ev.get('inter_onset_ms'), 2),
         })
     return out
 

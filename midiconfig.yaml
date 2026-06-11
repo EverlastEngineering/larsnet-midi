@@ -38,7 +38,18 @@ onset_detection:
                           #   'spectral'= spectral-transient list (with method='spectral' tag)
                           #   'both'    = union, deduped within 12ms (energy wins collisions)
                           # Both detectors always run; this only chooses the promotion target.
-  # Per-stem overrides: onset_threshold, onset_delta, onset_wait
+  # PGA prominence filter (2026-06-10). PGA candidates with
+  # scipy find_peaks prominence below this threshold are
+  # dropped from the events_pga list before serialization.
+  # Default 1000 was calibrated on project 4: real toms
+  # strikes have prominence 2000-15000, the 74.748/74.925 FPs
+  # have prominence 127-432 (killed by the default). The
+  # 14.84/14.97 "soft hits" have prominence 2127-2727 — they
+  # survive the prominence filter, so the duration feature
+  # is the secondary discriminator for those.
+  # Set to 0 to disable the filter.
+  pga_min_prominence: 1000
+  # Per-stem overrides: onset_threshold, onset_delta, onset_wait, pga_min_prominence
   
 # === ENERGY-BASED DETECTION (NEW METHOD - DEFAULT) ===
 energy_detection:
@@ -215,7 +226,7 @@ toms:
   # attack. snap_min_delta is the height threshold; 0.05 is the
   # module default and is calibrated for the toms head-snap
   # amplitude on a 44.1kHz signal.
-  spectral_snap_bands: [1, 2]
+  spectral_snap_bands: [2, 3]
   spectral_snap_min_delta: 0.05
 
   # Spectral ranges for analysis (Hz)
