@@ -123,8 +123,82 @@ class TestSerializeOnsetEventsAlwaysPresentFields:
         # band_powers is a 5-list of floats; verify shape and a value
         assert len(events[0]['band_powers']) == 5
         assert events[0]['band_powers'][0] == pytest.approx(1.0, rel=1e-5)
-        # band_max_ratio is a float, 2-decimal rounded
+        # band_max_ratio is a float, 4-decimal rounded (the previous
+        # 2dp was lossy — e.g. 459.12 became 459.12 but a 4-decimal
+        # round preserves the full precision the user needs)
         assert events[0]['band_max_ratio'] == 2000.0
+
+    def test_snap_delta_high_precision_preserved(self):
+        """Regression test (2026-06-10): the JSON serializer was
+        rounding snap_delta to 2 decimal places, which collapsed
+        every small-magnitude signal to 0.00. The user's
+        calibration case had snap_delta values in the 0.0001-0.001
+        range (real toms hits) and they were all serialized as
+        0.0 in the sidecar — so the user thought the spectral
+        detector was broken. The fix: snap_delta, band_delta,
+        snap_to_ring_ratio, snap_to_top_ratio get 6-decimal
+        precision in the JSON (same as band_powers)."""
+        onset = {
+            'time': 14.722, 'status': 'KEPT', 'method': 'spectral',
+            # The user's actual small snap_delta value
+            'snap_delta': 0.000352,
+            # The corresponding large band_delta
+            'band_delta': 809.3249,
+            # A small snap_to_ring_ratio
+            'snap_to_ring_ratio': 0.000352 / 809.3249,
+            'snap_to_top_ratio': 0.000352 / 36.37,
+            'band_max_ratio': 36.37,
+            'band_max_idx': 0,
+            'band_powers': [1.0, 0.5, 0.1, 0.05, 0.01],
+        }
+        events = _serialize_onset_events([onset])
+
+        # The signal MUST survive serialization. Pre-fix this was
+        # 0.0 in the JSON, which made the user think the detector
+        # was broken when it was actually working correctly.
+        assert events[0]['snap_delta'] == pytest.approx(0.000352, rel=1e-5), (
+            f"snap_delta=0.000352 must survive serialization. "
+            f"Got: {events[0]['snap_delta']!r}"
+        )
+        assert events[0]['band_delta'] == pytest.approx(809.3249, rel=1e-5), (
+            f"band_delta=809.3249 must survive serialization. "
+            f"Got: {events[0]['band_delta']!r}"
+        )
+        # The ratios also need precision — at 2dp they'd be 0.0
+        ratio = 0.000352 / 809.3249
+        assert events[0]['snap_to_ring_ratio'] == pytest.approx(ratio, rel=1e-5), (
+            f"snap_to_ring_ratio must survive serialization. "
+            f"Got: {events[0]['snap_to_ring_ratio']!r}"
+        )
+
+    def test_snap_to_ring_ratio_small_value_survives(self):
+        """Regression test (2026-06-10): snap_to_ring_ratio values
+        in the 1e-7 to 1e-5 range must NOT round to 0.0. The
+        serializer uses significant-figure rounding (6 sig figs)
+        for these fields rather than fixed decimal places, so
+        4.35e-7 stays as 4.35e-7 instead of disappearing.
+
+        This is the same data the user's calibration case hit:
+        ring=665, snap=0.01 → ratio 1.5e-5 (locked in
+        test_spectral_transient_core.py). Pre-fix, the JSON
+        rounded it to 0.0."""
+        onset = {
+            'time': 14.0, 'status': 'KEPT', 'method': 'spectral',
+            'snap_delta': 0.01,
+            'band_delta': 665.0,
+            'snap_to_ring_ratio': 0.01 / 665.0,  # 1.5e-5
+            'band_max_ratio': 2.0,
+            'band_powers': [1, 1, 1, 1, 1],
+        }
+        events = _serialize_onset_events([onset])
+        expected = 0.01 / 665.0  # ~1.5038e-5
+        assert events[0]['snap_to_ring_ratio'] != 0.0, (
+            f"snap_to_ring_ratio={expected:.3e} must NOT round to 0.0. "
+            f"Got: {events[0]['snap_to_ring_ratio']!r}"
+        )
+        assert events[0]['snap_to_ring_ratio'] == pytest.approx(
+            expected, rel=1e-5
+        )
 
     def test_basic_fields_still_present(self):
         """time, status, and computed features still work as before."""

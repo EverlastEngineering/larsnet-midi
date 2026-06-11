@@ -146,6 +146,25 @@ def _round_value(value, decimals: int):
     return value
 
 
+def _round_significant(value, sig_figs: int):
+    """Round a float to N significant figures, then return as float.
+
+    Unlike _round_value (which uses fixed decimal places), this
+    preserves small-magnitude values like 4.35e-7 — important for
+    the spectral snap_to_ring_ratio / snap_to_top_ratio fields
+    whose real-data range is 1e-7 to 1e-2. Fixed 6-decimal
+    rounding on those would zero out the small end. Used
+    selectively for the spectral ratio fields (2026-06-10)."""
+    if value is None or not isinstance(value, (int, float)):
+        return value
+    if value == 0:
+        return 0.0
+    import math
+    magnitude = math.floor(math.log10(abs(value)))
+    decimals = sig_figs - 1 - int(magnitude)
+    return round(value, decimals)
+
+
 def _serialize_onset_events(
     onset_data_list: list,
     midi_events: Optional[List[Dict]] = None,
@@ -207,18 +226,43 @@ def _serialize_onset_events(
         # Add spectral features with rounding
         # Band energy fields are dynamic per stem (e.g., body_energy, wire_energy)
         band_fields = [f'{b}_energy' for b in onset_data.get('geomean_bands', [])]
+        # 2026-06-10: snap_delta and band_delta need HIGHER precision
+        # than the default 2dp because the real signal is often in the
+        # 0.0001-0.001 range (e.g. the user's calibration: snap_delta
+        # values 0.000014 to 0.0004 round to 0.00 at 2dp, which
+        # destroys the discriminator the user was tracking by). Use
+        # 6-decimal fixed-point rounding for these.
+        #
+        # The derived ratios (snap_to_ring_ratio, snap_to_top_ratio)
+        # need SIGNIFICANT-FIGURE rounding (6 sig figs) instead of
+        # fixed-point — the real-data range is 1e-7 to 1e-2, so
+        # fixed-point 6dp still zeros out the small end. 6 sig figs
+        # preserves 4.35e-7 as 4.35e-7.
+        #
+        # band_max_ratio is unbounded above (the user's case had 459)
+        # so 4dp fixed-point is the right balance: distinguishes
+        # 18.99 from 459.12 in the JSON without bloating the file.
+        HIGH_PRECISION_FIELDS = {'snap_delta', 'band_delta'}
+        SIG_FIG_FIELDS = {'snap_to_ring_ratio', 'snap_to_top_ratio'}
         for field in (['strength', 'amplitude']
                       + band_fields
                       + ['geomean', 'total_energy', 'sustain_ms',
                          'bins_above_floor', 'max_db',
                          'band_max_idx', 'band_max_ratio',
-                         'band_delta', 'snap_delta']):
+                         'band_delta', 'snap_delta',
+                         'snap_to_ring_ratio', 'snap_to_top_ratio']):
             value = onset_data.get(field)
             if value is not None:
                 # bins_above_floor is an int count; round to int.
                 # band_max_idx is also an int (0-4).
                 if field in ('bins_above_floor', 'band_max_idx'):
                     event[field] = int(round(value))
+                elif field in HIGH_PRECISION_FIELDS:
+                    event[field] = _round_value(value, 6)
+                elif field in SIG_FIG_FIELDS:
+                    event[field] = _round_significant(value, 6)
+                elif field == 'band_max_ratio':
+                    event[field] = _round_value(value, 4)
                 else:
                     event[field] = _round_value(value, 2)
         # band_powers is a list of 5 floats — serialize with 6-decimal
