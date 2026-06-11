@@ -125,31 +125,3 @@ that lists every schema-driven flag without a clean summary.
 `Path('/path/to/midiconfig.yaml')`; passing a bare string raises
 `AttributeError: 'str' object has no attribute 'exists'` deep
 inside `config.py:38`.
-
-## End-to-end smoke test for pipeline changes
-
-Unit tests on synthetic audio prove the wiring is correct, but
-they can't prove a new detector behaves sanely on real recordings.
-The validated 4-step smoke test recipe (used 2026-06-08 for
-spectral-transient, project 3, commit 6526b7a):
-
-1. `process_stem_to_midi(...)` on each real stem with a short
-   `max_duration=5.0` to keep it fast. This is the WRITE path.
-2. `save_analysis_sidecar(events_by_stem, midi_path, ..., analysis_by_stem=...)`.
-   This is the JSON serialization.
-3. `load_analysis_sidecar(midi_path)`. This is the round-trip —
-   assert the new key survives and `data_integrity_warnings`
-   is `none`.
-4. `rebuild_events_from_analysis(analysis_data, overrides={}, config=config)`.
-   This is the "Save & Reconvert" path. Critical because
-   end-users trigger rebuilds far more often than full converts.
-   Assert the new key count is unchanged after rebuild.
-
-Then print a per-stem table of `events_configured | events_sensitive
-| events_<new_key>` counts. Look for any row where the new
-key is 5x+ the configured count — that's the over-firing
-signature that synthetic tests can't catch.
-
-Use a temp dir for the midi/analysis output (`/tmp/<name>-test`)
-and `mavis-trash` to clean up (the bash tool blocks
-`shutil.rmtree` on `/tmp` dirs).
