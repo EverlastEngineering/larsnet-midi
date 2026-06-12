@@ -223,7 +223,7 @@ def _serialize_onset_events(
         'attack_sharpness', 'envelope_continuity', 'peak_prominence',
         'spectral_centroid_hz', 'spectral_flux',
         'gap_from_previous_sec',
-        # Toms PGA cleanup (2026-06-11). These live on
+        # Toms PGA cleanup (2026-06-11 / 2026-06-12). These live on
         # PGA events (method='percentile_gated'). The
         # events_configured list for toms is the PGA list,
         # so these fields are always present-or-absent
@@ -237,7 +237,22 @@ def _serialize_onset_events(
         # threshold at detection time so the WebUI can
         # show "Active filter: pga_min_prominence=1000"
         # alongside any filtered event.
+        #
+        # PGA per-event features (2026-06-12 bug fix). These
+        # were attached in-memory by compute_event_features()
+        # at the end of process_stem_to_midi() but were being
+        # DROPPED at this serializer because they weren't in
+        # the OPTIONAL list. The WebUI tooltip was showing
+        # only the legacy event fields (Centroid, MIDI
+        # velocity, Status, etc.) and missing the per-event
+        # feature battery. Adding all the PGA per-event
+        # fields here so they survive to the sidecar.
         'midi_velocity', 'filter_reason', 'pga_filter_config',
+        'duration_ms', 'attack_rise_ms', 'inter_onset_ms',
+        'root_pitch_hz', 'pitch_confidence',
+        'decay_t60_ms', 'spectral_flatness',
+        'hr_peak_offset_ms', 'decay_envelope_energy',
+        'decay_col_min_median_db',
     )
 
     for onset_data in onset_data_list:
