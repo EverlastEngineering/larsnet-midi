@@ -1656,9 +1656,15 @@ def process_stem_to_midi(
     
     print(f"    Created {len(events)} MIDI events from {len(onset_times)} onsets")
     
-    # Step 10: Run sensitive detection for interactive tuning (energy-based only)
+    # Step 10: Run sensitive detection for interactive tuning (energy-based only).
+    # Toms (2026-06-12) skips this — toms is PGA-only, so there are no
+    # energy-detected onsets to surface as a sensitive background
+    # layer. The sidecar's events_sensitive is left empty so the WebUI
+    # has nothing to render for the legacy sensitive layer. (The
+    # 'Show sensitive' toggle and the energy-bar background layer in
+    # waveform.js become no-ops for toms, which is the desired state.)
     sensitive_onset_data = []
-    if not use_librosa:
+    if not use_librosa and stem_type != 'toms':
         sensitive_onset_data = _run_sensitive_detection(
             audio=audio,
             audio_mono=audio_mono,

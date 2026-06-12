@@ -565,6 +565,18 @@ function drawEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer
     for (const event of events) {
         if (event.time == null) continue;
 
+        // Toms PGA cleanup (2026-06-12). PGA events
+        // (method='percentile_gated') are rendered exclusively
+        // by drawPgaEventBars() at the bottom of this panel;
+        // skipping them here prevents a second violet bar
+        // being drawn for the same event (which was visible
+        // as a "narrow bar on top of a wide bar" stack before
+        // the cleanup). The sensitive background layer
+        // (isSensitiveLayer=true) is still allowed to draw
+        // PGA events — that's the max-sensitivity layer used
+        // for tuning, and it can include any method.
+        if (!isSensitiveLayer && event.method === 'percentile_gated') continue;
+
         const x = timeToX(event.time);
         if (x < PAD.left - barWidth || x > PAD.left + plotW + barWidth) continue;
 
@@ -645,15 +657,14 @@ function drawEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer
 // the filter).
 function drawPgaEventBars(ctx, events, timeToX, PAD, plotW, plotH) {
     const barWidth = 2;
-    // The marker region: 45-90% of plotH, growing DOWN from
-    // markerTop as the bar gets taller. KEPT bars use the
-    // full 0-45% range (plotH * 0.45) mapped from
-    // midi_velocity / 127. This matches the visual rule for
-    // the green velocity bars (full height) so the eye
-    // reads PGA bars as "velocity for toms" — which they are
-    // now that velocity is computed from the PGA envelope.
-    const markerTop = PAD.top + plotH * 0.05;
-    const maxMarkerH = plotH * 0.40;
+    // Toms PGA cleanup (2026-06-12). The previous top-aligned
+    // draw ("grow down from markerTop") made PGA bars hard to
+    // compare against the other stems' velocity bars, which are
+    // bottom-anchored (velocity 0 at the top, 127 at the bottom).
+    // Switched to bottom-anchored growth so velocity 127 fills
+    // the full plotH and velocity 80 fills 80/127 of plotH,
+    // matching the green velocity-bar convention used elsewhere.
+    const maxBarH = plotH;
 
     for (const event of events) {
         if (event.time == null) continue;
@@ -665,25 +676,28 @@ function drawPgaEventBars(ctx, events, timeToX, PAD, plotW, plotH) {
         const x = timeToX(event.time);
         if (x < PAD.left - barWidth || x > PAD.left + plotW + barWidth) continue;
 
-        // Bar height = midi_velocity / 127, mapped to maxMarkerH.
+        // Bar height = midi_velocity / 127, mapped to full plotH.
         // Falls back to a sensible default if velocity is missing
         // (older sidecars).
         let velocity = event.midi_velocity;
         if (velocity == null) {
             velocity = isFiltered ? 60 : 100;
         }
-        const barH = Math.max(4, (velocity / 127) * maxMarkerH);
+        const barH = Math.max(4, (velocity / 127) * maxBarH);
+        // Bottom-anchored: the bar grows UP from the bottom of
+        // the events panel (barTop = PAD.top + plotH - barH).
+        const barTop = PAD.top + plotH - barH;
 
         // Filled rectangle — faded for FILTERED, full for KEPT
         ctx.globalAlpha = isFiltered ? 0.35 : 0.85;
         ctx.fillStyle = WAVEFORM_COLORS.markerPga;
-        ctx.fillRect(x - barWidth / 2, markerTop, barWidth, barH);
+        ctx.fillRect(x - barWidth / 2, barTop, barWidth, barH);
 
         // Outline for crispness at zoom levels
         ctx.globalAlpha = isFiltered ? 0.4 : 1.0;
         ctx.strokeStyle = WAVEFORM_COLORS.markerPga;
         ctx.lineWidth = 0.5;
-        ctx.strokeRect(x - barWidth / 2, markerTop, barWidth, barH);
+        ctx.strokeRect(x - barWidth / 2, barTop, barWidth, barH);
     }
     ctx.globalAlpha = 1.0;
 }
@@ -1145,6 +1159,16 @@ function updateLegendBar(stemData, displayEvents, pgaEvents, spectralOverlayActi
         // in the per-classification / hihat grouping so they don't
         // double-count.
         if (e.method === 'spectral') continue;
+        // PGA events (method='percentile_gated') are surfaced as a
+        // single "PGA (N)" legend entry below; skip them in the
+        // per-classification grouping so the user's "Type 1/2/3"
+        // grouping (which is a per-stem k-means classification
+        // label, not a method tag) doesn't show phantom Type entries
+        // for toms. Toms is PGA-only (2026-06-12) — its
+        // events_configured list contains only method=
+        // 'percentile_gated' events, and the per-classification
+        // grouping is meaningless for that single-method view.
+        if (e.method === 'percentile_gated') continue;
         // Check for hihat open/closed classification first
         if (isHihat && e.hihat_state) {
             hihatOpenGroups[e.hihat_state]++;

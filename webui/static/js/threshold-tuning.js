@@ -64,50 +64,19 @@ const STEM_SLIDER_CONFIGS = {
         { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' },
         { key: 'expected_clusters', label: '🥁 Sound Types', min: 1, max: 3, step: 1, fallback: 2, unit: '', classification: true }
     ],
-    toms: [
-        // Onset events visibility gate (2026-06-10 round 2). When
-        // OFF, energy-detected events are removed from
-        // events_configured entirely (spectral events unchanged).
-        // The dependent filter sliders below carry
-        // `dependsOn: 'onset_events_enabled'` so the UI shows them
-        // grayed (visually disabled) when the gate is off — but
-        // they still exist in the DOM for the buildConfigUpdates
-        // path. The two new spectrogram filters below are
-        // independent (no dependsOn) because they only act on
-        // spectral events which are unaffected by the gate.
-        { key: 'onset_events_enabled', label: '🚦 Onset Events (Toms)', type: 'toggle', fallback: true, unit: '',
-          help: 'When on, energy-detected onset events are shown. When off, they are removed from the data (spectral events unaffected).' },
-        { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 500, step: 1, fallback: 80, unit: '', dependsOn: 'onset_events_enabled' },
-        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '', dependsOn: 'onset_events_enabled' },
-        { key: 'expected_clusters', label: '🥁 Sound Types', min: 1, max: 4, step: 1, fallback: 3, unit: '', classification: true, dependsOn: 'onset_events_enabled' },
-
-        // Spectrogram filters (2026-06-10, replacement set).
-        // The previous implementation had a snap-mask with a tiny
-        // default threshold (0.001) that silently hid events on
-        // first Save, plus a 3-stage advanced filter that operated
-        // on a clamp-to-1.0 strength field and therefore couldn't
-        // distinguish band_max_ratio 18.99 from 459.12. The user
-        // asked for "simple" — these two controls express the
-        // intent directly on the RAW spectral data:
-        //
-        //   1. Show Only Snap Events — drop spectral events with
-        //      snap_delta == 0 (wire-tail / decay kill switch).
-        //   2. Top/2nd Ratio Greater Than — drop spectral events
-        //      whose band_max_ratio exceeds the slider value. The
-        //      slider is 0 = Off / Disabled, and the max is the
-        //      dataset's actual max ratio so the user can express
-        //      the full range without losing precision.
-        //
-        // The slider's max and step are computed dynamically at
-        // build time (see buildSlidersForStem — it walks
-        // events_spectral for the active stem and derives the
-        // max from the data). The static `max`/`step` here are
-        // fallbacks for when no events are available.
-        { key: 'show_only_snap_events', label: '🎯 Show Only Snap Events (Toms)', type: 'toggle', fallback: false, unit: '',
-          help: 'When on, spectral events whose snap_delta is zero or null are filtered out. Typical wire-tail / decay kill switch.' },
-        { key: 'band_max_ratio_max', label: 'Filter Events with Top/2nd Ratio Greater Than (Toms)', min: 0, max: 1000, step: 0.1, fallback: 0, unit: '',
-          help: 'Drop spectral events whose band_max_ratio (top band / second-highest band) is greater than this value. 0 = Off / Disabled. The slider max is the dataset\'s actual max ratio so the full range is expressible.' },
-    ],
+    // Toms (2026-06-12): the toms pipeline is PGA-only (see
+    // processing_shell._build_events_configured and
+    // percentile_gated_detector.py). The previous energy + spectral
+    // filters (geomean / reverb attack / sound types / snap mask /
+    // band-max-ratio ceiling / onset-events gate) operated on events
+    // that are no longer in events_configured for toms — they were
+    // removed because toms detection now uses the percentile-gated
+    // broad-attack (PGA) detector exclusively. The toms Threshold
+    // Tuning slideout is therefore empty until a PGA-specific slider
+    // (e.g. pga_min_prominence) is wired in. Keeping the array
+    // non-empty here so the build path still produces the
+    // "No tunable parameters for this stem." fallback cleanly.
+    toms: [],
     hihat: [
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 200, step: 0.5, fallback: 8, unit: '' },
         { key: 'min_sustain_ms', label: 'Min Sustain', min: 0, max: 500, step: 5, fallback: 25, unit: 'ms' },
@@ -787,13 +756,13 @@ const STEM_FEATURE_CHOICES = {
         { value: 'spectral_centroid_hz', label: 'Brightness' },
         { value: 'pitch_hz', label: 'Pitch' },
     ],
-    toms: [
-        { value: 'auto', label: 'Auto' },
-        { value: 'pitch_hz', label: 'Pitch' },
-        { value: 'spectral_centroid_hz', label: 'Brightness' },
-        { value: 'stereo_width', label: 'Stereo Width' },
-        { value: 'pan_confidence', label: 'Pan Position' },
-    ],
+    // Toms (2026-06-12): the toms pipeline is PGA-only, so the
+    // cluster-feature dropdown (which re-runs k-means over a chosen
+    // per-event feature) is no longer exposed in the toms slideout.
+    // The cluster cards below (Low/Mid/High pitch note assignment)
+    // still render because they're useful for mapping the auto-
+    // derived k-means labels onto MIDI notes — that part doesn't
+    // change. The feature dropdown is what the user removed.
     cymbals: [
         { value: 'auto', label: 'Auto' },
         { value: 'spectral_centroid_hz', label: 'Brightness' },
