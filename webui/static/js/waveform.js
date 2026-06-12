@@ -633,42 +633,59 @@ function drawEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer
     }
 }
 
-// PGA events have a minimal shape (time + method + status — no
-// velocity, no strength). Render them as fixed-height violet
-// markers near the top of the events panel so they don't
-// collide visually with the velocity bars. Bar height is
-// intentionally NOT derived from velocity (PGA events have no
-// velocity) — they sit at a constant mid-height to look like
-// a third-color marker, not a competing velocity bar.
+// PGA events (2026-06-11 cleanup): the toms pipeline is PGA-only.
+// PGA events now have a midi_velocity (scaled from the PGA
+// envelope_value to [min_velocity, max_velocity] from settings),
+// and a status of KEPT or FILTERED. The bar height is the
+// midi_velocity / 127 normalized into the marker region; KEPT
+// events render full opacity, FILTERED events render faded.
+// FILTERED events are hidden entirely when the sidecar /
+// tuning panel is closed (they're diagnostic only — the
+// user only wants to see them when actively investigating
+// the filter).
 function drawPgaEventBars(ctx, events, timeToX, PAD, plotW, plotH) {
     const barWidth = 2;
-    // Position the PGA bars at a fixed mid-plot height (45-55% of
-    // plotH) — above the velocity=0 baseline but below the top
-    // axis. The visual rule: green = velocity bar (full height),
-    // magenta = spectral A/B (full height), violet = PGA marker
-    // (mid-height). PGA fires on a different signal entirely
-    // (broadband percussive attack, not velocity), so a different
-    // visual treatment helps the user read the three signals at
-    // a glance without confusing them.
-    const markerH = Math.max(8, plotH * 0.1);
-    const markerTop = PAD.top + plotH * 0.45;
+    // The marker region: 45-90% of plotH, growing DOWN from
+    // markerTop as the bar gets taller. KEPT bars use the
+    // full 0-45% range (plotH * 0.45) mapped from
+    // midi_velocity / 127. This matches the visual rule for
+    // the green velocity bars (full height) so the eye
+    // reads PGA bars as "velocity for toms" — which they are
+    // now that velocity is computed from the PGA envelope.
+    const markerTop = PAD.top + plotH * 0.05;
+    const maxMarkerH = plotH * 0.40;
 
     for (const event of events) {
         if (event.time == null) continue;
+        const isFiltered = event.status === 'FILTERED';
+        // Hide FILTERED events when the analysis panel is closed
+        if (isFiltered && typeof tuningPanelOpen !== 'undefined' && !tuningPanelOpen) {
+            continue;
+        }
         const x = timeToX(event.time);
         if (x < PAD.left - barWidth || x > PAD.left + plotW + barWidth) continue;
 
-        // Filled rectangle
-        ctx.globalAlpha = 0.85;
+        // Bar height = midi_velocity / 127, mapped to maxMarkerH.
+        // Falls back to a sensible default if velocity is missing
+        // (older sidecars).
+        let velocity = event.midi_velocity;
+        if (velocity == null) {
+            velocity = isFiltered ? 60 : 100;
+        }
+        const barH = Math.max(4, (velocity / 127) * maxMarkerH);
+
+        // Filled rectangle — faded for FILTERED, full for KEPT
+        ctx.globalAlpha = isFiltered ? 0.35 : 0.85;
         ctx.fillStyle = WAVEFORM_COLORS.markerPga;
-        ctx.fillRect(x - barWidth / 2, markerTop, barWidth, markerH);
+        ctx.fillRect(x - barWidth / 2, markerTop, barWidth, barH);
 
         // Outline for crispness at zoom levels
-        ctx.globalAlpha = 1.0;
+        ctx.globalAlpha = isFiltered ? 0.4 : 1.0;
         ctx.strokeStyle = WAVEFORM_COLORS.markerPga;
         ctx.lineWidth = 0.5;
-        ctx.strokeRect(x - barWidth / 2, markerTop, barWidth, markerH);
+        ctx.strokeRect(x - barWidth / 2, markerTop, barWidth, barH);
     }
+    ctx.globalAlpha = 1.0;
 }
 
 // ─── Data Helpers ────────────────────────────────────────────────────────
@@ -1468,6 +1485,21 @@ function drawTooltip(event, W, H) {
         if (event.hr_peak_offset_ms != null) lines.push(`HR peak offset: ${event.hr_peak_offset_ms >= 0 ? '+' : ''}${event.hr_peak_offset_ms.toFixed(1)} ms (n_fft=128/hop=4 peak vs PGA time)`);
         if (event.decay_envelope_energy != null) lines.push(`Decay envelope: ${event.decay_envelope_energy.toFixed(0)} (15ms post-peak ring energy; FPs <60K, real >60K)`);
         if (event.decay_col_min_median_db != null) lines.push(`Decay col_min: ${event.decay_col_min_median_db.toFixed(1)} dB (15ms post-peak broadband floor; FPs -84 to -90, real -60 to -84)`);
+        // Toms cleanup (2026-06-11): filter status, midi
+        // velocity (the value that lands in the MIDI file),
+        // and the filter reason. Filtered events are kept
+        // in the sidecar so the user can see them faded
+        // when the analysis panel is open.
+        if (event.status != null) {
+            const statusTag = event.status === 'FILTERED' ? ' (faded — hidden when panel closed)' : '';
+            lines.push(`Status: ${event.status}${statusTag}`);
+        }
+        if (event.midi_velocity != null) lines.push(`MIDI velocity: ${event.midi_velocity} (PGA envelope → [min, max] from settings)`);
+        if (event.filter_reason != null) lines.push(`Filter reason: ${event.filter_reason}`);
+        if (event.pga_filter_config != null) {
+            const cfg = event.pga_filter_config;
+            lines.push(`Active filter: pga_min_prominence=${cfg.pga_min_prominence}, velocity=[${cfg.min_velocity}, ${cfg.max_velocity}]`);
+        }
     }
     if (event.geomean != null) lines.push(`Geomean: ${event.geomean}`);
     if (event.amplitude != null) lines.push(`Amplitude: ${event.amplitude}`);

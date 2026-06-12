@@ -352,7 +352,17 @@ def _refilter_events(
         # band-ratio quality floor already enforces. Keep them
         # unconditionally here; the snap-mask pass handles the
         # low-snap-delta FPs.
-        if event.get('method') == 'spectral':
+        #
+        # PGA events (method='percentile_gated') are likewise exempt
+        # (2026-06-11). They have no geomean/sustain/strength values —
+        # the prominence-vs-threshold gate is the PGA quality signal
+        # and it was already applied at detection time
+        # (see processing_shell step 11.6 / ``pga_min_prominence``).
+        # Sending them through ``should_keep_onset`` would default
+        # ``geomean`` to 0.0 and unconditionally FILTER every PGA
+        # event, silently dropping the entire toms stream on rebuild
+        # when ``geomean_threshold`` is non-zero.
+        if event.get('method') in ('spectral', 'percentile_gated'):
             continue
 
         is_kept = should_keep_onset(
@@ -813,13 +823,24 @@ def rebuild_events_from_analysis(
         # Onset events visibility gate (2026-06-10 round 2). When
         # the user has turned the toms onset_events toggle OFF,
         # energy-detected events are removed from the
-        # events_configured list entirely. Spectral events are
-        # unaffected. This is the "I want a spectral-only toms
+        # events_configured list entirely. Spectral and PGA events
+        # are unaffected. This is the "I want a spectral-only toms
         # view" path. The dropped events are NOT in events_sensitive
         # either — they're gone from the saved MIDI and the view.
         # The user must re-run full detection to restore them.
+        #
+        # 2026-06-11: PGA events (method='percentile_gated') are now
+        # also exempt. Toms switched to PGA-only on 2026-06-11; the
+        # gate previously kept only ``method == 'spectral'`` events
+        # which silently dropped every PGA event when
+        # ``onset_events_enabled: false`` was set in midiconfig.yaml
+        # (the legacy default in many user projects). Keep both
+        # spectral and PGA when the gate is closed.
         if spectral_config.get('onset_events_enabled') is False:
-            events = [e for e in events if e.get('method') == 'spectral']
+            events = [
+                e for e in events
+                if e.get('method') in ('spectral', 'percentile_gated')
+            ]
 
         # Extract kept events for MIDI generation
         kept_events = [e for e in events if e.get('status') == 'KEPT']

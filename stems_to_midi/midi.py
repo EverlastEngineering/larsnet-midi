@@ -83,7 +83,15 @@ def create_midi_file(
     )
     
     # Prepare all events (convert times to beats using pure function)
+    print(f"  DEBUG create_midi_file: events_by_stem keys={list(events_by_stem.keys())}")
+    for _stem, _evs in events_by_stem.items():
+        print(f"    {_stem}: {len(_evs)} events")
+        for _i, _e in enumerate(_evs[:3]):
+            print(f"      [{_i}] {_e}")
     prepared_events = prepare_midi_events_for_writing(events_by_stem, tempo)
+    print(f"  DEBUG create_midi_file: prepared_events={len(prepared_events)}")
+    for _p in prepared_events[:3]:
+        print(f"      prepared: {_p}")
     
     # Add all prepared events to MIDI file
     for event in prepared_events:
@@ -215,6 +223,21 @@ def _serialize_onset_events(
         'attack_sharpness', 'envelope_continuity', 'peak_prominence',
         'spectral_centroid_hz', 'spectral_flux',
         'gap_from_previous_sec',
+        # Toms PGA cleanup (2026-06-11). These live on
+        # PGA events (method='percentile_gated'). The
+        # events_configured list for toms is the PGA list,
+        # so these fields are always present-or-absent
+        # there. midi_velocity is the integer that landed
+        # in the MIDI file (per-file linear scale of the
+        # PGA envelope_value into [min_velocity,
+        # max_velocity]). filter_reason is a human-readable
+        # explanation of why the event was dropped (e.g.
+        # "below pga_min_prominence (800 < 1000)").
+        # pga_filter_config records the active filter
+        # threshold at detection time so the WebUI can
+        # show "Active filter: pga_min_prominence=1000"
+        # alongside any filtered event.
+        'midi_velocity', 'filter_reason', 'pga_filter_config',
     )
 
     for onset_data in onset_data_list:
@@ -447,6 +470,13 @@ def _serialize_pga_events(pga_events: list) -> list:
             'decay_envelope_energy': _round_value(ev.get('decay_envelope_energy'), 2),
             'decay_col_min_median_db': _round_value(ev.get('decay_col_min_median_db'), 2),
             'inter_onset_ms': _round_value(ev.get('inter_onset_ms'), 2),
+            # Toms cleanup (2026-06-11): filter metadata.
+            # FILTERED events are kept in the sidecar so the
+            # WebUI can render them faded; the MIDI output
+            # skips them.
+            'midi_velocity': ev.get('midi_velocity'),
+            'filter_reason': ev.get('filter_reason'),
+            'pga_filter_config': ev.get('pga_filter_config'),
         })
     return out
 

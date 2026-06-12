@@ -907,9 +907,16 @@ def _build_events_configured(
     detection_method: str,
     stem_type: str = None,
     config: dict = None,
+    pga_onset_data: list = None,
 ) -> list:
     """
     Build the ``events_configured`` list for the analysis.json sidecar.
+
+    For toms (2026-06-11), the PGA-only path is taken: the
+    function returns the PGA events with their existing
+    ``status`` field (KEPT / FILTERED) untouched. Energy +
+    spectral-transient inputs are ignored. Other stems keep
+    the legacy behavior.
 
     The energy detector and the spectral-transient detector BOTH always
     run (see :func:`process_stem_to_midi`); this function only chooses
@@ -966,6 +973,16 @@ def _build_events_configured(
         the KEPT counter, so the order of energy events here must match
         the order of KEPT events in ``midi_events``.
     """
+    # Toms short-circuit (2026-06-11): PGA-only pipeline.
+    # The energy + spectral-transient inputs are empty for toms
+    # (see process_stem_to_midi), so the legacy 'energy' /
+    # 'spectral' / 'both' modes don't apply. We pass through
+    # the PGA events with their existing status (KEPT / FILTERED)
+    # — the WebUI uses status to render full-opacity vs faded,
+    # and the MIDI serializer skips FILTERED events.
+    if stem_type == 'toms' and pga_onset_data is not None:
+        return list(pga_onset_data)
+
     # Spectral quality floor: only events with band_max_ratio at or
     # above this threshold are treated as real hits. Events below
     # this are post-hit tail / decay artefacts — the energy in some
@@ -1272,7 +1289,18 @@ def process_stem_to_midi(
         print(f"    Onset detection: threshold={onset_params['threshold']}, delta={onset_params['delta']}, wait={onset_params['wait']} (~{onset_params['wait']*11:.0f}ms min spacing)")
 
     print(f"    Found {len(onset_times)} hits (before filtering) -> MIDI note {getattr(drum_mapping, stem_type)}")
-    
+
+    # Toms uses the PGA detector exclusively (2026-06-11).
+    # The energy + spectral-transient detectors above still
+    # run (they're cheap) so Steps 3-10 don't crash on empty
+    # onset_times, but the toms MIDI events built in Step 8
+    # are OVERWRITTEN by the PGA events list below (see the
+    # toms branch at the end of Step 8). The energy/spectral
+    # events are also discarded before events_configured
+    # (see _build_events_configured).
+    if stem_type == 'toms':
+        print(f"    [toms] Keeping {len(onset_times)} energy-detector hits for the toms pipeline (will be replaced by PGA events at the end)")
+
     if len(onset_times) == 0:
         return {'events': [], 'events_configured': [], 'all_onset_data': [], 'sensitive_onset_data': [], 'spectral_onset_data': [], 'spectral_config': None, 'envelope_data': envelope_data}
     
@@ -1604,6 +1632,19 @@ def process_stem_to_midi(
         spectral_data=filtered_onset_data,
         use_sustain_duration=spectral_config.get('use_sustain_duration', False) if spectral_config else False
     )
+
+    # Toms MIDI events come from PGA, not the energy detector
+    # (2026-06-11). The toms pipeline is PGA-only. Each
+    # KEPT PGA event becomes a single MIDI note at the
+    # drum_mapping.toms note. FILTERED events are skipped
+    # (they don't go to MIDI). The midi_velocity attached
+    # to each PGA event is the velocity byte.
+    # This runs AFTER the PGA detection below — the toms
+    # branch replaces the energy-detector `events` list
+    # (which was built by _create_midi_events above) with
+    # the PGA-derived list. For other stems, the toms
+    # branch is skipped and the energy-detector `events`
+    # are kept as-is.
     
     # Step 9: Pass 2 — Classify notes from stored spectral features
     # For toms/cymbals/snare: clusters on spectral_centroid_hz.
@@ -1636,15 +1677,21 @@ def process_stem_to_midi(
     # config (spectral_snap_bands, spectral_snap_min_delta); falls back
     # to module defaults when not set. See
     # stems_to_midi/spectral_transient_core.py for the algorithm.
-    spectral_cfg = build_spectral_config_for_stem(stem_type, config or {})
-    spectral_onset_data = _run_spectral_detection(
-        audio=audio,
-        audio_mono=audio_mono,
-        sr=sr,
-        is_stereo=is_stereo,
-        stem_type=stem_type,
-        config=spectral_cfg,
-    )
+    # Toms skips this — see comment above at the energy-detector
+    # discard point. The toms pipeline is PGA-only.
+    if stem_type == 'toms':
+        spectral_cfg = None
+        spectral_onset_data = []
+    else:
+        spectral_cfg = build_spectral_config_for_stem(stem_type, config or {})
+        spectral_onset_data = _run_spectral_detection(
+            audio=audio,
+            audio_mono=audio_mono,
+            sr=sr,
+            is_stereo=is_stereo,
+            stem_type=stem_type,
+            config=spectral_cfg,
+        )
     if spectral_onset_data:
         print(f"    Spectral detection: {len(spectral_onset_data)} candidate onsets")
 
@@ -1702,32 +1749,79 @@ def process_stem_to_midi(
     if pga_onset_data:
         print(f"    Percentile-gated detection: {len(pga_onset_data)} candidate onsets")
 
-    # Step 11.6: PGA prominence filter (2026-06-10).
-    # Post-detection filter: drop PGA events with prominence
-    # below ``pga_min_prominence``. The default 1000 was
-    # chosen empirically — real toms strikes in the
-    # project 4 calibration had prominence 2000-15000, the
-    # 14.84/14.97 soft hits had prominence 2127-2727 (so
-    # they survive the default — duration feature catches
-    # them), and the 74.748/74.925 FPs had prominence
-    # 127-432 (so the default kills them).
-    # The threshold is exposed in midiconfig.yaml under
-    # ``onset_detection.pga_min_prominence`` so the user
-    # can tune per-project. See percentile_gated_detector.py
-    # for the prominence definition (scipy.signal.find_peaks).
+    # Step 11.6: PGA prominence filter (2026-06-10 / 2026-06-11).
+    # Post-detection filter: tag PGA events with prominence below
+    # ``pga_min_prominence`` as FILTERED (with a filter_reason
+    # string), but keep them in the list so the WebUI can render
+    # them as faded markers. The MIDI output skips FILTERED events.
+    # The default 1000 was chosen empirically — real toms strikes
+    # in the project 4 calibration had prominence 2000-15000, the
+    # 14.84/14.97 soft hits had prominence 2127-2727 (so they
+    # survive the default — duration feature catches them), and
+    # the 74.748/74.925 FPs had prominence 127-432 (so the default
+    # kills them). The threshold is exposed in midiconfig.yaml
+    # under ``onset_detection.pga_min_prominence`` so the user
+    # can tune per-project. See percentile_gated_detector.py for
+    # the prominence definition (scipy.signal.find_peaks).
     pga_min_prominence = (
         config.get('onset_detection', {}).get('pga_min_prominence', 1000.0)
     )
-    pga_kept = [
-        ev for ev in pga_onset_data
-        if (ev.get('prominence') is None
-            or ev.get('prominence', 0) >= pga_min_prominence)
-    ]
-    pga_filtered_count = len(pga_onset_data) - len(pga_kept)
+    pga_filtered_count = 0
+    for ev in pga_onset_data:
+        prom = ev.get('prominence')
+        if prom is not None and prom < pga_min_prominence:
+            ev['status'] = 'FILTERED'
+            ev['filter_reason'] = (
+                f"below pga_min_prominence ({prom:.0f} < {pga_min_prominence:.0f})"
+            )
+            pga_filtered_count += 1
     if pga_filtered_count:
         print(f"    PGA prominence filter (min={pga_min_prominence}): "
-              f"dropped {pga_filtered_count}/{len(pga_onset_data)}")
-    pga_onset_data = pga_kept
+              f"tagged {pga_filtered_count} events as FILTERED")
+
+    # Step 11.6.5: Compute midi_velocity per event (2026-06-11).
+    # The toms pipeline uses the PGA envelope_value as the sole
+    # velocity signal. We linearly map the per-file envelope
+    # range [env_min, env_max] onto the configured
+    # [min_velocity, max_velocity] clamp from midiconfig.yaml.
+    # The mapping is per-file (data-driven) — no magic numbers.
+    # If all envelope values are equal (only one event, or
+    # all events at the same envelope), every event gets
+    # min_velocity.
+    midi_min = int(config.get('midi', {}).get('min_velocity', 80))
+    midi_max = int(config.get('midi', {}).get('max_velocity', 110))
+    # Ensure sane ordering even if the user mis-configured
+    if midi_max <= midi_min:
+        midi_max = midi_min + 1
+    env_vals = [ev.get('envelope_value') for ev in pga_onset_data
+                if ev.get('envelope_value') is not None]
+    if env_vals:
+        env_min = min(env_vals)
+        env_max = max(env_vals)
+    else:
+        env_min, env_max = 0.0, 1.0
+    for ev in pga_onset_data:
+        env = ev.get('envelope_value')
+        if env is None or env_max == env_min:
+            ev['midi_velocity'] = midi_min
+        else:
+            t = (env - env_min) / (env_max - env_min)
+            ev['midi_velocity'] = int(round(midi_min + t * (midi_max - midi_min)))
+        # Clamp defensively
+        ev['midi_velocity'] = max(1, min(127, ev['midi_velocity']))
+
+    # Step 11.6.6: Record the active filter config in the
+    # event-level metadata (2026-06-11). The WebUI / sidecar
+    # inspection uses this to display "which filter dropped
+    # which event" without having to look at midiconfig.yaml.
+    pga_filter_config = {
+        'pga_min_prominence': pga_min_prominence,
+        'min_velocity': midi_min,
+        'max_velocity': midi_max,
+    }
+    # Attach to each event so the serializer can echo it
+    for ev in pga_onset_data:
+        ev['pga_filter_config'] = pga_filter_config
 
     # Step 11.7: Per-event feature extraction (2026-06-10).
     # Compute duration, pitch, decay, brightness, etc. for
@@ -1781,6 +1875,33 @@ def process_stem_to_midi(
     detection_method = (
         config.get('onset_detection', {}).get('detection_method', 'both')
     )
+    # Toms MIDI events come from PGA, not the energy detector
+    # (2026-06-11). The toms pipeline is PGA-only. Each
+    # KEPT PGA event becomes a single MIDI note at the
+    # drum_mapping.toms note. FILTERED events are skipped
+    # (they don't go to MIDI). The midi_velocity attached
+    # to each PGA event is the velocity byte.
+    # This runs BEFORE _build_events_configured so the
+    # sidecar's _serialize_onset_events can attach the
+    # correct note/velocity to the KEPT PGA events in
+    # events_configured (the serializer uses midi_events
+    # indexed by KEPT position).
+    if stem_type == 'toms':
+        events = []
+        for ev in pga_onset_data:
+            if ev.get('status') == 'FILTERED':
+                continue
+            events.append({
+                'time': float(ev['time']),
+                'note': int(note),
+                'velocity': int(ev.get('midi_velocity', min_velocity)),
+                'duration_ms': ev.get('duration_ms'),
+                'method': 'percentile_gated',
+                'classification': None,
+                'pga_event': ev,
+            })
+        print(f"    [toms] Built {len(events)} MIDI events from PGA (FILTERED skipped)")
+
     events_configured = _build_events_configured(
         all_onset_data=all_onset_data,
         spectral_onset_data=spectral_onset_data,
@@ -1788,6 +1909,7 @@ def process_stem_to_midi(
         detection_method=detection_method,
         stem_type=stem_type,
         config=config,
+        pga_onset_data=pga_onset_data,
     )
     print(f"    Detection method '{detection_method}': "
           f"{len(events_configured)} events in events_configured "
