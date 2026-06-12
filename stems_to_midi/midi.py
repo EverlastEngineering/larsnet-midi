@@ -247,12 +247,21 @@ def _serialize_onset_events(
         # velocity, Status, etc.) and missing the per-event
         # feature battery. Adding all the PGA per-event
         # fields here so they survive to the sidecar.
+        #
+        # The 4 PGA detector fields (frame, envelope_value,
+        # prominence, iqr_threshold) attached directly in
+        # processing_shell.py at the per-event dict build
+        # (around line 1745-1751) were ALSO missing until
+        # 2026-06-12. They live on the same set of PGA
+        # events and the WebUI tooltip reads them at the
+        # top of the PGA block.
         'midi_velocity', 'filter_reason', 'pga_filter_config',
         'duration_ms', 'attack_rise_ms', 'inter_onset_ms',
         'root_pitch_hz', 'pitch_confidence',
         'decay_t60_ms', 'spectral_flatness',
         'hr_peak_offset_ms', 'decay_envelope_energy',
         'decay_col_min_median_db',
+        'frame', 'envelope_value', 'prominence', 'iqr_threshold',
     )
 
     for onset_data in onset_data_list:
