@@ -416,6 +416,9 @@ def _serialize_pga_events(pga_events: list) -> list:
             'decay_t60_ms': float,    # T60 in the broad band
             'spectral_centroid_hz': float,  # brightness
             'spectral_flatness': float,  # 0-1 attack-region flatness
+            'hr_peak_offset_ms': float,  # PGA-vs-high-res timing offset
+            'decay_envelope_energy': float,  # 15ms post-peak ring energy
+            'decay_col_min_median_db': float,  # 15ms post-peak col_min
             'inter_onset_ms': float,  # time to next event
         }
     """
@@ -440,6 +443,9 @@ def _serialize_pga_events(pga_events: list) -> list:
             'decay_t60_ms': _round_value(ev.get('decay_t60_ms'), 2),
             'spectral_centroid_hz': _round_value(ev.get('spectral_centroid_hz'), 2),
             'spectral_flatness': _round_value(ev.get('spectral_flatness'), 4),
+            'hr_peak_offset_ms': _round_value(ev.get('hr_peak_offset_ms'), 2),
+            'decay_envelope_energy': _round_value(ev.get('decay_envelope_energy'), 2),
+            'decay_col_min_median_db': _round_value(ev.get('decay_col_min_median_db'), 2),
             'inter_onset_ms': _round_value(ev.get('inter_onset_ms'), 2),
         })
     return out

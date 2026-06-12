@@ -1766,6 +1766,9 @@ def process_stem_to_midi(
                     'decay_t60_ms': None,
                     'spectral_centroid_hz': None,
                     'spectral_flatness': None,
+                    'hr_peak_offset_ms': None,
+                    'decay_envelope_energy': None,
+                    'decay_col_min_median_db': None,
                     'inter_onset_ms': None,
                 }
             ev.update(feats)

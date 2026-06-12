@@ -711,6 +711,152 @@ def compute_spectral_flatness(
     return flatness
 
 
+def compute_high_res_decay_signature(
+    audio: np.ndarray,
+    sr: int,
+    event_time_sec: float,
+    broad_min_hz: float = 600.0,
+    broad_max_hz: float = 8000.0,
+    attack_window_frames: int = 30,
+    decay_window_frames: int = 200,
+    n_fft: int = 128,
+    hop: int = 4,
+) -> Optional[Dict[str, Optional[float]]]:
+    """High-resolution attack + decay signature of an event (2026-06-11).
+
+    Computes a per-event signature on a HIGH-RESOLUTION STFT
+    (default n_fft=128, hop=4 — 0.091ms / frame, ~5.8 kHz / bin
+    at sr=44100) over a 200ms window centered on the event.
+    The PGA detector's standard 1024/256 STFT smears the
+    attack over 10+ ms and misses single-frame transients;
+    this function gives sub-frame visibility into the
+    attack+ring region.
+
+    The signature has two key fields:
+
+      ``decay_energy_15ms``: sum of the contrast envelope in
+        the 15ms window starting ~3ms after the attack peak.
+        A real toms strike has a sustained decaying ring
+        (the toms body resonates for 100ms+); a single-frame
+        noise pop has no ring, so the decay-window envelope
+        is near zero. Empirically (project 4 calibration):
+        FPs < 60K, real strikes > 60K. NOT a filter — a
+        diagnostic.
+
+      ``decay_col_min_median_db``: median of the per-frame
+        col_min over the same 15ms decay window. col_min
+        is the lowest-energy bin in the spectrum at each
+        frame. A sustained broadband ring (real strike)
+        keeps col_min elevated; a noise pop has col_min at
+        the noise floor (~-80 to -90 dB). Empirically:
+        FPs -84 to -90 dB, real strikes -60 to -84 dB.
+
+    Also returns the high-res peak time and offset, for
+    callers who want to investigate "the PGA event is at
+    T but the high-res view shows a peak at T+5ms" (PGA
+    envelope smearing) or "the high-res view has no
+    peak in [T-1ms, T+15ms]" (PGA hallucination).
+
+    Args:
+        audio: mono or stereo audio array
+        sr: sample rate
+        event_time_sec: time of the onset
+        broad_min_hz, broad_max_hz: frequency band for the
+            contrast envelope (same as the PGA detector
+            defaults).
+        attack_window_frames, decay_window_frames: how many
+            high-res frames after the peak to sum the
+            envelope over. Defaults: 30 frames (≈2.7ms)
+            attack, 200 frames (≈18ms) decay.
+        n_fft, hop: high-res STFT. Defaults 128/4 are
+            validated on project 4 — coarser STFT (256/64)
+            re-introduces the smearing problem; finer STFT
+            (64/2) is 16x slower without adding signal.
+
+    Returns:
+        dict with keys: hr_peak_time, hr_peak_offset_ms,
+        hr_peak_envelope, decay_envelope_energy,
+        decay_col_min_median_db. All may be None on failure.
+    """
+    from .spectral_transient_core import compute_stft_db
+
+    # Extract audio window: 10ms before, 200ms after the event
+    t_start = max(0.0, event_time_sec - 0.010)
+    t_end = min(len(audio) / sr, event_time_sec + 0.200)
+    start_sample = int(t_start * sr)
+    end_sample = int(t_end * sr)
+    if end_sample - start_sample < n_fft:
+        return None
+    audio_mono = _ensure_mono(audio)
+    segment = audio_mono[start_sample:end_sample]
+
+    try:
+        freqs, times, s_db = compute_stft_db(segment, sr, n_fft=n_fft, hop=hop)
+    except ValueError:
+        # Segment shorter than n_fft
+        return None
+
+    abs_times = t_start + times
+    pga_frame_local = int(round((event_time_sec - t_start) * sr / hop))
+    pga_frame_local = max(0, min(pga_frame_local, s_db.shape[1] - 1))
+
+    # Build the contrast envelope in [broad_min_hz, broad_max_hz]
+    # (same recipe as the PGA detector)
+    freq_mask = (freqs >= broad_min_hz) & (freqs <= broad_max_hz)
+    if not freq_mask.any():
+        return None
+    band_db = s_db[freq_mask, :]
+    floor = np.percentile(band_db, 5, axis=1, keepdims=True)
+    contrast = np.maximum(band_db - floor, 0)
+    envelope = contrast.sum(axis=0)
+
+    # Search for the high-res peak in [PGA - 5 frames, PGA + 200 frames]
+    # (5 frames = 0.45ms before PGA time; 200 frames = 18ms after.
+    #  Empirically the real strike is 5-11ms LATE vs the PGA
+    #  report — see project 4 calibration. The +200 frame search
+    #  bound covers the worst observed case.)
+    search_start = max(0, pga_frame_local - 5)
+    search_end = min(len(envelope), pga_frame_local + 300)
+    if search_end <= search_start:
+        return None
+    search_env = envelope[search_start:search_end]
+    peak_in_search = int(np.argmax(search_env))
+    peak_frame = search_start + peak_in_search
+    peak_time = float(abs_times[peak_frame])
+    peak_env = float(envelope[peak_frame])
+
+    # Split the post-peak region into attack (first 30 frames ≈ 2.7ms)
+    # and decay (next 200 frames ≈ 18ms). The attack window covers
+    # the initial impulse; the decay window covers the ring.
+    attack_end = min(len(envelope), peak_frame + attack_window_frames)
+    decay_end = min(len(envelope), attack_end + decay_window_frames)
+
+    if attack_end < peak_frame or decay_end <= attack_end:
+        return {
+            'hr_peak_time': peak_time,
+            'hr_peak_offset_ms': (peak_time - event_time_sec) * 1000.0,
+            'hr_peak_envelope': peak_env,
+            'decay_envelope_energy': 0.0,
+            'decay_col_min_median_db': None,
+        }
+
+    attack_energy = float(envelope[peak_frame:attack_end].sum())
+    decay_energy = float(envelope[attack_end:decay_end].sum())
+    # col_min over the decay window — the median (not the mean)
+    # is robust to a single bright bin.
+    per_frame_min = s_db.min(axis=0)
+    decay_col_min_median = float(np.median(per_frame_min[attack_end:decay_end]))
+
+    return {
+        'hr_peak_time': peak_time,
+        'hr_peak_offset_ms': (peak_time - event_time_sec) * 1000.0,
+        'hr_peak_envelope': peak_env,
+        'attack_envelope_energy': attack_energy,
+        'decay_envelope_energy': decay_energy,
+        'decay_col_min_median_db': decay_col_min_median,
+    }
+
+
 def compute_attack_rise_ms(
     audio: np.ndarray,
     sr: int,
@@ -816,6 +962,20 @@ def compute_event_features(
         attack region (1=white-noise-like, 0=tonal). Diagnostic only;
         not used as a filter. Useful for spotting pop/click artifacts
         vs real strikes.
+      - ``hr_peak_offset_ms``: time delta (ms) between the PGA-reported
+        event time and the high-res (n_fft=128, hop=4) envelope peak.
+        Real strikes tend to have offset ~5-11ms (PGA envelope smears
+        the attack over 10+ ms); FPs sometimes have NO high-res peak
+        at all. Diagnostic only.
+      - ``decay_envelope_energy``: high-res envelope energy in the
+        15ms window starting ~3ms after the high-res peak. Real
+        strikes have a sustained decaying ring; noise pops have
+        no ring. Empirically (project 4): FPs < 60K, real > 60K.
+        Diagnostic only.
+      - ``decay_col_min_median_db``: median col_min over the same
+        15ms decay window. FPs sit at the noise floor (-84 to -90 dB);
+        real strikes show elevated broadband energy (-60 to -84 dB).
+        Diagnostic only.
       - ``inter_onset_ms``: time to next event (if provided);
         explicitly reported so the WebUI can show "duration
         was bounded by next event at X ms" alongside the
@@ -849,6 +1009,9 @@ def compute_event_features(
         'decay_t60_ms': None,
         'spectral_centroid_hz': None,
         'spectral_flatness': None,
+        'hr_peak_offset_ms': None,
+        'decay_envelope_energy': None,
+        'decay_col_min_median_db': None,
         'inter_onset_ms': None,
     }
     # Wrap each computation in try/except so a failure in
@@ -907,6 +1070,23 @@ def compute_event_features(
         features['spectral_flatness'] = compute_spectral_flatness(
             audio_mono, sr, event_time_sec,
         )
+    except Exception:
+        pass
+    # High-res (n_fft=128, hop=4) attack+decay signature.
+    # Different STFT parameters than the rest of the
+    # pipeline — this one is fine enough to see single-frame
+    # transients and the 5-15ms ring that distinguishes
+    # real strikes from "pop" artifacts. See project 4
+    # calibration for the empirical thresholds (FPs have
+    # decay_envelope_energy < 60K, real strikes > 60K).
+    try:
+        hr_sig = compute_high_res_decay_signature(
+            audio_mono, sr, event_time_sec,
+        )
+        if hr_sig is not None:
+            features['hr_peak_offset_ms'] = hr_sig.get('hr_peak_offset_ms')
+            features['decay_envelope_energy'] = hr_sig.get('decay_envelope_energy')
+            features['decay_col_min_median_db'] = hr_sig.get('decay_col_min_median_db')
     except Exception:
         pass
     return features

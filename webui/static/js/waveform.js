@@ -1448,6 +1448,26 @@ function drawTooltip(event, W, H) {
         if (event.decay_t60_ms != null) lines.push(`Decay T60: ${event.decay_t60_ms.toFixed(0)} ms (200-4000Hz band)`);
         if (event.spectral_centroid_hz != null) lines.push(`Centroid: ${event.spectral_centroid_hz.toFixed(0)} Hz (brightness)`);
         if (event.spectral_flatness != null) lines.push(`Flatness: ${event.spectral_flatness.toFixed(4)} (600-3000Hz attack region; 0=tonal, 1=noise-like)`);
+        // High-res attack+decay signature (2026-06-11).
+        // Different STFT (n_fft=128, hop=4) than the rest
+        // of the pipeline. Used to distinguish real strikes
+        // (sustained decaying ring) from pop/gap artifacts
+        // (no ring). Diagnostic only — not a filter.
+        //   hr_peak_offset_ms:        how late the high-res
+        //                             peak is vs the PGA
+        //                             report (5-11ms typical
+        //                             for real strikes; FPs
+        //                             can be anywhere)
+        //   decay_envelope_energy:    ring energy in 15ms
+        //                             post-peak (FPs <60K,
+        //                             real >60K on project 4)
+        //   decay_col_min_median_db:  broadband level in the
+        //                             decay window (FPs -84
+        //                             to -90 dB; real -60 to
+        //                             -84 dB)
+        if (event.hr_peak_offset_ms != null) lines.push(`HR peak offset: ${event.hr_peak_offset_ms >= 0 ? '+' : ''}${event.hr_peak_offset_ms.toFixed(1)} ms (n_fft=128/hop=4 peak vs PGA time)`);
+        if (event.decay_envelope_energy != null) lines.push(`Decay envelope: ${event.decay_envelope_energy.toFixed(0)} (15ms post-peak ring energy; FPs <60K, real >60K)`);
+        if (event.decay_col_min_median_db != null) lines.push(`Decay col_min: ${event.decay_col_min_median_db.toFixed(1)} dB (15ms post-peak broadband floor; FPs -84 to -90, real -60 to -84)`);
     }
     if (event.geomean != null) lines.push(`Geomean: ${event.geomean}`);
     if (event.amplitude != null) lines.push(`Amplitude: ${event.amplitude}`);

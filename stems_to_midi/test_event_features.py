@@ -35,6 +35,7 @@ from stems_to_midi.event_features import (
     compute_decay_t60_ms,
     compute_spectral_centroid_hz,
     compute_spectral_flatness,
+    compute_high_res_decay_signature,
     compute_event_features,
     compute_event_features_for_list,
 )
@@ -571,3 +572,141 @@ class TestSpectralFlatness:
         assert feats['spectral_flatness'] is None or isinstance(
             feats['spectral_flatness'], float
         )
+
+
+class TestHighResDecaySignature:
+    """Tests for the high-res attack+decay signature (2026-06-11).
+
+    The function uses a much finer STFT (n_fft=128, hop=4)
+    than the rest of the pipeline — enough to see single-frame
+    transients and the 5-15ms ring that distinguishes real
+    strikes from "pop" / "gap" artifacts.
+
+    Two key fields:
+      * decay_envelope_energy: ring energy in 15ms post-peak
+      * decay_col_min_median_db: broadband level in decay window
+
+    Real strikes should have HIGH decay_envelope_energy and
+    HIGH dec_cmin (less negative). Noise / gap events should
+    have LOW decay_envelope_energy and LOW dec_cmin (close
+    to the noise floor, around -80 dB).
+    """
+
+    def test_real_strike_has_high_decay_energy(self):
+        """A synthetic toms-like strike (impulse + broadband
+        decaying body) should have a high decay_envelope_energy
+        and dec_cmin significantly above the noise floor.
+
+        The body needs BROADBAND content (not just a few
+        harmonics) for col_min to be high — col_min is the
+        LOWEST energy bin, so a harmonic stack has quiet
+        bins between harmonics at the noise floor. A
+        band-limited noise envelope has high col_min."""
+        sr = SR  # 22050 in test
+        audio = np.zeros(sr // 2, dtype=np.float32)
+        rng = np.random.default_rng(42)
+        # Impulse attack (10ms of broadband noise)
+        burst = (0.5 * rng.normal(0, 1, int(0.010 * sr))).astype(np.float32)
+        # Body: band-limited noise modulated by an exponential
+        # decay envelope. The noise keeps col_min high
+        # because every bin has some energy.
+        t = np.arange(int(0.300 * sr)) / sr
+        envelope = np.exp(-t / 0.100).astype(np.float32)
+        noise_body = (0.3 * rng.normal(0, 1, len(t))
+                      * envelope).astype(np.float32)
+        onset = int(0.100 * sr)
+        audio[onset:onset + len(burst)] = burst
+        audio[onset + len(burst):onset + len(burst) + len(noise_body)] = noise_body
+        sig = compute_high_res_decay_signature(
+            audio, sr, 0.100,
+        )
+        assert sig is not None
+        # Real strike signature: high decay energy, dec_cmin
+        # significantly above -80 dB.
+        assert sig['decay_envelope_energy'] > 100, (
+            f"real strike should have decay_envelope_energy > 100, "
+            f"got {sig['decay_envelope_energy']}"
+        )
+        assert sig['decay_col_min_median_db'] > -80, (
+            f"real strike should have dec_cmin > -80 dB, "
+            f"got {sig['decay_col_min_median_db']}"
+        )
+
+    def test_single_frame_noise_has_low_decay(self):
+        """A single-frame noise spike (no ring) should have
+        near-zero decay_envelope_energy and dec_cmin at the
+        noise floor."""
+        sr = SR
+        audio = np.zeros(sr // 2, dtype=np.float32)
+        rng = np.random.default_rng(123)
+        # Insert a single 1-sample click at 0.1s
+        onset = int(0.100 * sr)
+        audio[onset] = 0.5
+        sig = compute_high_res_decay_signature(
+            audio, sr, 0.100,
+        )
+        assert sig is not None
+        # The high-res peak is the click itself. The decay
+        # window after the peak should be near-silent.
+        assert sig['decay_envelope_energy'] < 50, (
+            f"noise spike should have decay_envelope_energy < 50, "
+            f"got {sig['decay_envelope_energy']}"
+        )
+        assert sig['decay_col_min_median_db'] < -75, (
+            f"noise spike should have dec_cmin < -75 dB, "
+            f"got {sig['decay_col_min_median_db']}"
+        )
+
+    def test_silence_returns_none_or_zeros(self):
+        """Pure silence should produce a signature with no
+        meaningful decay content. We accept None OR a dict
+        with decay_envelope_energy=0 (both are valid
+        graceful behaviors)."""
+        audio = np.zeros(SR, dtype=np.float32)
+        sig = compute_high_res_decay_signature(audio, SR, 0.1)
+        if sig is not None:
+            assert sig['decay_envelope_energy'] == 0.0
+            assert sig['decay_col_min_median_db'] is None or (
+                sig['decay_col_min_median_db'] < -75
+            )
+
+    def test_returns_dict_with_expected_keys(self):
+        """The signature dict has the documented keys."""
+        sr = SR
+        audio = np.zeros(sr // 2, dtype=np.float32)
+        rng = np.random.default_rng(7)
+        # Just some audio in the band
+        audio += (0.1 * rng.normal(0, 1, len(audio))).astype(np.float32)
+        sig = compute_high_res_decay_signature(audio, sr, 0.1)
+        if sig is not None:
+            for key in (
+                'hr_peak_time',
+                'hr_peak_offset_ms',
+                'hr_peak_envelope',
+                'decay_envelope_energy',
+                'decay_col_min_median_db',
+            ):
+                assert key in sig, f"missing key {key} in signature"
+
+    def test_attached_to_compute_event_features(self):
+        """The signature should be auto-attached via
+        compute_event_features — no caller change needed."""
+        # Build a strike-like signal
+        sr = SR
+        audio = np.zeros(sr // 2, dtype=np.float32)
+        rng = np.random.default_rng(99)
+        burst = rng.normal(0, 0.5, int(0.010 * sr)).astype(np.float32)
+        t = np.arange(int(0.300 * sr)) / sr
+        body = (0.4 * np.sin(2 * np.pi * 200.0 * t)
+                * np.exp(-t / 0.100)).astype(np.float32)
+        onset = int(0.100 * sr)
+        audio[onset:onset + len(burst)] = burst
+        audio[onset + len(burst):onset + len(burst) + len(body)] = body
+        feats = compute_event_features(audio, sr, 0.100)
+        for key in (
+            'hr_peak_offset_ms',
+            'decay_envelope_energy',
+            'decay_col_min_median_db',
+        ):
+            assert key in feats, f"missing key {key} in features"
+            assert feats[key] is None or isinstance(feats[key], (int, float))
