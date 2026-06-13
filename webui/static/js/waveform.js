@@ -1469,7 +1469,7 @@ function drawTooltip(event, W, H) {
         //   duration_ms:  click<30, hihat 30-100, snare 80-300,
         //                 kick 200-800, toms 300-1500, cymbals 500+
         //   attack_rise_ms:  click 1-3, stick 3-10, mallet 10-30
-        //   root_pitch_hz:  kick 40-80, toms 80-200, snare 150-300
+        //   pitch_hz:       kick 40-80, toms 80-200, snare 150-300
         //   decay_t60_ms:  closed hihat 30-80, open hihat 200-400,
         //                  snare 80-250, toms 300-800, cymbals 800-2000
         //   spectral_centroid_hz:  kick/toms 200-1500, snare 800-3000,
@@ -1482,9 +1482,9 @@ function drawTooltip(event, W, H) {
         if (event.duration_ms != null) lines.push(`Duration: ${event.duration_ms.toFixed(1)} ms (ring time, slope-of-decline)`);
         if (event.attack_rise_ms != null) lines.push(`Attack rise: ${event.attack_rise_ms.toFixed(1)} ms (10-90% of peak)`);
         if (event.inter_onset_ms != null) lines.push(`Inter-onset: ${event.inter_onset_ms.toFixed(1)} ms (time to next event)`);
-        if (event.root_pitch_hz != null) {
+        if (event.pitch_hz != null) {
             const confStr = event.pitch_confidence != null ? ` (conf ${event.pitch_confidence.toFixed(2)})` : '';
-            lines.push(`Root pitch: ${event.root_pitch_hz.toFixed(1)} Hz${confStr} (pYIN on body)`);
+            lines.push(`Root pitch: ${event.pitch_hz.toFixed(1)} Hz${confStr} (pYIN on body)`);
         }
         if (event.decay_t60_ms != null) lines.push(`Decay T60: ${event.decay_t60_ms.toFixed(0)} ms (200-4000Hz band)`);
         if (event.spectral_centroid_hz != null) lines.push(`Centroid: ${event.spectral_centroid_hz.toFixed(0)} Hz (brightness)`);

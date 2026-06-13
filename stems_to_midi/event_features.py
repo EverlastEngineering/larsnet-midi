@@ -1009,13 +1009,13 @@ def compute_event_features(
         naturally decay. For tightly-clustered events, see
         ``duration_to_valley_ms`` below.
       - ``duration_to_valley_ms``: ring time to the envelope
-        minimum between this event and the next. This is
-        the "true physical ring" — the time until the
+        minimum between this event and the next. This is the
+        "true physical ring" — the time until the
         silence between the two strikes. Unaffected by how
         loud or soft the next strike is. Requires
         ``next_event_time_sec`` to be set.
       - ``attack_rise_ms``: 10-90% rise time
-      - ``root_pitch_hz``: fundamental via YIN/pYIN on body
+      - ``pitch_hz``: fundamental via YIN/pYIN on body
       - ``pitch_confidence``: 0-1 (pYIN voiced_prob mean; YIN fraction-valid)
       - ``decay_t60_ms``: time for body energy to drop 60dB
       - ``spectral_centroid_hz``: weighted-mean frequency of body
@@ -1078,7 +1078,7 @@ def compute_event_features(
         'duration_ms': None,
         'duration_to_valley_ms': None,
         'attack_rise_ms': None,
-        'root_pitch_hz': None,
+        'pitch_hz': None,
         'pitch_confidence': None,
         'decay_t60_ms': None,
         'spectral_centroid_hz': None,
@@ -1124,7 +1124,7 @@ def compute_event_features(
             fmin_hz=pitch_fmin_hz, fmax_hz=pitch_fmax_hz,
             method=pitch_method,
         )
-        features['root_pitch_hz'] = pitch
+        features['pitch_hz'] = pitch
         features['pitch_confidence'] = conf
     except Exception:
         pass

@@ -7,7 +7,7 @@ classification input the user identified (2026-06-10):
 
   - duration_ms / duration_to_valley_ms: ring time vs valley
   - attack_rise_ms: 10-90% rise time
-  - root_pitch_hz / pitch_confidence: YIN/pYIN fundamental
+  - pitch_hz / pitch_confidence: YIN/pYIN fundamental
   - decay_t60_ms: T60 in a band
   - spectral_centroid_hz: brightness
 
@@ -414,7 +414,7 @@ class TestRootPitch:
 
         This test directly guards the user's bug
         (2026-06-12): project 4 26s section toms had
-        root_pitch_hz=None (should be ~75Hz)."""
+        pitch_hz=None (should be ~75Hz)."""
         audio = _make_tone(75.0, 0.5, attack_ms=2.0, decay_tau_ms=200.0)
         # Use the new default pitch band (30-4000) so pYIN
         # can see down to 30Hz.
@@ -489,7 +489,7 @@ class TestComputeEventFeatures:
             'duration_ms',
             'duration_to_valley_ms',
             'attack_rise_ms',
-            'root_pitch_hz',
+            'pitch_hz',
             'pitch_confidence',
             'decay_t60_ms',
             'spectral_centroid_hz',
@@ -582,7 +582,7 @@ class TestRobustness:
         """Pure silence — features return None (no signal)."""
         audio = np.zeros(SR, dtype=np.float32)
         feats = compute_event_features(audio, SR, 0.1)
-        assert feats['root_pitch_hz'] is None
+        assert feats['pitch_hz'] is None
         assert feats['pitch_confidence'] is None
 
     def test_stereo_audio(self):
@@ -596,13 +596,13 @@ class TestRobustness:
         # detection may pick the dominant one. We just
         # assert it doesn't crash and returns a sensible
         # value in a reasonable range.
-        if feats['root_pitch_hz'] is not None:
+        if feats['pitch_hz'] is not None:
             # YIN/pYIN on a 200+300Hz sum can return
             # either frequency or a sub-harmonic. The
             # sub-harmonic of 200Hz is 100Hz (which we saw
             # in the failed test). Allow 80-500.
-            assert 80 < feats['root_pitch_hz'] < 500, (
-                f"pitch should be 80-500Hz, got {feats['root_pitch_hz']}"
+            assert 80 < feats['pitch_hz'] < 500, (
+                f"pitch should be 80-500Hz, got {feats['pitch_hz']}"
             )
 
 

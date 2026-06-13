@@ -257,7 +257,7 @@ def _serialize_onset_events(
         # top of the PGA block.
         'midi_velocity', 'filter_reason', 'pga_filter_config',
         'duration_ms', 'attack_rise_ms', 'inter_onset_ms',
-        'root_pitch_hz', 'pitch_confidence',
+        'pitch_confidence',
         'decay_t60_ms', 'spectral_flatness',
         'hr_peak_offset_ms', 'decay_envelope_energy',
         'decay_col_min_median_db',
@@ -458,7 +458,7 @@ def _serialize_pga_events(pga_events: list) -> list:
             # Per-event features (for classification)
             'duration_ms': float,     # ring time via slope-of-decline
             'attack_rise_ms': float,  # 10-90% rise time
-            'root_pitch_hz': float,   # YIN/pYIN fundamental
+            'pitch_hz': float,        # YIN/pYIN fundamental
             'pitch_confidence': float,  # 0-1
             'decay_t60_ms': float,    # T60 in the broad band
             'spectral_centroid_hz': float,  # brightness
@@ -485,7 +485,7 @@ def _serialize_pga_events(pga_events: list) -> list:
             # range (durations, pitches, frequencies in Hz).
             'duration_ms': _round_value(ev.get('duration_ms'), 2),
             'attack_rise_ms': _round_value(ev.get('attack_rise_ms'), 2),
-            'root_pitch_hz': _round_value(ev.get('root_pitch_hz'), 2),
+            'pitch_hz': _round_value(ev.get('pitch_hz'), 2),
             'pitch_confidence': _round_value(ev.get('pitch_confidence'), 4),
             'decay_t60_ms': _round_value(ev.get('decay_t60_ms'), 2),
             'spectral_centroid_hz': _round_value(ev.get('spectral_centroid_hz'), 2),
