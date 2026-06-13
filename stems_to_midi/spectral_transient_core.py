@@ -86,6 +86,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from scipy.signal import find_peaks
 
+# Module-level cache for compute_stft_db: keyed on (id(audio), sr, n_fft, hop).
+# Same audio object + same STFT params → reuse the full-file STFT result.
+# This turns N events × full-file STFT into 1 STFT total for the
+# _envelope_at_time callers in event_features.py.
+_STFT_CACHE: Dict[tuple, tuple] = {}
+
 
 # The 5 user-chosen bands. Frozen for now (per task spec); the schema
 # could expose them later via SettingDefinition if per-stem tuning is
@@ -206,6 +212,12 @@ def compute_stft_db(
         times_sec: shape (n_frames,), frame center -> seconds
         s_db:      shape (n_bins, n_frames), magnitude in dB
     """
+    cache_key = (id(audio), sr, n_fft, hop, id(_SPECTRAL_CORRUPTION))
+    if cache_key in _STFT_CACHE:
+        print("STFT cache hit")
+        return _STFT_CACHE[cache_key]
+
+    print("STFT cache miss — computing STFT")
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
     audio = np.asarray(audio, dtype=np.float64)
@@ -238,6 +250,9 @@ def compute_stft_db(
     # doesn't disturb the audio samples themselves.
     if _SPECTRAL_CORRUPTION is not None:
         s_db = _apply_spectral_corruption(s_db, times, _SPECTRAL_CORRUPTION)
+
+    cache_key = (id(audio), sr, n_fft, hop, id(_SPECTRAL_CORRUPTION))
+    _STFT_CACHE[cache_key] = (freqs, times, s_db)
     return freqs, times, s_db
 
 
