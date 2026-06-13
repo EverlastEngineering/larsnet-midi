@@ -48,7 +48,11 @@ onset_detection:
   # survive the prominence filter, so the duration feature
   # is the secondary discriminator for those.
   # Set to 0 to disable the filter.
-  pga_min_prominence: 1000
+  # TODO 2026-06-12: temporary bump from 1000 to 3000 to clear
+  # 2 FPs (prominence 1500-2000 range) that were capping the
+  # 26.199s real strike's duration. REVERT to 1000 once the
+  # dec_e<60K filter is wired in (2026-06-11 calibration work).
+  pga_min_prominence: 3000
   # Per-stem overrides: onset_threshold, onset_delta, onset_wait, pga_min_prominence
   
 # === ENERGY-BASED DETECTION (NEW METHOD - DEFAULT) ===
