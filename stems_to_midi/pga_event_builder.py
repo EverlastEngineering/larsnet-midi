@@ -2,11 +2,34 @@
 PGA (percentile-gated broad-attack) event builder for the toms stem.
 
 Isolates the toms detection path (2026-06-13 refactor) as a pure
-functional core. The function ``build_pga_events`` takes
-``(audio_mono, sr, config)`` and returns a 3-tuple
-``(events_kept, events_filtered, debug_dict)`` suitable for direct
-consumption by ``process_stem_to_midi``'s toms branch and the
-``_serialize_onset_events`` sidecar path.
+functional core. The public surface is two pure functions plus a
+thin wrapper:
+
+  - ``detect_pga_events(audio_mono, sr, config)`` runs the
+    percentile-gated broad-attack detector, attaches per-event
+    diagnostic fields (frame, envelope_value, prominence,
+    iqr_threshold, midi_velocity, pga_filter_config), and runs
+    per-event feature extraction. **All** events are returned with
+    ``status='KEPT'`` — no filter is applied. The consumer can
+    re-filter the result later via a single pure function call.
+
+  - ``apply_pga_prominence_filter(events, threshold,
+    disabled_ids=None)`` walks a detect-time event list and tags
+    events with ``prominence < threshold`` as
+    ``status='FILTERED'`` with reason
+    ``"below pga_min_prominence (X < Y)"``. If ``disabled_ids``
+    is provided, any event whose id is in that set is also
+    tagged FILTERED (with reason
+    ``"manually disabled via WebUI"``) — even if its prominence
+    passes the threshold. Returns ``(kept, filtered)``.
+
+  - ``build_pga_events(audio, sr, config)`` is a thin wrapper
+    that calls ``detect_pga_events`` and then
+    ``apply_pga_prominence_filter`` with the configured
+    ``pga_min_prominence`` threshold. Preserves the original
+    return shape ``(events_kept, events_filtered, debug_dict)``
+    so the existing call site in ``processing_shell.py`` and
+    the legacy tests keep working without modification.
 
 Pipeline (matches the original inline flow in
 ``processing_shell.py:1717-1892``):
@@ -15,22 +38,24 @@ Pipeline (matches the original inline flow in
   2. Per-event diagnostic dict: ``time``, ``method``,
      ``status='KEPT'``, ``frame``, ``envelope_value``,
      ``prominence``, ``iqr_threshold``.
-  3. Prominence filter (config ``onset_detection.pga_min_prominence``,
-     default 1000) moves low-prominence events from KEPT to FILTERED.
-  4. MIDI velocity mapping: linear envelope-value → MIDI
+  3. MIDI velocity mapping: linear envelope-value → MIDI
      ``[min_velocity, max_velocity]`` from ``config.midi``.
-  5. Per-event feature extraction via
+  4. Per-event feature extraction via
      ``event_features.compute_event_features`` — duration, pitch,
      decay, brightness, etc. Two-pass flow: pass 1 uses the
-     post-prominence-filter list as the "neighbors" (the events the
-     user is most likely to keep); pass 2 is the WebUI re-measure
-     path that runs against the final FILTERED list.
+     full detect-time list (KEPT+FILTERED) as the "neighbors".
+  5. Prominence filter (config ``onset_detection.pga_min_prominence``,
+     default 1000) — when called via the wrapper, moves
+     low-prominence events from KEPT to FILTERED.
 
 Design constraints:
-  - Pure function. No file I/O, no module-level state, no
+  - Pure functions. No file I/O, no module-level state, no
     side-effects beyond ``print()`` (imperative-shell residue).
   - Imports only standard library / numpy / scipy / in-project
     modules that the rest of the pipeline already uses.
+  - ``detect_pga_events`` and ``apply_pga_prominence_filter``
+    are both pure and side-effect free; the consumer can call
+    them independently.
   - Returns ``events_kept`` and ``events_filtered`` as separate
     lists so consumers can pass them straight to the existing
     serializer (which expects KEPT first, then FILTERED).
@@ -38,8 +63,15 @@ Design constraints:
     prominences for diagnostics — same shape as the legacy
     inline implementation, so existing tests that inspect
     ``pga_debug`` continue to work.
+
+The WebUI re-filter path (planned for a future step) will call
+``detect_pga_events`` once at sidecar-write time, store the raw
+list in the sidecar, and then re-call
+``apply_pga_prominence_filter`` with a slider-driven threshold
+on every tuning-panel change. This refactor is the prerequisite
+for that flow.
 """
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -48,6 +80,8 @@ from .percentile_gated_detector import detect_percentile_gated_broad_attacks
 
 __all__ = [
     'build_pga_events',
+    'detect_pga_events',
+    'apply_pga_prominence_filter',
     'PGAEventBuildError',
 ]
 
@@ -71,59 +105,80 @@ def _empty_result(debug: Optional[Dict[str, Any]] = None) -> Tuple[List[Dict], L
     })
 
 
-def build_pga_events(
+def detect_pga_events(
     audio_mono: np.ndarray,
     sr: int,
     config: Dict[str, Any],
-) -> Tuple[List[Dict], List[Dict], Dict[str, Any]]:
-    """Run the full PGA event pipeline on mono audio.
+) -> List[Dict[str, Any]]:
+    """Run the PGA detector and return a flat list of event dicts.
+
+    Pure function: no file I/O, no mutation of input. **All**
+    events in the returned list have ``status='KEPT'`` — this
+    function does not apply any filter. To re-filter the list
+    with a different threshold, pass it to
+    :func:`apply_pga_prominence_filter`.
+
+    Diagnostic fields attached to every event:
+      - ``time`` (float): onset time in seconds.
+      - ``method`` (str): always ``'percentile_gated'``.
+      - ``status`` (str): always ``'KEPT'`` here.
+      - ``frame`` (int, optional): STFT frame index of the peak.
+      - ``envelope_value`` (float, optional): contrast envelope
+        value at the peak.
+      - ``prominence`` (float, optional): scipy find_peaks
+        prominence of the peak.
+      - ``iqr_threshold`` (float, optional): peak-pick threshold
+        (``q3 + 2.5*IQR`` of the envelope).
+      - ``midi_velocity`` (int): linear-mapping of
+        ``envelope_value`` into ``[min_velocity, max_velocity]``
+        from config.
+      - ``pga_filter_config`` (dict): the active filter settings
+        at detect time (``pga_min_prominence``, ``min_velocity``,
+        ``max_velocity``). Used by the WebUI tooltip to show
+        "Active filter: pga_min_prominence=X" alongside the event.
+      - Per-event feature keys (2026-06-12 fix): ``duration_ms``,
+        ``attack_rise_ms``, ``pitch_hz``, ``pitch_confidence``,
+        ``decay_t60_ms``, ``spectral_centroid_hz``,
+        ``spectral_flatness``, ``hr_peak_offset_ms``,
+        ``decay_envelope_energy``, ``decay_col_min_median_db``,
+        ``inter_onset_ms``.
 
     Args:
         audio_mono: 1-D float array of mono audio samples.
         sr: Sample rate in Hz.
-        config: Project config dict (the same dict passed to
+        config: Project config dict (same dict passed to
             ``process_stem_to_midi``). Reads
+            ``midi.min_velocity`` / ``midi.max_velocity`` (defaults
+            ``80``/``110``) for the MIDI velocity mapping, and
             ``onset_detection.pga_min_prominence`` (default
-            ``1000``) and ``midi.min_velocity`` /
-            ``midi.max_velocity`` (defaults ``80``/``110``).
+            ``1000``) for the ``pga_filter_config`` record.
+            ``detect_pga_events`` itself does NOT apply the
+            prominence filter — it only records the configured
+            threshold for downstream consumers to use.
 
     Returns:
-        ``(events_kept, events_filtered, debug_dict)``:
-          - ``events_kept``: list of event dicts that survived the
-            prominence filter (``status='KEPT'``). MIDI
-            output uses only this list.
-          - ``events_filtered``: list of event dicts that were
-            tagged FILTERED by the prominence filter. Kept in
-            the return value so the WebUI can render them as
-            faded markers; the MIDI serializer skips them.
-          - ``debug_dict``: detector internals — ``freqs``,
-            ``times``, ``s_db``, ``floor``, ``envelope``,
-            ``peaks``, ``prominences`` (same shape as the
-            legacy inline implementation in
-            ``percentile_gated_detector.detect_percentile_gated_broad_attacks``).
-
-    The function is a pure functional core:
-      - No file I/O.
-      - No mutation of input audio or config.
-      - The returned event dicts are owned by the caller (safe
-        to mutate, extend, or serialize).
+        Flat list of event dicts in detection order, all with
+        ``status='KEPT'``. Empty list when the input is empty,
+        ``sr <= 0``, or the detector finds no candidates.
     """
     if audio_mono is None or len(audio_mono) == 0:
-        return _empty_result()
+        return []
     if sr is None or sr <= 0:
-        return _empty_result()
+        return []
 
     # Step 1: Run the percentile-gated broad-attack detector.
     # The detector returns a list of sub-frame-accurate strike
-    # times in seconds and a debug dict with envelope /
-    # peak metadata.
-    pga_event_times, pga_debug = detect_percentile_gated_broad_attacks(
+    # times in seconds and a debug dict with envelope / peak
+    # metadata. We discard the debug here — the sidecar-level
+    # debug is exposed by the legacy ``build_pga_events`` wrapper
+    # for back-compat.
+    pga_event_times, _pga_debug = detect_percentile_gated_broad_attacks(
         audio_mono, sr,
     )
 
-    _env = pga_debug.get('envelope') if pga_debug else None
-    _peaks = pga_debug.get('peaks') if pga_debug else None
-    _proms = pga_debug.get('prominences') if pga_debug else None
+    _env = _pga_debug.get('envelope') if _pga_debug else None
+    _peaks = _pga_debug.get('peaks') if _pga_debug else None
+    _proms = _pga_debug.get('prominences') if _pga_debug else None
 
     # Step 2: Build per-event diagnostic dicts. The IQR threshold
     # is recomputed here for symmetry with the algorithm — see
@@ -153,31 +208,7 @@ def build_pga_events(
             ev['iqr_threshold'] = float(_abs_thr)
         pga_onset_data.append(ev)
 
-    # Step 3: Prominence filter. Tag events with prominence
-    # below ``pga_min_prominence`` as FILTERED. The default 1000
-    # was chosen empirically on project 4 calibration (2026-06-10)
-    # — real toms strikes had prominence 2000-15000, the 14.84/14.97
-    # soft hits had 2127-2727 (so they survive the default — the
-    # duration feature catches them), and the 74.748/74.925 FPs
-    # had 127-432 (so the default kills them). See
-    # midiconfig.yaml's ``onset_detection.pga_min_prominence``.
-    pga_min_prominence = float(
-        config.get('onset_detection', {}).get('pga_min_prominence', 1000.0)
-    )
-    pga_filtered_count = 0
-    for ev in pga_onset_data:
-        prom = ev.get('prominence')
-        if prom is not None and prom < pga_min_prominence:
-            ev['status'] = 'FILTERED'
-            ev['filter_reason'] = (
-                f"below pga_min_prominence ({prom:.0f} < {pga_min_prominence:.0f})"
-            )
-            pga_filtered_count += 1
-    if pga_filtered_count:
-        print(f"    PGA prominence filter (min={pga_min_prominence}): "
-              f"tagged {pga_filtered_count} events as FILTERED")
-
-    # Step 4: MIDI velocity mapping. Linear envelope-value →
+    # Step 3: MIDI velocity mapping. Linear envelope-value →
     # ``[min_velocity, max_velocity]`` from config. Per-file,
     # data-driven — no magic numbers. Equal envelope values
     # collapse to min_velocity.
@@ -204,9 +235,15 @@ def build_pga_events(
         # Clamp defensively (MIDI velocity is 1-127).
         ev['midi_velocity'] = max(1, min(127, ev['midi_velocity']))
 
-    # Step 5: Record the active filter config on each event so
+    # Step 4: Record the active filter config on each event so
     # the sidecar / WebUI can show "which filter dropped which
-    # event" without re-reading midiconfig.yaml.
+    # event" without re-reading midiconfig.yaml. The threshold
+    # recorded here is the configured ``pga_min_prominence`` at
+    # detect time; the WebUI tuning panel re-applies the filter
+    # at re-filter time using its own slider value.
+    pga_min_prominence = float(
+        config.get('onset_detection', {}).get('pga_min_prominence', 1000.0)
+    )
     pga_filter_config = {
         'pga_min_prominence': pga_min_prominence,
         'min_velocity': midi_min,
@@ -215,10 +252,9 @@ def build_pga_events(
     for ev in pga_onset_data:
         ev['pga_filter_config'] = pga_filter_config
 
-    # Step 6: Per-event feature extraction. Two-pass flow:
-    #   Pass 1: measure with the FULL detected list (the
-    #           post-prominence-filter list, so neighbors are
-    #           events the user is most likely to keep).
+    # Step 5: Per-event feature extraction. Two-pass flow:
+    #   Pass 1: measure with the FULL detect-time list (KEPT +
+    #           FILTERED both included as candidate neighbors).
     #   Pass 2 (WebUI re-measure, out of scope here): re-measure
     #           with the final FILTERED list.
     # The neighbor for each event is the next KEPT event in the
@@ -261,11 +297,174 @@ def build_pga_events(
                 }
             ev.update(feats)
 
-    # Step 7: Split the unified list into KEPT / FILTERED for
-    # the consumer. Both lists preserve detection order so the
-    # sidecar / WebUI can render them in time order without
-    # re-sorting.
-    events_kept = [ev for ev in pga_onset_data if ev.get('status') != 'FILTERED']
-    events_filtered = [ev for ev in pga_onset_data if ev.get('status') == 'FILTERED']
+    return pga_onset_data
 
+
+def apply_pga_prominence_filter(
+    events: List[Dict[str, Any]],
+    threshold: float,
+    disabled_ids: Optional[Set[Any]] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Re-tag PGA events with status='FILTERED' based on prominence
+    and an optional manual-disable set.
+
+    Pure function: walks ``events`` in input order, sets
+    ``status='FILTERED'`` and ``filter_reason=...`` on any event
+    that either:
+
+      (a) has ``prominence < threshold`` (with reason
+          ``f"below pga_min_prominence ({prom:.0f} < {thr:.0f})"``),
+      (b) has an id (or fallback stable identifier) in
+          ``disabled_ids`` (with reason
+          ``"manually disabled via WebUI"``).
+
+    The disabled check takes precedence — an event in
+    ``disabled_ids`` is tagged FILTERED even if its prominence
+    passes the threshold, so the WebUI can hide an event the
+    user has explicitly toggled off regardless of the slider
+    value.
+
+    The function does NOT mutate the prominence / midi_velocity /
+    per-event features / pga_filter_config of each event — it
+    only touches ``status`` and (when changed) adds
+    ``filter_reason``. The consumer is expected to call this
+    with the same threshold multiple times during interactive
+    tuning without losing diagnostic data.
+
+    Args:
+        events: Flat list of event dicts from
+            :func:`detect_pga_events` (or any list of PGA-shaped
+            dicts). The list may be in any status; this function
+            re-derives the partition from scratch.
+        threshold: Minimum prominence for an event to remain
+            ``status='KEPT'``. Events with ``prominence < threshold``
+            are tagged ``status='FILTERED'``. An event with no
+            ``prominence`` field is left untouched (it cannot be
+            filtered by threshold).
+        disabled_ids: Optional set of event identifiers. If
+            provided, any event whose id is in the set is
+            tagged ``status='FILTERED'`` with reason
+            ``"manually disabled via WebUI"``. The id resolution
+            order is: ``event['id']``, then fallback to
+            ``event['time']`` (a stable float is fine — the
+            WebUI uses the time as the persistent id when the
+            pipeline didn't stamp an explicit id).
+
+    Returns:
+        ``(kept, filtered)`` — two flat lists partitioning
+        ``events`` by final status, both in input order.
+    """
+    kept: List[Dict[str, Any]] = []
+    filtered: List[Dict[str, Any]] = []
+    disabled_ids = disabled_ids or set()
+
+    for ev in events:
+        # Resolve the stable id for the disabled lookup. The
+        # WebUI identifies events by 'time' (when the pipeline
+        # didn't stamp an explicit 'id') and by 'id' once we
+        # migrate; both work here.
+        ev_id = ev.get('id', ev.get('time'))
+        is_disabled = ev_id in disabled_ids
+
+        prom = ev.get('prominence')
+        below_threshold = (
+            prom is not None and prom < threshold
+        )
+
+        if is_disabled:
+            ev['status'] = 'FILTERED'
+            ev['filter_reason'] = 'manually disabled via WebUI'
+            filtered.append(ev)
+        elif below_threshold:
+            ev['status'] = 'FILTERED'
+            ev['filter_reason'] = (
+                f"below pga_min_prominence ({prom:.0f} < {threshold:.0f})"
+            )
+            filtered.append(ev)
+        else:
+            ev['status'] = 'KEPT'
+            # Clear any stale filter_reason from a prior filter
+            # call (e.g. the user moved the slider back up). This
+            # is intentional: the WebUI tooltip only shows the
+            # reason when the event is currently FILTERED, but
+            # leaving a stale reason would be confusing if the
+            # event is re-shown via the tuning panel.
+            if 'filter_reason' in ev:
+                del ev['filter_reason']
+            kept.append(ev)
+
+    return kept, filtered
+
+
+def build_pga_events(
+    audio_mono: np.ndarray,
+    sr: int,
+    config: Dict[str, Any],
+) -> Tuple[List[Dict[str, List]], List[Dict], Dict[str, Any]]:
+    """Run the full PGA event pipeline on mono audio and return
+    the kept/filtered partition plus the detector debug dict.
+
+    Thin wrapper that preserves the original return shape of
+    the pre-refactor function: ``(events_kept, events_filtered,
+    debug_dict)``. Internally it composes :func:`detect_pga_events`
+    (pure) and :func:`apply_pga_prominence_filter` (pure) with
+    the configured ``onset_detection.pga_min_prominence``
+    threshold. The full-conversion call site in
+    ``processing_shell.py:1745`` keeps working unchanged.
+
+    Args:
+        audio_mono: 1-D float array of mono audio samples.
+        sr: Sample rate in Hz.
+        config: Project config dict (the same dict passed to
+            ``process_stem_to_midi``). Reads
+            ``onset_detection.pga_min_prominence`` (default
+            ``1000``) and ``midi.min_velocity`` /
+            ``midi.max_velocity`` (defaults ``80``/``110``).
+
+    Returns:
+        ``(events_kept, events_filtered, debug_dict)``:
+          - ``events_kept``: list of event dicts that survived the
+            prominence filter (``status='KEPT'``). MIDI
+            output uses only this list.
+          - ``events_filtered``: list of event dicts that were
+            tagged FILTERED by the prominence filter. Kept in
+            the return value so the WebUI can render them as
+            faded markers; the MIDI serializer skips them.
+          - ``debug_dict``: detector internals — ``freqs``,
+            ``times``, ``s_db``, ``floor``, ``envelope``,
+            ``peaks``, ``prominences`` (same shape as the
+            legacy inline implementation in
+            ``percentile_gated_detector.detect_percentile_gated_broad_attacks``).
+            Exposed here for back-compat with the legacy tests
+            that inspect ``pga_debug``; ``detect_pga_events``
+            itself does not return the debug (it discards the
+            debug after attaching per-event fields, since
+            re-filtering a stored event list does not need it).
+
+    The function is a pure functional core:
+      - No file I/O.
+      - No mutation of input audio or config.
+      - The returned event dicts are owned by the caller (safe
+        to mutate, extend, or serialize).
+    """
+    if audio_mono is None or len(audio_mono) == 0:
+        return _empty_result()
+    if sr is None or sr <= 0:
+        return _empty_result()
+
+    # Re-run the detector to recover the debug dict. The pure
+    # ``detect_pga_events`` discards the debug, but the legacy
+    # ``build_pga_events`` callers (and the existing test
+    # contract) expect it on the return value.
+    _pga_event_times, pga_debug = detect_percentile_gated_broad_attacks(
+        audio_mono, sr,
+    )
+
+    raw = detect_pga_events(audio_mono, sr, config)
+    threshold = float(
+        config.get('onset_detection', {}).get('pga_min_prominence', 1000.0)
+    )
+    events_kept, events_filtered = apply_pga_prominence_filter(
+        raw, threshold,
+    )
     return events_kept, events_filtered, pga_debug

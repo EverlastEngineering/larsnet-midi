@@ -233,10 +233,16 @@ def _serialize_onset_events(
         # max_velocity]). filter_reason is a human-readable
         # explanation of why the event was dropped (e.g.
         # "below pga_min_prominence (800 < 1000)").
-        # pga_filter_config records the active filter
-        # threshold at detection time so the WebUI can
-        # show "Active filter: pga_min_prominence=1000"
-        # alongside any filtered event.
+        # pga_filter_config (the per-event active-filter
+        # dict) is NOT serialized to the sidecar — the
+        # threshold is a config concern (yaml), not a
+        # sidecar concern (output), so the sidecar
+        # carries ONLY the per-event consequences of
+        # the filter: status + filter_reason. Consumers
+        # that need the active threshold re-read
+        # midiconfig.yaml. The in-memory event still
+        # carries pga_filter_config for any in-process
+        # consumer that wants the per-event value.
         #
         # PGA per-event features (2026-06-12 bug fix). These
         # were attached in-memory by compute_event_features()
@@ -255,7 +261,7 @@ def _serialize_onset_events(
         # 2026-06-12. They live on the same set of PGA
         # events and the WebUI tooltip reads them at the
         # top of the PGA block.
-        'midi_velocity', 'filter_reason', 'pga_filter_config',
+        'midi_velocity', 'filter_reason',
         'duration_ms', 'attack_rise_ms', 'inter_onset_ms',
         'pitch_confidence',
         'decay_t60_ms', 'spectral_flatness',
@@ -497,10 +503,16 @@ def _serialize_pga_events(pga_events: list) -> list:
             # Toms cleanup (2026-06-11): filter metadata.
             # FILTERED events are kept in the sidecar so the
             # WebUI can render them faded; the MIDI output
-            # skips them.
+            # skips them. The active prominence threshold is
+            # NOT written per-event here — it lives on the
+            # events_pga dict as the top-level
+            # 'pga_min_prominence' field (set in
+            # save_analysis_sidecar from analysis.pga_min_prominence
+            # and read in load_analysis_sidecar). 2026-06-13
+            # split: source of truth moved out of the
+            # per-event payload.
             'midi_velocity': ev.get('midi_velocity'),
             'filter_reason': ev.get('filter_reason'),
-            'pga_filter_config': ev.get('pga_filter_config'),
         })
     return out
 
@@ -665,6 +677,16 @@ def save_analysis_sidecar(
         # THIRD complementary detector; it runs alongside energy +
         # spectral but isn't part of the 'promoted to configured'
         # pipeline.
+        #
+        # Sidecar content contract (2026-06-13): the sidecar
+        # carries ONLY the per-event consequences of the PGA
+        # prominence filter — ``status`` (KEPT/FILTERED) and
+        # ``filter_reason`` (human-readable explanation). The
+        # ACTIVE THRESHOLD is a config concern (yaml), not a
+        # sidecar concern (output), so we do NOT persist it
+        # here. Any consumer that needs the threshold re-reads
+        # midiconfig.yaml. This is the
+        # "yaml = config, sidecar = output" architecture rule.
         pga_onset_data = analysis.get('pga_onset_data', [])
         pga_events = _serialize_pga_events(pga_onset_data) if pga_onset_data else []
 
@@ -673,7 +695,10 @@ def save_analysis_sidecar(
         total_filtered += sum(1 for e in configured_events if e.get('status') == 'FILTERED')
         total_sensitive += len(sensitive_events)
 
-        # Assemble stem data
+        # Assemble stem data. The stem block shape is
+        # stable: ``logic``, ``events_configured``,
+        # ``events_sensitive``, ``events_spectral``,
+        # ``events_pga``. No top-level threshold fields.
         sidecar_data['stems'][stem_type] = {
             'logic': logic,
             'events_configured': configured_events,
