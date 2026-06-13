@@ -1658,12 +1658,23 @@ def process_stem_to_midi(
     print(f"    Created {len(events)} MIDI events from {len(onset_times)} onsets")
     
     # Step 10: Run sensitive detection for interactive tuning (energy-based only).
-    # Toms (2026-06-12) skips this — toms is PGA-only, so there are no
-    # energy-detected onsets to surface as a sensitive background
-    # layer. The sidecar's events_sensitive is left empty so the WebUI
-    # has nothing to render for the legacy sensitive layer. (The
-    # 'Show sensitive' toggle and the energy-bar background layer in
-    # waveform.js become no-ops for toms, which is the desired state.)
+    # Toms (2026-06-13): the toms pipeline is PGA-only, so the energy
+    # detector does not produce a sensitive candidate list — but the
+    # WebUI's Tune button visibility gate (waveform.js:236-242) keys on
+    # the length of `events_sensitive` for ANY stem in the project.
+    # Without this toms branch the gate stays closed and the new
+    # pga_min_prominence slider is unreachable from the real Tune
+    # button. We populate `sensitive_onset_data` from the PGA
+    # `events_kept + events_filtered` list (computed below) so:
+    #   - the Tune button gate is satisfied (length > 0),
+    #   - the WebUI sensitive-background layer has something to render
+    #     for toms (the PGA events carry `time` + `status` + `method`
+    #     so `_serialize_onset_events` round-trips them through the
+    #     sidecar cleanly),
+    #   - and the threshold-tuning panel's client-side filter still
+    #     works for toms (the events_configured list is the same PGA
+    #     events after the prominence filter, so the panel's KEPT /
+    #     FILTERED overlay is internally consistent).
     sensitive_onset_data = []
     if not use_librosa and stem_type != 'toms':
         sensitive_onset_data = _run_sensitive_detection(
@@ -1722,6 +1733,15 @@ def process_stem_to_midi(
     # pga_onset_data so downstream consumers (the toms branch
     # that builds MIDI events, _build_events_configured, the
     # sidecar serializer) keep their existing contract.
+    #
+    # 2026-06-13: hoisted ABOVE the Step 10 `sensitive_onset_data`
+    # assignment so the toms branch can backfill
+    # `sensitive_onset_data` from the PGA results (the toms
+    # pipeline has no energy-detector candidates to feed the
+    # sensitive layer, and the WebUI's Tune button visibility gate
+    # at waveform.js:236-242 keys on `events_sensitive.length > 0`
+    # for any stem in the project). Cheap to hoist — the function
+    # is pure and only requires `audio_mono`, `sr`, and `config`.
     pga_events_kept, pga_events_filtered, pga_debug = build_pga_events(
         audio_mono, sr, config,
     )
@@ -1729,6 +1749,19 @@ def process_stem_to_midi(
     if pga_onset_data:
         print(f"    Percentile-gated detection: {len(pga_onset_data)} candidate onsets "
               f"({len(pga_events_kept)} KEPT, {len(pga_events_filtered)} FILTERED)")
+
+    # Step 10 (cont.): PGA backfill for sensitive_onset_data.
+    # Mirrors the energy-detector's "sensitive = max-sensitivity
+    # KEPT+FILTERED list" pattern — for toms there is no energy
+    # detector, so the PGA list IS the sensitive list. The PGA
+    # events carry `time` + `status` + `method` so
+    # `_serialize_onset_events` round-trips them through the
+    # sidecar cleanly (line 268-269 of midi.py writes the
+    # time/status/Phase-2/method fields; the energy-only fields
+    # like `strength` / `geomean` end up null on the sidecar, which
+    # is the correct shape for PGA events).
+    if stem_type == 'toms' and pga_onset_data:
+        sensitive_onset_data = list(pga_onset_data)
 
     # Step 12: Build events_configured based on the configured
     # detection_method. The energy and spectral detectors BOTH always

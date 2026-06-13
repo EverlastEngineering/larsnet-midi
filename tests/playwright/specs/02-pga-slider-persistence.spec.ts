@@ -199,15 +199,22 @@ test("pga_min_prominence slider persists new value to midiconfig.yaml", async ({
     await tomsTab.click();
     await expect(tomsTab).toHaveClass(/waveform-tab-active/);
 
-    // 3. Open the tuning panel (button may be hidden on 2026-06-13
-    //    for toms — see 01-toms-tuning-smoke.spec.ts for context;
-    //    same JS-toggle fallback applies).
+    // 3. The Tune button MUST be visible now (2026-06-13 step 2
+    //    retry): the toms pipeline in processing_shell.py backfills
+    //    `sensitive_onset_data` from the PGA events, so the
+    //    client-side visibility gate at waveform.js:236-242 (which
+    //    checks `events_sensitive.length > 0` for any stem in the
+    //    project) now opens the Tune button for toms. The first
+    //    attempt at this spec used a JS-toggle fallback when the
+    //    button was hidden, but that masked the underlying
+    //    integration gap — a real user has no way to reach the
+    //    pga_min_prominence slider if the Tune button is hidden.
+    //    Asserting the button is visible here is the contract this
+    //    step protects.
     const tuneButton = page.locator("#tuning-toggle-btn");
-    if (await tuneButton.isVisible().catch(() => false)) {
-      await tuneButton.click();
-    } else {
-      await page.evaluate(() => toggleTuningPanel());
-    }
+    await expect(tuneButton).toBeVisible({ timeout: 5_000 });
+    await tuneButton.click();
+
     const tuningPanel = page.locator("#tuning-panel");
     await expect(tuningPanel).toBeVisible({ timeout: 5_000 });
 
