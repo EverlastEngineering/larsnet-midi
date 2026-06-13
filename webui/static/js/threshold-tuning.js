@@ -64,19 +64,27 @@ const STEM_SLIDER_CONFIGS = {
         { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' },
         { key: 'expected_clusters', label: '🥁 Sound Types', min: 1, max: 3, step: 1, fallback: 2, unit: '', classification: true }
     ],
-    // Toms (2026-06-12): the toms pipeline is PGA-only (see
-    // processing_shell._build_events_configured and
-    // percentile_gated_detector.py). The previous energy + spectral
-    // filters (geomean / reverb attack / sound types / snap mask /
-    // band-max-ratio ceiling / onset-events gate) operated on events
-    // that are no longer in events_configured for toms — they were
-    // removed because toms detection now uses the percentile-gated
-    // broad-attack (PGA) detector exclusively. The toms Threshold
-    // Tuning slideout is therefore empty until a PGA-specific slider
-    // (e.g. pga_min_prominence) is wired in. Keeping the array
-    // non-empty here so the build path still produces the
-    // "No tunable parameters for this stem." fallback cleanly.
-    toms: [],
+    // Toms (2026-06-12 → 2026-06-13): the toms pipeline is PGA-only
+    // (see processing_shell._build_events_configured and
+    // percentile_gated_detector.py / pga_event_builder.py). The
+    // previous energy + spectral filters (geomean / reverb attack /
+    // sound types / snap mask / band-max-ratio ceiling / onset-events
+    // gate) operated on events that are no longer in
+    // events_configured for toms — they were removed because toms
+    // detection now uses the percentile-gated broad-attack (PGA)
+    // detector exclusively. The toms Threshold Tuning slideout now
+    // exposes a PGA-specific slider: pga_min_prominence (the scipy
+    // find_peaks prominence floor applied in
+    // pga_event_builder.build_pga_events). The slider's
+    // `yamlPath` overrides the default [stemType, key] persistence
+    // path because pga_min_prominence lives in the global
+    // `onset_detection` section of midiconfig.yaml, not under
+    // `toms:` — that matches the production key consumed by
+    // pga_event_builder.py:165 (`config.get('onset_detection',
+    // {}).get('pga_min_prominence', 1000.0)`).
+    toms: [
+        { key: 'pga_min_prominence', label: 'PGA Min Prominence', min: 0, max: 10000, step: 100, fallback: 1000, unit: '', yamlPath: ['onset_detection', 'pga_min_prominence'] }
+    ],
     hihat: [
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 200, step: 0.5, fallback: 8, unit: '' },
         { key: 'min_sustain_ms', label: 'Min Sustain', min: 0, max: 500, step: 5, fallback: 25, unit: 'ms' },
@@ -557,6 +565,25 @@ function _buildConfigOverrides(stemType, stored) {
     if (stored.reverb_continuation_attack_threshold != null) {
         overrides['filtering.reverb_continuation_attack_threshold'] =
             stored.reverb_continuation_attack_threshold;
+    }
+
+    // yamlPath-bearing slider keys (2026-06-13): some sliders are
+    // exposed on a per-stem panel but live at a non-default path in
+    // the YAML — e.g. the toms pga_min_prominence slider writes to
+    // `onset_detection.pga_min_prominence`, not to a per-stem key.
+    // The rebuild path consumes dotted paths, so join yamlPath with
+    // '.' to match the same format consumed by
+    // stems_to_midi_cli._apply_cli_overrides_to_config. This keeps
+    // the UI and the saved MIDI rebuild consistent when the user
+    // clicks Save & Reconvert — even though step 5 will eventually
+    // trigger a full PGA re-detection, this keeps the override
+    // plumbing correct today.
+    const sliderConfigs = STEM_SLIDER_CONFIGS[stemType] || [];
+    for (const slider of sliderConfigs) {
+        if (!Array.isArray(slider.yamlPath) || slider.yamlPath.length === 0) continue;
+        const key = slider.key;
+        if (stored[key] == null) continue;
+        overrides[slider.yamlPath.join('.')] = stored[key];
     }
 
     return overrides;
@@ -1088,8 +1115,12 @@ function _sliderValueChanged(slider, currentVal, configuredVal) {
 
 /**
  * Build config update paths for the current stem's tuned values.
- * Maps slider keys to their YAML paths: per-stem keys go to [stemType, key],
- * global filtering keys go to ["filtering", key].
+ * Maps slider keys to their YAML paths: per-stem keys go to
+ * [stemType, key], global filtering keys go to ["filtering", key],
+ * and any slider with an explicit `yamlPath` field (e.g. the toms
+ * `pga_min_prominence` slider, which lives at
+ * `onset_detection.pga_min_prominence` in midiconfig.yaml) uses
+ * that path verbatim.
  */
 function buildConfigUpdates(stemType) {
     const sliderConfigs = STEM_SLIDER_CONFIGS[stemType];
@@ -1104,10 +1135,21 @@ function buildConfigUpdates(stemType) {
         const configuredVal = logic[slider.key] != null ? logic[slider.key] : slider.fallback;
         const currentVal = stored[slider.key];
         if (!_sliderValueChanged(slider, currentVal, configuredVal)) continue;
-        // Route to correct YAML section
-        const path = GLOBAL_FILTERING_KEYS.has(slider.key)
-            ? ['filtering', slider.key]
-            : [stemType, slider.key];
+        // Route to correct YAML section. Order of precedence:
+        //   1. slider.yamlPath (explicit override) — used when a
+        //      slider key lives outside the per-stem section (e.g.
+        //      pga_min_prominence lives at onset_detection.* even
+        //      though it's exposed on the toms tuning panel).
+        //   2. Global filtering key (lives in [filtering]).
+        //   3. Default: per-stem section ([stemType, key]).
+        let path;
+        if (Array.isArray(slider.yamlPath) && slider.yamlPath.length > 0) {
+            path = slider.yamlPath;
+        } else if (GLOBAL_FILTERING_KEYS.has(slider.key)) {
+            path = ['filtering', slider.key];
+        } else {
+            path = [stemType, slider.key];
+        }
         updates.push({ path, value: currentVal });
     }
 
