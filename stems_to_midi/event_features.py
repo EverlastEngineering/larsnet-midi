@@ -148,6 +148,8 @@ def compute_duration_ms(
     event_time_sec: float,
     broad_min_hz: float = 200.0,
     broad_max_hz: float = 8000.0,
+    duration_broad_min_hz: float = 30.0,
+    duration_broad_max_hz: float = 8000.0,
     n_fft: int = 1024,
     hop: int = 256,
     next_event_time_sec: Optional[float] = None,
@@ -189,7 +191,18 @@ def compute_duration_ms(
         sr: sample rate
         event_time_sec: time of the onset
         broad_min_hz, broad_max_hz: frequency band for
-            the envelope
+            the envelope. Default 200-8000 (the original
+            "broadband" definition used by other features
+            like attack_rise/decay/centroid).
+        duration_broad_min_hz, duration_broad_max_hz: SEPARATE
+            frequency band used specifically for the duration
+            envelope. Default 30-8000 — wide enough to see
+            the toms fundamental (65-85Hz) and its sub-bass
+            ring, so duration_ms reflects the actual ring
+            rather than truncating at the first broadband
+            zero-crossing. The duration band is decoupled
+            from ``broad_*`` so other features (which benefit
+            from a narrower band) are unaffected.
         next_event_time_sec: optional cap. If the slope
             never flattens before this time (e.g. another
             strike raised the envelope back up), the
@@ -220,7 +233,7 @@ def compute_duration_ms(
     times, env = _envelope_at_time(
         audio, sr, event_time_sec,
         n_fft=n_fft, hop=hop,
-        broad_min_hz=broad_min_hz, broad_max_hz=broad_max_hz,
+        broad_min_hz=duration_broad_min_hz, broad_max_hz=duration_broad_max_hz,
     )
     i_peak, _peak_val = _find_attack_peak(times, env, event_time_sec)
     if i_peak is None:
@@ -244,11 +257,6 @@ def compute_duration_ms(
     # ring end.
     kernel = np.ones(slope_window_frames) / slope_window_frames
     slope_smooth = np.convolve(slope, kernel, mode='same')
-    # Walk forward from the peak. The ring ends at the
-    # first frame where the smoothed slope is less steep
-    # than min_slope_db_per_s. (min_slope_db_per_s is
-    # negative; we want |slope| < |min_slope_db_per_s|,
-    # i.e. slope > min_slope_db_per_s.)
     # Optional cap: stop at next_event_time_sec if provided.
     if next_event_time_sec is not None and next_event_time_sec > times[i_peak]:
         i_cap = int(np.argmin(np.abs(times - next_event_time_sec)))
@@ -259,10 +267,40 @@ def compute_duration_ms(
         i_end += 1
     # The ring end is i_end (where the slope flattened)
     # or i_cap (if we hit the cap before flattening).
-    duration_sec = times[min(i_end, i_cap)] - times[i_peak]
-    if duration_sec <= 0:
+    duration_sec_slope = times[min(i_end, i_cap)] - times[i_peak]
+    # FALLBACK for slow-decaying sub-bass rings (2026-06-12):
+    # The slope-based approach exits early when the ring's
+    # slope is shallower than min_slope_db_per_s (e.g. a
+    # 75Hz toms ring with ~1.75s exp decay has a slope of
+    # ~-5 dB/s, which is above the -10 dB/s threshold).
+    # In that case, the algorithm reports just the attack
+    # duration (~17ms) instead of the true ring. Detect
+    # this case: if the slope-based duration is suspiciously
+    # short (< 50ms) but the envelope still has significant
+    # energy well past the peak, fall back to an RMS-threshold
+    # approach. The RMS approach finds the frame where the
+    # envelope first drops below ``rms_threshold_frac`` of
+    # the peak. This is the "easy off the shelf" approach
+    # the user requested — it measures the actual ring
+    # length even for slow-decaying sub-bass content.
+    rms_threshold_frac = 0.005  # 0.5% of peak
+    if duration_sec_slope * 1000.0 < 50.0:
+        # Check if there's significant energy past the peak
+        post_peak = env[i_peak:]
+        if len(post_peak) > 0 and post_peak.max() > 0:
+            peak_val = post_peak[0]
+            threshold = rms_threshold_frac * peak_val
+            below = np.where(post_peak < threshold)[0]
+            if len(below) > 0:
+                i_end_rms = below[0]
+                i_end_rms = min(i_end_rms, i_cap - i_peak)
+                if i_end_rms > 0:
+                    duration_sec_rms = times[i_peak + i_end_rms] - times[i_peak]
+                    if duration_sec_rms > duration_sec_slope:
+                        return float(duration_sec_rms * 1000.0)
+    if duration_sec_slope <= 0:
         return None
-    return float(duration_sec * 1000.0)
+    return float(duration_sec_slope * 1000.0)
 
 
 def compute_duration_to_valley_ms(
@@ -431,23 +469,44 @@ def compute_root_pitch(
 
     try:
         if method == 'pyin':
+            # Adaptive frame_length: pYIN needs at least 2
+            # periods of fmin to fit in the frame. At 30Hz
+            # and sr=44100, that's ~2940 samples. We round
+            # up to the next power of 2 (4096) to keep the
+            # FFT efficient. (2026-06-12: widened from 2048
+            # to support fmin down to 30Hz for low toms.)
+            frame_length = max(2048, int(2 ** np.ceil(np.log2(2 * sr / fmin_hz))))
             f0, voiced_flag, voiced_probs = librosa.pyin(
                 segment, fmin=fmin_hz, fmax=fmax_hz, sr=sr,
-                frame_length=2048,
+                frame_length=frame_length,
             )
-            # pYIN returns NaN for unvoiced frames
-            confident = f0[(voiced_flag) & (voiced_probs > voiced_prob) & (~np.isnan(f0))]
-            if len(confident) == 0:
+            # pYIN returns NaN for unvoiced frames. Prefer
+            # confident frames (voiced_prob > threshold) but
+            # fall back to all voiced frames if none meet the
+            # threshold — low-confidence pitches are still
+            # useful for diagnostic purposes (e.g. a 75Hz
+            # toms ring with slow decay may have voiced_prob
+            # ~0.1-0.2 but a clear fundamental at 71-81Hz).
+            # (2026-06-12: accept low confidence rather than
+            # returning None.)
+            voiced_mask = voiced_flag & (~np.isnan(f0))
+            confident = f0[voiced_mask & (voiced_probs > voiced_prob)]
+            if len(confident) > 0:
+                pitch = float(np.median(confident))
+            elif np.any(voiced_mask):
+                # Fallback: use all voiced frames even if
+                # confidence is below threshold.
+                pitch = float(np.median(f0[voiced_mask]))
+            else:
                 return None, None
-            pitch = float(np.median(confident))
-            mean_prob = float(np.mean(voiced_probs[voiced_flag & (~np.isnan(f0))]))
+            mean_prob = float(np.mean(voiced_probs[voiced_mask]))
             return pitch, mean_prob
         else:
-            # Plain YIN: frame_length=2048 for ~21Hz resolution
-            # at sr=44100 (good down to ~50Hz fundamentals).
+            # Plain YIN: same adaptive frame_length as pYIN.
+            frame_length = max(2048, int(2 ** np.ceil(np.log2(2 * sr / fmin_hz))))
             f0 = librosa.yin(
                 segment, fmin=fmin_hz, fmax=fmax_hz, sr=sr,
-                frame_length=2048,
+                frame_length=frame_length,
             )
             valid = f0[~np.isnan(f0)]
             if len(valid) == 0:
@@ -925,11 +984,13 @@ def compute_event_features(
     audio: np.ndarray,
     sr: int,
     event_time_sec: float,
-    pitch_fmin_hz: float = 60.0,
-    pitch_fmax_hz: float = 2000.0,
+    pitch_fmin_hz: float = 30.0,
+    pitch_fmax_hz: float = 4000.0,
     pitch_method: str = 'pyin',
     broad_min_hz: float = 200.0,
     broad_max_hz: float = 8000.0,
+    duration_broad_min_hz: float = 30.0,
+    duration_broad_max_hz: float = 8000.0,
     next_event_time_sec: Optional[float] = None,
 ) -> Dict[str, Optional[float]]:
     """Compute the full per-event feature battery.
@@ -985,12 +1046,25 @@ def compute_event_features(
         audio: mono or stereo audio array
         sr: sample rate
         event_time_sec: time of the onset in seconds
-        pitch_fmin_hz, pitch_fmax_hz: pitch search range
+        pitch_fmin_hz, pitch_fmax_hz: pitch search range.
+            Default 30-4000. Lower bound widened to 30Hz so
+            pYIN can see low toms fundamentals (65-85Hz);
+            upper bound widened to 4000Hz so the search
+            covers the full body spectrum.
         pitch_method: 'yin' or 'pyin'
-        broad_min_hz, broad_max_hz: frequency band for
-            duration/decay/centroid. Default 200-8000 covers
-            toms/snare/hihat. Override for kick-specific
-            work (e.g. 30-200Hz).
+        broad_min_hz, broad_max_hz: frequency band used by
+            attack_rise, decay, centroid, etc. Default
+            200-8000 covers toms/snare/hihat. Override for
+            kick-specific work (e.g. 30-200Hz). NOTE: this
+            is NOT the band used for ``duration_ms`` — see
+            ``duration_broad_*`` below.
+        duration_broad_min_hz, duration_broad_max_hz: SEPARATE
+            band for the duration envelope. Default 30-8000.
+            Wider than ``broad_*`` so the duration walk-forward
+            can see the toms fundamental (65-85Hz) and its
+            sub-bass ring. Tuned to keep other features on the
+            narrower, more meaningful band while still letting
+            duration_ms reflect the true physical ring.
         next_event_time_sec: if provided, the duration
             walk-forward stops at this time and the
             ``inter_onset_ms`` field is set. Critical for
@@ -1021,7 +1095,8 @@ def compute_event_features(
     try:
         features['duration_ms'] = compute_duration_ms(
             audio_mono, sr, event_time_sec,
-            broad_min_hz=broad_min_hz, broad_max_hz=broad_max_hz,
+            broad_min_hz=duration_broad_min_hz,
+            broad_max_hz=duration_broad_max_hz,
             next_event_time_sec=next_event_time_sec,
         )
     except Exception:
@@ -1096,11 +1171,13 @@ def compute_event_features_for_list(
     audio: np.ndarray,
     sr: int,
     event_times_sec: list,
-    pitch_fmin_hz: float = 60.0,
-    pitch_fmax_hz: float = 2000.0,
+    pitch_fmin_hz: float = 30.0,
+    pitch_fmax_hz: float = 4000.0,
     pitch_method: str = 'pyin',
     broad_min_hz: float = 200.0,
     broad_max_hz: float = 8000.0,
+    duration_broad_min_hz: float = 30.0,
+    duration_broad_max_hz: float = 8000.0,
 ) -> list:
     """Compute features for a list of event times, with
     inter-onset intervals computed automatically.
@@ -1128,6 +1205,8 @@ def compute_event_features_for_list(
             pitch_fmin_hz=pitch_fmin_hz, pitch_fmax_hz=pitch_fmax_hz,
             pitch_method=pitch_method,
             broad_min_hz=broad_min_hz, broad_max_hz=broad_max_hz,
+            duration_broad_min_hz=duration_broad_min_hz,
+            duration_broad_max_hz=duration_broad_max_hz,
             next_event_time_sec=next_t,
         )
         out.append(feats)

@@ -1845,9 +1845,27 @@ def process_stem_to_midi(
     if pga_onset_data:
         from .event_features import compute_event_features
         for i, ev in enumerate(pga_onset_data):
+            # Walk forward through pga_onset_data to find the
+            # next SURVIVING event (KEPT, or no status field at
+            # all — legacy events). Skip any event with
+            # status == 'FILTERED' (manually-excluded FPs in the
+            # WebUI) — using their time as the cap would
+            # truncate the current strike's ring at the FP's
+            # time. The user's toms example: real strike at
+            # 26.199s with ring to ~27.95s, FP filtered at
+            # 25.945s — without this fix the 26.199s strike's
+            # ring would be capped to nothing (FP is BEFORE
+            # the strike, not after, but the same FP-after-
+            # strike case applies to other events in the
+            # cluster). If no KEPT event after the current
+            # one, pass next_t = None (no cap, ring walks to
+            # end of audio).
             next_t = None
-            if i + 1 < len(pga_onset_data):
-                next_t = pga_onset_data[i + 1].get('time')
+            for j in range(i + 1, len(pga_onset_data)):
+                candidate = pga_onset_data[j]
+                if candidate.get('status') != 'FILTERED':
+                    next_t = candidate.get('time')
+                    break
             try:
                 feats = compute_event_features(
                     audio_mono, sr, ev['time'],

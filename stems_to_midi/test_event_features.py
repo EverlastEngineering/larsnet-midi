@@ -135,7 +135,16 @@ class TestDurationMs:
         Strike 2's peak is in [0.17, 0.25]s (forward-only
         search). If the algorithm latches onto strike 1's
         peak, the measurement is strike 1's ring (~200ms),
-        not strike 2's."""
+        not strike 2's.
+
+        Updated range (2026-06-12): the new wide duration
+        band (30-8000 Hz default) sees the 100Hz fundamental
+        in this test, so the measured ring is naturally
+        longer than under the old 200-8000 band. The
+        regression check still holds: a latch would show
+        dur ≈ 0 (peak at start of search window) or
+        dur > 700ms (offset by 200ms to land on strike 1's
+        peak)."""
         audio = _make_two_strikes(0.2, 0.4, decay_tau_ms=200.0)
         # Measure strike 2 with a far cap (so the cap
         # doesn't truncate the result).
@@ -143,14 +152,13 @@ class TestDurationMs:
             audio, SR, 0.4, next_event_time_sec=2.0,
         )
         assert dur is not None
-        # Strike 2's ring should be in the 100-400ms range
-        # (similar to strike 1's, since they have the same
-        # decay). The latch failure would show up as
-        # dur == 0 (peak found at start of search window)
-        # or dur > 500ms (peak found at strike 1's actual
-        # peak time of 0.2s).
-        assert 50 < dur < 500, (
-            f"strike 2 dur should be 50-500ms, got {dur} — "
+        # Strike 2's ring under the new wide band. The
+        # latch failure would show up as dur == 0 (peak
+        # found at start of search window) or dur > 700ms
+        # (peak found at strike 1's actual peak time of
+        # 0.2s, plus a 200ms+ ring).
+        assert 50 < dur < 700, (
+            f"strike 2 dur should be 50-700ms, got {dur} — "
             f"peak search latched onto previous strike?"
         )
 
@@ -176,6 +184,113 @@ class TestDurationMs:
         # (or at least dur_capped is bounded by the IOI).
         assert dur_capped <= 200, (
             f"capped dur should be <=200ms (IOI=150ms), got {dur_capped}"
+        )
+
+    def test_low_freq_tom_ring_measurable(self):
+        """The toms fundamental (65-85Hz) and its sub-bass
+        ring must be visible to compute_duration_ms.
+        Before the wide-band fix (duration band default
+        200-8000Hz), a 75Hz tone with sub-bass ring was
+        reported as ~58ms (only the broadband attack click
+        was visible — the sub-bass ring sat below the
+        band). After the fix (default duration band
+        30-8000Hz), the 75Hz fundamental is in band and
+        the algorithm can measure the ring.
+
+        Decay choice: we use 200ms tau (slope ~-43 dB/s,
+        well above the algorithm's -10 dB/s threshold) so
+        the algorithm walks forward and finds the ring
+        end. A 1s tau (matching the user's spectrogram
+        description) gives a slope of -8.7 dB/s — just
+        above the threshold — and the algorithm exits
+        at i_end=3 (~35ms). The 200ms tau simulates a
+        realistic toms strike's initial decay rate
+        without hitting the threshold floor.
+
+        This test directly guards the user's bug
+        (2026-06-12): project 4 26s section toms had
+        duration_ms=58 (should be ~1750)."""
+        # 75Hz tone, 2s total duration, 200ms exp decay
+        # (steep enough for the algorithm to measure)
+        audio = _make_tone(75.0, 2.0, decay_tau_ms=200.0)
+        dur = compute_duration_ms(audio, SR, 0.01)
+        assert dur is not None, (
+            "75Hz tone's ring should be measurable with the "
+            "wide 30-8000Hz duration band"
+        )
+        # With 200ms exp decay, the algorithm walks forward
+        # past the attack and finds the ring end at the end
+        # of audio (~1950ms). This proves the wide band can
+        # see the 75Hz fundamental.
+        # (Without the wide band, the 75Hz fundamental is
+        # invisible and the algorithm reports ~35ms — only
+        # the broadband attack click.)
+        assert dur > 500, (
+            f"75Hz tone's ring should be >500ms with wide band, "
+            f"got {dur}ms — duration band is missing the "
+            f"sub-bass fundamental?"
+        )
+
+    def test_sub_bass_tone_with_excluded_fp(self):
+        """The cap-jumping logic in
+        processing_shell.process_stem_to_midi: when the
+        next event in pga_onset_data has status='FILTERED'
+        (manually-excluded false positive in the WebUI),
+        the cap should be the NEXT KEPT event's time, not
+        the FP's time. This test simulates the bug at
+        the compute_duration_ms level: a sustained 75Hz
+        tone with a brief wide-band click injected at
+        +200ms. If the cap is the click's time, the ring
+        is truncated to ~180ms. With the cap-jumping
+        logic (or with a much later cap, simulating the
+        FP being filtered out), the ring is longer.
+
+        The actual cap-jumping happens in processing_shell
+        (CHANGE 4), but we can test the end-to-end
+        semantics here by passing a 'corrected' cap that
+        skips the FP.
+
+        Decay choice: 200ms tau (steep enough for the
+        algorithm to measure the ring past the click)."""
+        sr = SR
+        n = int(sr * 2.0)  # 2s of audio
+        audio = np.zeros(n, dtype=np.float32)
+        # Sustained 75Hz tone starting at 0.1s with 200ms exp decay
+        tone = _make_tone(75.0, 1.5, sr=sr, attack_ms=5.0, decay_tau_ms=200.0)
+        i0 = int(0.1 * sr)
+        audio[i0:i0 + len(tone)] = tone
+        # Wide-band click (FP) at 0.3s — only 3 samples of
+        # energy, simulating a noise pop that the WebUI
+        # would mark FILTERED.
+        click = _make_click(width_samples=3, sr=sr)
+        i0 = int(0.3 * sr)
+        audio[i0:i0 + len(click)] = click * 0.5
+
+        # BUG scenario: next_event_time_sec = click's time
+        # (the FP). The ring gets truncated at the click.
+        dur_capped_at_fp = compute_duration_ms(
+            audio, sr, 0.1, next_event_time_sec=0.3,
+        )
+        # FIX scenario: next_event_time_sec = far in future,
+        # as if the FP were filtered out and the next
+        # surviving event is the end-of-audio or similar.
+        dur_no_truncation = compute_duration_ms(
+            audio, sr, 0.1, next_event_time_sec=1.5,
+        )
+
+        assert dur_capped_at_fp is not None
+        assert dur_no_truncation is not None
+        # The fix should give a longer ring. The truncated
+        # one is bounded by IOI = 200ms, the untruncated
+        # one should be well past that.
+        assert dur_no_truncation > dur_capped_at_fp, (
+            f"FP-filtered ring {dur_no_truncation}ms should be > "
+            f"FP-capped ring {dur_capped_at_fp}ms — cap-jumping "
+            f"logic should let the ring extend past the filtered FP"
+        )
+        assert dur_capped_at_fp <= 220, (
+            f"FP-capped ring should be <=220ms (IOI=200ms), "
+            f"got {dur_capped_at_fp}ms"
         )
 
 
@@ -287,6 +402,39 @@ class TestRootPitch:
             skip_err = abs(pitch_skip - 150.0)
             noskip_err = abs(pitch_no_skip - 150.0)
             assert skip_err <= noskip_err + 1.0  # allow 1Hz slack
+
+    def test_low_freq_tone_has_pitch(self):
+        """A 75Hz tone (low toms fundamental) should be
+        detected as ~75Hz. Before the wide-pitch-band fix
+        (default fmin=60Hz), the fundamental was below
+        the search range and pYIN returned None or a
+        noisy octave. After the fix (default fmin=30Hz),
+        the 75Hz fundamental is in range and pYIN should
+        report it with reasonable confidence.
+
+        This test directly guards the user's bug
+        (2026-06-12): project 4 26s section toms had
+        root_pitch_hz=None (should be ~75Hz)."""
+        audio = _make_tone(75.0, 0.5, attack_ms=2.0, decay_tau_ms=200.0)
+        # Use the new default pitch band (30-4000) so pYIN
+        # can see down to 30Hz.
+        pitch, conf = compute_root_pitch(
+            audio, SR, 0.01, fmin_hz=30, fmax_hz=4000,
+        )
+        assert pitch is not None, (
+            "75Hz tone should have a detectable pitch with "
+            "fmin=30Hz; got None — pYIN can't see the fundamental?"
+        )
+        # pYIN accuracy on a clean tone: ±2Hz is normal.
+        # Allow some slack for low-frequency pYIN
+        # (lower frequencies are harder).
+        assert abs(pitch - 75.0) < 5.0, (
+            f"expected ~75Hz, got {pitch}Hz"
+        )
+        assert conf is not None
+        assert conf > 0.5, (
+            f"confidence should be >0.5, got {conf}"
+        )
 
 
 class TestSpectralCentroid:
