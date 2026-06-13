@@ -8,6 +8,7 @@ from .config import load_config, DrumMapping
 from .midi import create_midi_file, read_midi_notes, save_analysis_sidecar, load_analysis_sidecar, save_envelope_data, load_envelope_data
 from .learning import learn_threshold_from_midi, save_calibrated_config
 from .processing_shell import process_stem_to_midi
+from .pga_event_builder import build_pga_events
 from .rebuild_core import rebuild_events_from_analysis
 from .rebuild_shell import rebuild_midi_for_project
 
@@ -23,6 +24,7 @@ __all__ = [
     'learn_threshold_from_midi',
     'save_calibrated_config',
     'process_stem_to_midi',
+    'build_pga_events',
     'rebuild_events_from_analysis',
     'rebuild_midi_for_project',
 ]

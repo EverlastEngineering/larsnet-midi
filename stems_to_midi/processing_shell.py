@@ -43,11 +43,12 @@ from .spectral_transient_core import (
     SpectralTransientConfig,
     detect_spectral_transients,
 )
-from .percentile_gated_detector import detect_percentile_gated_broad_attacks
+from .pga_event_builder import build_pga_events
 
 __all__ = [
     'process_stem_to_midi',
     '_run_spectral_detection',
+    'build_pga_events',
 ]
 
 
@@ -1701,195 +1702,33 @@ def process_stem_to_midi(
     if spectral_onset_data:
         print(f"    Spectral detection: {len(spectral_onset_data)} candidate onsets")
 
-    # Step 11.5: Percentile-Gated Broad Attack detector (2026-06-10).
-    # Complementary to spectral — the spectral detector measures
-    # absolute band levels (good for the RING signal), this one
-    # measures broadband *change* relative to a per-bin noise
-    # floor (good for the ATTACK signal). Robust to saturated
-    # bands where the spectral detector's absolute level is
-    # misleading. Always runs alongside the other detectors;
-    # surfaces as ``events_pga`` / ``pga_onset_data`` in the
-    # sidecar. The WebUI uses the PGA events as another color
-    # in the waveform viewer — they show where the broadband
-    # percussive attack fired independent of the energy/RING
-    # signal. See ``percentile_gated_detector.py`` for the
-    # algorithm.
-    pga_event_times, pga_debug = detect_percentile_gated_broad_attacks(
-        audio_mono, sr,
+    # Step 11.5 + 11.6 + 11.6.5 + 11.6.6 + 11.7: PGA pipeline
+    # (2026-06-10 / 2026-06-11), refactored 2026-06-13 into a
+    # pure functional core at stems_to_midi/pga_event_builder.py.
+    #
+    # The PGA detector measures broadband *change* relative to a
+    # per-bin noise floor (good for the ATTACK signal) and is
+    # robust to saturated bands where the spectral detector's
+    # absolute level is misleading. It runs alongside the energy
+    # + spectral detectors on every stem; the toms pipeline uses
+    # it as the PRIMARY signal (energy + spectral results are
+    # discarded for toms — see _build_events_configured's toms
+    # short-circuit).
+    #
+    # The full pipeline (detection → per-event diagnostics →
+    # prominence filter → midi_velocity mapping → per-event
+    # feature extraction) is now in build_pga_events(). This
+    # function only handles the call + reassemble-back-to-
+    # pga_onset_data so downstream consumers (the toms branch
+    # that builds MIDI events, _build_events_configured, the
+    # sidecar serializer) keep their existing contract.
+    pga_events_kept, pga_events_filtered, pga_debug = build_pga_events(
+        audio_mono, sr, config,
     )
-    # Build per-event diagnostic dicts (2026-06-10). The
-    # WebUI tooltip surfaces envelope_value, prominence, and
-    # the IQR-derived abs_threshold so the user can see WHY a
-    # peak fired (or didn't) and compare energy/spectral/PGA
-    # signals at the same time point. Diagnostic-only fields
-    # that don't affect the configured pipeline. The IQR
-    # threshold is recomputed here for symmetry with the
-    # algorithm — see percentile_gated_detector.py for the
-    # q3 + 2.5*IQR rule.
-    _env = pga_debug.get('envelope') if pga_debug else None
-    _peaks = pga_debug.get('peaks') if pga_debug else None
-    _proms = pga_debug.get('prominences') if pga_debug else None
-    if _env is not None and _env.size > 0:
-        _q1, _q3 = np.percentile(_env, [25, 75])
-        _iqr = _q3 - _q1
-        _abs_thr = _q3 + 2.5 * _iqr
-    else:
-        _abs_thr = None
-    pga_onset_data = []
-    for i, t in enumerate(pga_event_times):
-        ev = {
-            'time': float(t),
-            'method': 'percentile_gated',
-            'status': 'KEPT',
-        }
-        if _peaks is not None and i < len(_peaks):
-            p = int(_peaks[i])
-            ev['frame'] = p
-            if _env is not None and p < len(_env):
-                ev['envelope_value'] = float(_env[p])
-            if _proms is not None and i < len(_proms):
-                ev['prominence'] = float(_proms[i])
-        if _abs_thr is not None:
-            ev['iqr_threshold'] = float(_abs_thr)
-        pga_onset_data.append(ev)
+    pga_onset_data = list(pga_events_kept) + list(pga_events_filtered)
     if pga_onset_data:
-        print(f"    Percentile-gated detection: {len(pga_onset_data)} candidate onsets")
-
-    # Step 11.6: PGA prominence filter (2026-06-10 / 2026-06-11).
-    # Post-detection filter: tag PGA events with prominence below
-    # ``pga_min_prominence`` as FILTERED (with a filter_reason
-    # string), but keep them in the list so the WebUI can render
-    # them as faded markers. The MIDI output skips FILTERED events.
-    # The default 1000 was chosen empirically — real toms strikes
-    # in the project 4 calibration had prominence 2000-15000, the
-    # 14.84/14.97 soft hits had prominence 2127-2727 (so they
-    # survive the default — duration feature catches them), and
-    # the 74.748/74.925 FPs had prominence 127-432 (so the default
-    # kills them). The threshold is exposed in midiconfig.yaml
-    # under ``onset_detection.pga_min_prominence`` so the user
-    # can tune per-project. See percentile_gated_detector.py for
-    # the prominence definition (scipy.signal.find_peaks).
-    pga_min_prominence = (
-        config.get('onset_detection', {}).get('pga_min_prominence', 1000.0)
-    )
-    pga_filtered_count = 0
-    for ev in pga_onset_data:
-        prom = ev.get('prominence')
-        if prom is not None and prom < pga_min_prominence:
-            ev['status'] = 'FILTERED'
-            ev['filter_reason'] = (
-                f"below pga_min_prominence ({prom:.0f} < {pga_min_prominence:.0f})"
-            )
-            pga_filtered_count += 1
-    if pga_filtered_count:
-        print(f"    PGA prominence filter (min={pga_min_prominence}): "
-              f"tagged {pga_filtered_count} events as FILTERED")
-
-    # Step 11.6.5: Compute midi_velocity per event (2026-06-11).
-    # The toms pipeline uses the PGA envelope_value as the sole
-    # velocity signal. We linearly map the per-file envelope
-    # range [env_min, env_max] onto the configured
-    # [min_velocity, max_velocity] clamp from midiconfig.yaml.
-    # The mapping is per-file (data-driven) — no magic numbers.
-    # If all envelope values are equal (only one event, or
-    # all events at the same envelope), every event gets
-    # min_velocity.
-    midi_min = int(config.get('midi', {}).get('min_velocity', 80))
-    midi_max = int(config.get('midi', {}).get('max_velocity', 110))
-    # Ensure sane ordering even if the user mis-configured
-    if midi_max <= midi_min:
-        midi_max = midi_min + 1
-    env_vals = [ev.get('envelope_value') for ev in pga_onset_data
-                if ev.get('envelope_value') is not None]
-    if env_vals:
-        env_min = min(env_vals)
-        env_max = max(env_vals)
-    else:
-        env_min, env_max = 0.0, 1.0
-    for ev in pga_onset_data:
-        env = ev.get('envelope_value')
-        if env is None or env_max == env_min:
-            ev['midi_velocity'] = midi_min
-        else:
-            t = (env - env_min) / (env_max - env_min)
-            ev['midi_velocity'] = int(round(midi_min + t * (midi_max - midi_min)))
-        # Clamp defensively
-        ev['midi_velocity'] = max(1, min(127, ev['midi_velocity']))
-
-    # Step 11.6.6: Record the active filter config in the
-    # event-level metadata (2026-06-11). The WebUI / sidecar
-    # inspection uses this to display "which filter dropped
-    # which event" without having to look at midiconfig.yaml.
-    pga_filter_config = {
-        'pga_min_prominence': pga_min_prominence,
-        'min_velocity': midi_min,
-        'max_velocity': midi_max,
-    }
-    # Attach to each event so the serializer can echo it
-    for ev in pga_onset_data:
-        ev['pga_filter_config'] = pga_filter_config
-
-    # Step 11.7: Per-event feature extraction (2026-06-10).
-    # Compute duration, pitch, decay, brightness, etc. for
-    # each PGA event. The two-pass flow:
-    #   Pass 1: measure features with the FULL detected list
-    #           (so the user can see initial classifications
-    #           and decide which to filter)
-    #   Pass 2 (in the WebUI): re-measure with the FILTERED
-    #           list as input, so a strike's ring extends past
-    #           any filtered-out events
-    # The single-pass initial measurement uses the current
-    # pga_onset_data (post-prominence-filter) as the
-    # "neighbors" — events still in the list at this point
-    # are the ones the user is most likely to keep.
-    if pga_onset_data:
-        from .event_features import compute_event_features
-        for i, ev in enumerate(pga_onset_data):
-            # Walk forward through pga_onset_data to find the
-            # next SURVIVING event (KEPT, or no status field at
-            # all — legacy events). Skip any event with
-            # status == 'FILTERED' (manually-excluded FPs in the
-            # WebUI) — using their time as the cap would
-            # truncate the current strike's ring at the FP's
-            # time. The user's toms example: real strike at
-            # 26.199s with ring to ~27.95s, FP filtered at
-            # 25.945s — without this fix the 26.199s strike's
-            # ring would be capped to nothing (FP is BEFORE
-            # the strike, not after, but the same FP-after-
-            # strike case applies to other events in the
-            # cluster). If no KEPT event after the current
-            # one, pass next_t = None (no cap, ring walks to
-            # end of audio).
-            next_t = None
-            for j in range(i + 1, len(pga_onset_data)):
-                candidate = pga_onset_data[j]
-                if candidate.get('status') != 'FILTERED':
-                    next_t = candidate.get('time')
-                    break
-            try:
-                feats = compute_event_features(
-                    audio_mono, sr, ev['time'],
-                    next_event_time_sec=next_t,
-                )
-            except Exception as exc:
-                # Defensive: a bad event shouldn't poison
-                # the rest of the pipeline. The diagnostic
-                # surface in the WebUI will show "N/A" for
-                # features on this event.
-                feats = {
-                    'duration_ms': None,
-                    'attack_rise_ms': None,
-                    'root_pitch_hz': None,
-                    'pitch_confidence': None,
-                    'decay_t60_ms': None,
-                    'spectral_centroid_hz': None,
-                    'spectral_flatness': None,
-                    'hr_peak_offset_ms': None,
-                    'decay_envelope_energy': None,
-                    'decay_col_min_median_db': None,
-                    'inter_onset_ms': None,
-                }
-            ev.update(feats)
+        print(f"    Percentile-gated detection: {len(pga_onset_data)} candidate onsets "
+              f"({len(pga_events_kept)} KEPT, {len(pga_events_filtered)} FILTERED)")
 
     # Step 12: Build events_configured based on the configured
     # detection_method. The energy and spectral detectors BOTH always
