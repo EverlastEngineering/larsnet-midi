@@ -1306,7 +1306,7 @@ async function saveTuningAndReconvert() {
 // ─── Client-Side Filtering ───────────────────────────────────────────────
 
 /**
- * Create the cached base events for tuning from events_configured.
+ * Create the cached base events for tuning from the stem's primary onset list.
  * Called once when entering tuning mode or switching stems.
  *
  * Uses events_configured (not events_sensitive) so the tune UI operates
@@ -1314,10 +1314,15 @@ async function saveTuningAndReconvert() {
  * have different onset start points and can contain events that don't exist
  * in the configured set, making them unreliable for previewing reconvert
  * results.
+ *
+ * For PGA-only stems (toms, 2026-06-15), events_configured is absent;
+ * events_pga is the sole source and is used as the fallback.
  */
 function initTuningBaseEvents(stemType) {
     const stemData = waveformAnalysisData?.stems?.[stemType];
-    const configuredEvents = stemData?.events_configured;
+    // events_configured: energy-detected onsets (most stems).
+    // events_pga: PGA-only onsets (toms, 2026-06-15 refactor).
+    const configuredEvents = stemData?.events_configured || stemData?.events_pga;
     if (!configuredEvents || configuredEvents.length === 0) {
         tuningBaseEvents = null;
         return;
@@ -1757,7 +1762,7 @@ function updateEventCounts(stemData) {
     const countEl = document.getElementById('tuning-event-counts');
     if (!countEl) return;
 
-    const sensitiveTotal = (stemData.events_sensitive || []).length;
+    const sensitiveTotal = (stemData.events_sensitive || stemData.events_pga || []).length;
     const configuredKept = getEventsForStem(stemData).filter(e => e.status === 'KEPT').length;
 
     if (waveformTuningEvents) {

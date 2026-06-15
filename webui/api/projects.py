@@ -281,14 +281,14 @@ def get_project_analysis(project_number):
                 'message': 'No MIDI directory found — run MIDI conversion first'
             }), 404
 
-        analysis_files = list(midi_dir.glob('*.analysis.json'))
-        if not analysis_files:
+        analysis_file = midi_dir / f"{project['name']}.analysis.json"
+        if not analysis_file.exists():
             return jsonify({
                 'error': 'No analysis data',
-                'message': 'No analysis.json found — run MIDI conversion first'
+                'message': f"No analysis file found for project: {project['name']}"
             }), 404
 
-        with open(analysis_files[0], 'r') as f:
+        with open(analysis_file, 'r') as f:
             analysis_data = json.load(f)
 
         # Run the bug C subset validation. The loader is the canonical

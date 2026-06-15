@@ -2,6 +2,14 @@
 
 ---
 
+## New June 12 2026
+
+enable pitch estimate even if pitch_confidence is anything above 0. we don't need to KNOW the exact pitch, we just need it as a classifier.
+
+
+
+
+
 ## Strategic Direction: Minimize Time-to-Usable-MIDI
 
 **Key Insight**: Audio-to-MIDI drum detection is a *bounded* problem. Perfect detection is impossible - even humans disagree on ghost notes, rimshots vs cross-sticks, and bleed interpretation. Chasing detection accuracy has diminishing returns.

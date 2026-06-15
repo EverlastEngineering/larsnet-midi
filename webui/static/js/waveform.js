@@ -231,12 +231,15 @@ async function initWaveformViewer(project) {
         };
     }
 
-    // Tune button visibility
+    // Tune button visibility — show if any stem has tuning-source data.
+    // events_sensitive: energy-detected onsets (most stems).
+    // events_pga: PGA-only onsets (toms, 2026-06-15 refactor).
     const tuneBtn = document.getElementById('tuning-toggle-btn');
     if (tuneBtn) {
         const hasAnySensitive = availableStems.some(s => {
             const sd = waveformAnalysisData.stems[s];
-            return sd.events_sensitive && sd.events_sensitive.length > 0;
+            return (sd.events_sensitive && sd.events_sensitive.length > 0) ||
+                   (sd.events_pga && sd.events_pga.length > 0);
         });
         tuneBtn.classList.toggle('hidden', !hasAnySensitive);
     }
@@ -273,7 +276,8 @@ async function selectStem(stemType) {
     const sensitiveContainer = document.getElementById('waveform-sensitive-container');
     if (sensitiveContainer) {
         const stemData = waveformAnalysisData.stems[stemType];
-        const hasSensitive = stemData.events_sensitive && stemData.events_sensitive.length > 0;
+        const hasSensitive = (stemData.events_sensitive && stemData.events_sensitive.length > 0) ||
+                             (stemData.events_pga && stemData.events_pga.length > 0);
         sensitiveContainer.classList.toggle('hidden', !hasSensitive);
     }
 
@@ -707,6 +711,8 @@ function drawPgaEventBars(ctx, events, timeToX, PAD, plotW, plotH) {
 function getEventsForStem(stemData) {
     if (stemData.events_configured) return stemData.events_configured;
     if (stemData.events) return stemData.events;
+    // PGA-only stems (toms, 2026-06-15): events_pga is the sole source
+    if (stemData.events_pga) return stemData.events_pga;
     return [];
 }
 
