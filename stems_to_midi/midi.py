@@ -605,6 +605,11 @@ def save_analysis_sidecar(
                 'reverb_continuation_attack_threshold', 0.4
             )
 
+        # Include onset_detection thresholds for frontend slider defaults
+        if config:
+            onset_config = config.get('onset_detection', {})
+            logic['pga_min_prominence'] = onset_config.get('pga_min_prominence', 1000.0)
+
         # Include classification thresholds for frontend slider defaults
         if config:
             stem_config = config.get(stem_type, {})
@@ -709,6 +714,8 @@ def save_analysis_sidecar(
         # Toms (2026-06-15): events_configured and events_sensitive
         # are absent for toms; events_pga is the sole source of truth.
         stem_dict = {}
+        if logic:
+            stem_dict['logic'] = logic
         if pga_events:
             stem_dict['events_pga'] = pga_events
         if configured_events:
