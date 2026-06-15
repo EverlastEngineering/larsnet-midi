@@ -801,13 +801,18 @@ def rebuild_events_from_analysis(
         if stem_type == 'toms':
             raw_pga = list(stem_data.get('events_pga', []))
             if raw_pga:
-                # Use the config/YAML threshold (which reflects the user's current
-                # setting, including any WebUI override). Fall back to the
-                # stored detect-time threshold only if the config has no value
-                # (sidecar predates the refactor).
-                current_pga_thr = config.get('onset_detection', {}).get('pga_min_prominence')
+                # Priority: stem-specific YAML > global onset_detection YAML >
+                # stored sidecar > hard default. Stem-specific wins when both
+                # exist (e.g. toms.pga_min_prominence overrides the global).
+                stem_pga = config.get(stem_type, {}).get('pga_min_prominence')
+                global_pga = config.get('onset_detection', {}).get('pga_min_prominence')
                 stored_thr = raw_pga[0].get('pga_filter_config', {}).get('pga_min_prominence')
-                pga_threshold = float(current_pga_thr if current_pga_thr is not None else (stored_thr or 1000.0))
+                pga_threshold = float(
+                    stem_pga if stem_pga is not None
+                    else global_pga if global_pga is not None
+                    else stored_thr if stored_thr is not None
+                    else 1000.0
+                )
             else:
                 pga_threshold = None
 

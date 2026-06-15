@@ -610,6 +610,13 @@ def save_analysis_sidecar(
             onset_config = config.get('onset_detection', {})
             logic['pga_min_prominence'] = onset_config.get('pga_min_prominence', 1000.0)
 
+        # Include stem-specific PGA threshold (stem wins over global onset_detection)
+        if config and stem_type == 'toms':
+            toms_config = config.get('toms', {})
+            stem_pga = toms_config.get('pga_min_prominence')
+            if stem_pga is not None:
+                logic['pga_min_prominence'] = stem_pga
+
         # Include classification thresholds for frontend slider defaults
         if config:
             stem_config = config.get(stem_type, {})

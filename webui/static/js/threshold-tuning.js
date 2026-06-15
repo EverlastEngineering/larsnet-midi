@@ -76,14 +76,10 @@ const STEM_SLIDER_CONFIGS = {
     // exposes a PGA-specific slider: pga_min_prominence (the scipy
     // find_peaks prominence floor applied in
     // pga_event_builder.build_pga_events). The slider's
-    // `yamlPath` overrides the default [stemType, key] persistence
-    // path because pga_min_prominence lives in the global
-    // `onset_detection` section of midiconfig.yaml, not under
-    // `toms:` — that matches the production key consumed by
-    // pga_event_builder.py:165 (`config.get('onset_detection',
-    // {}).get('pga_min_prominence', 1000.0)`).
+    // `yamlPath` is ['toms', 'pga_min_prominence'] to persist
+    // under the toms section of midiconfig.yaml.
     toms: [
-        { key: 'pga_min_prominence', label: 'PGA Min Prominence', min: 0, max: 10000, step: 100, fallback: 1000, unit: '', yamlPath: ['onset_detection', 'pga_min_prominence'] }
+        { key: 'pga_min_prominence', label: 'PGA Min Prominence', min: 0, max: 10000, step: 100, fallback: 1000, unit: '', yamlPath: ['toms', 'pga_min_prominence'] }
     ],
     hihat: [
         { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 200, step: 0.5, fallback: 8, unit: '' },
@@ -1216,17 +1212,8 @@ async function saveTuningAndReconvert() {
         if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Rebuilding…';
 
         try {
-            // Bug D: build config_overrides from the current slider values
-            // so the server-side rebuild uses the same thresholds the user
-            // sees in the tuning panel. Without this, the UI filter and
-            // the actual saved MIDI filter would diverge for any slider
-            // (especially reverb_continuation_attack_threshold).
-            const stored = tuningSliderValues[stemType] || {};
-            const configOverrides = _buildConfigOverrides(stemType, stored);
-
             const result = await api.rebuildMidi(currentProject.number, {
                 honor_overrides: true,
-                config_overrides: configOverrides,
             });
 
             if (result.success) {
