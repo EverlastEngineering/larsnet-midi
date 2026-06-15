@@ -609,7 +609,13 @@ def _events_to_midi(
 
     midi_events = []
     for i, event in enumerate(kept_events):
-        velocity = estimate_velocity(float(normalized[i]), min_velocity, max_velocity)
+        # For PGA events (toms), use the pre-computed midi_velocity from
+        # the detector's linear envelope-value mapping. For other stems,
+        # compute from the configured velocity source.
+        if event.get('method') == 'percentile_gated' and event.get('midi_velocity') is not None:
+            velocity = int(event['midi_velocity'])
+        else:
+            velocity = estimate_velocity(float(normalized[i]), min_velocity, max_velocity)
         midi_note = _resolve_note(event, i, stem_type, drum_mapping, config)
 
         # Duration: sustain-based or time-to-next
@@ -835,6 +841,35 @@ def rebuild_events_from_analysis(
                 # Update the sidecar's events_pga with new statuses
                 updated_stems[stem_type]['events_pga'] = raw_pga
                 updated_stems[stem_type]['events_configured'] = list(pga_kept)
+
+                # Build MIDI events for toms directly from PGA kept events.
+                # Toms uses ONLY events_pga — skip the energy/spectral path
+                # entirely. The PGA events already carry midi_velocity
+                # from the detector's linear envelope mapping.
+                toms_note = getattr(drum_mapping, 'toms')
+                toms_timing_offset = config.get('toms', {}).get('timing_offset', 0.0)
+                toms_max_duration = config.get('toms', {}).get('max_note_duration',
+                                         config.get('midi', {}).get('max_note_duration', 0.5))
+                midi_events = []
+                for i, ev in enumerate(pga_kept):
+                    midi_time = float(ev['time']) + toms_timing_offset
+                    velocity = int(ev.get('midi_velocity', 80))
+                    # Duration: use stored duration_ms or time-to-next
+                    if ev.get('duration_ms') is not None:
+                        duration = min(ev['duration_ms'] / 1000.0, toms_max_duration)
+                    elif i < len(pga_kept) - 1:
+                        duration = min(pga_kept[i + 1]['time'] - ev['time'], toms_max_duration)
+                    else:
+                        duration = config.get('audio', {}).get('default_note_duration', 0.1)
+                    midi_events.append({
+                        'time': float(midi_time),
+                        'note': int(toms_note),
+                        'velocity': int(velocity),
+                        'duration': float(duration),
+                    })
+                midi_events_by_stem[stem_type] = midi_events
+                continue
+                continue
             else:
                 events = list(configured_events)
         elif changed:
