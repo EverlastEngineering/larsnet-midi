@@ -45,7 +45,10 @@ _PKG_PARENT = _TEST_DIR.parent.parent
 if str(_PKG_PARENT) not in sys.path:
     sys.path.insert(0, str(_PKG_PARENT))
 
-from stems_to_midi.pga_event_builder import build_pga_events  # noqa: E402
+from stems_to_midi.pga_event_builder import (  # noqa: E402
+    build_pga_events,
+    _build_pga_events_with_filter,
+)
 from stems_to_midi.percentile_gated_detector import (  # noqa: E402
     detect_percentile_gated_broad_attacks,
 )
@@ -203,7 +206,7 @@ class TestStemTypeGating:
         config = _default_config(
             onset_detection={'pga_min_prominence': 3000.0},
         )
-        kept, filtered, _ = build_pga_events(audio_mono, sr, config)
+        kept, filtered, _ = _build_pga_events_with_filter(audio_mono, sr, config)
         # The toms consumer in process_stem_to_midi reassembles
         # pga_onset_data as kept + filtered, and the downstream
         # MIDI builder iterates that list skipping FILTERED. The
@@ -241,7 +244,7 @@ class TestProminenceFilterMovesEvents:
 
     def test_high_threshold_filters_everything(self):
         y = _make_synthetic_broadband_burst_stem()
-        kept, filtered, debug = build_pga_events(
+        kept, filtered, debug = _build_pga_events_with_filter(
             y, 44100, _default_config(
                 onset_detection={'pga_min_prominence': 1e9},
             ),
@@ -259,7 +262,7 @@ class TestProminenceFilterMovesEvents:
         y = _make_synthetic_broadband_burst_stem()
         prev_kept = None
         for thr in (0.0, 100.0, 1000.0, 10000.0, 1e9):
-            kept, filtered, _ = build_pga_events(
+            kept, filtered, _ = _build_pga_events_with_filter(
                 y, 44100, _default_config(
                     onset_detection={'pga_min_prominence': thr},
                 ),

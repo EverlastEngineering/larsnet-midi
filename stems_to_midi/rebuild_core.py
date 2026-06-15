@@ -777,7 +777,67 @@ def rebuild_events_from_analysis(
             spectral_config, stored_logic, config, stem_type,
         )
 
-        if changed:
+        # ------------------------------------------------------------------
+        # PGA prominence re-filter for toms (2026-06-15).
+        #
+        # After the pga_event_builder refactor, events_pga carries ALL
+        # detected events (status='KEPT', no filter applied at detect
+        # time). We ALWAYS re-apply the prominence filter for toms on
+        # every rebuild — using the stored threshold from the sidecar
+        # (which is the detect-time threshold). This produces the
+        # correct KEPT/filtered split regardless of whether the user
+        # moved the WebUI slider.
+        #
+        # This branch runs BEFORE the geomean/sustain filter path (which
+        # exempts method='percentile_gated' at line 365) so the PGA
+        # re-filter is the primary filter for toms.
+        # ------------------------------------------------------------------
+        if stem_type == 'toms':
+            raw_pga = list(stem_data.get('events_pga', []))
+            if raw_pga:
+                # Use the stored detect-time threshold; falls back to
+                # current config if sidecar predates the refactor.
+                stored_thr = raw_pga[0].get('pga_filter_config', {}).get('pga_min_prominence')
+                current_pga_thr = config.get('onset_detection', {}).get('pga_min_prominence')
+                pga_threshold = float(stored_thr if stored_thr is not None else (current_pga_thr or 1000.0))
+            else:
+                pga_threshold = None
+
+        if stem_type == 'toms' and pga_threshold is not None:
+            from .pga_event_builder import apply_pga_prominence_filter
+            raw_pga = list(stem_data.get('events_pga', []))
+            if raw_pga:
+                pga_kept, pga_filtered = apply_pga_prominence_filter(
+                    raw_pga,
+                    pga_threshold,
+                )
+                # Build time-keyed lookup for status assignment
+                kept_times = {round(e['time'], 4) for e in pga_kept}
+                filtered_times = {round(e['time'], 4) for e in pga_filtered}
+                for ev in raw_pga:
+                    t = round(ev['time'], 4)
+                    if t in kept_times:
+                        ev['status'] = 'KEPT'
+                        ev.pop('filter_reason', None)
+                    elif t in filtered_times:
+                        ev['status'] = 'FILTERED'
+                        prom = ev.get('prominence')
+                        ev['filter_reason'] = (
+                            f"below pga_min_prominence ({prom:.0f} < {pga_threshold:.0f})"
+                            if prom is not None else 'below pga_min_prominence'
+                        )
+                    # Update pga_filter_config to reflect the new threshold
+                    ev['pga_filter_config'] = dict(ev.get('pga_filter_config', {}))
+                    ev['pga_filter_config']['pga_min_prominence'] = pga_threshold
+
+                # events_configured for toms is the PGA kept list
+                events = list(pga_kept)
+                # Update the sidecar's events_pga with new statuses
+                updated_stems[stem_type]['events_pga'] = raw_pga
+                updated_stems[stem_type]['events_configured'] = list(pga_kept)
+            else:
+                events = list(configured_events)
+        elif changed:
             # Thresholds changed — need to re-filter
             if lowered:
                 # Thresholds lowered — merge sensitive events to find new candidates

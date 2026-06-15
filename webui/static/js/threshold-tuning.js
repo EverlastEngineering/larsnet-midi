@@ -1345,6 +1345,45 @@ function reapplyClassification(events) {
 }
 
 /**
+ * Apply PGA prominence filter to tuning events.
+ * Mirrors apply_pga_prominence_filter() in pga_event_builder.py.
+ *
+ * Re-tags events with status='FILTERED' when prominence < threshold.
+ * Disabled-id path (manual WebUI toggle-off) is handled separately
+ * by the override system — this function applies only the
+ * threshold gate.
+ *
+ * @param {Array}  events      - Event dicts (mutated in place)
+ * @param {number} threshold  - Minimum prominence for KEPT status
+ * @param {Set}    disabledIds - Optional set of event ids to force-FILTER
+ */
+function applyPgaProminenceFilter(events, threshold, disabledIds) {
+    const disabled = disabledIds || new Set();
+    for (const ev of events) {
+        const evId = ev.id != null ? ev.id : ev.time;
+        const isDisabled = disabled.has(evId);
+        const prom = ev.prominence;
+
+        if (isDisabled) {
+            ev.status = 'FILTERED';
+            ev.filter_reason = 'manually disabled via WebUI';
+        } else if (prom != null && prom < threshold) {
+            ev.status = 'FILTERED';
+            ev.filter_reason = (
+                `below pga_min_prominence (${prom.toFixed(0)} < ${threshold.toFixed(0)})`
+            );
+        } else {
+            ev.status = 'KEPT';
+            delete ev.filter_reason;
+        }
+        // Update pga_filter_config so the tooltip shows the live threshold
+        if (ev.pga_filter_config) {
+            ev.pga_filter_config.pga_min_prominence = threshold;
+        }
+    }
+}
+
+/**
  * Apply the current slider values to the cached tuning events and update
  * the waveform display. This replicates the server-side filter passes
  * from analysis_core.py.
@@ -1389,6 +1428,17 @@ function applyTuningFilter() {
     // spectral-only view by toggling here without committing the
     // drop to the saved MIDI.
     const onsetEventsEnabled = params.onset_events_enabled !== false;
+
+    // Pass 0: PGA prominence filter for toms (2026-06-15).
+    // Runs before spectral filter. PGA events (method='percentile_gated')
+    // are skipped by applySpectralFilter so this is the only filter
+    // that touches them here.
+    if (stemType === 'toms') {
+        const pgaThreshold = params.pga_min_prominence;
+        if (pgaThreshold != null) {
+            applyPgaProminenceFilter(tuningBaseEvents, pgaThreshold);
+        }
+    }
 
     // Run the energy-derived filters (Pass 1 and Pass 2) so
     // their statuses are consistent with the saved sidecar.

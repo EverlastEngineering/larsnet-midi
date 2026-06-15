@@ -268,6 +268,7 @@ def _serialize_onset_events(
         'hr_peak_offset_ms', 'decay_envelope_energy',
         'decay_col_min_median_db',
         'frame', 'envelope_value', 'prominence', 'iqr_threshold',
+        'pga_filter_config',
     )
 
     for onset_data in onset_data_list:
@@ -441,14 +442,14 @@ def _serialize_spectral_events(spectral_events: list) -> list:
 def _serialize_pga_events(pga_events: list) -> list:
     """
     Serialize percentile-gated broad-attack events for the
-    analysis.json sidecar (2026-06-10).
+    analysis.json sidecar (2026-06-10; updated 2026-06-15).
 
-    PGA events carry both detector-level diagnostic fields
-    (envelope value, prominence, IQR threshold) and
-    per-event feature fields (duration, attack_rise_ms,
-    pitch, decay_t60, centroid). The detector fields
-    explain WHY a peak fired; the feature fields enable
-    classification (kick/snare/hihat/toms/click).
+    After the 2026-06-15 refactor, ``events_pga`` in the sidecar
+    carries ALL detected events with ``status='KEPT'`` — no filter
+    is applied at detect time. The prominence filter is re-applied
+    by the WebUI (client-side live preview) and by rebuild_core
+    (server-side Save & Reconvert) using
+    ``apply_pga_prominence_filter()``.
 
     Each event has these fields (all may be None)::
 
@@ -512,6 +513,7 @@ def _serialize_pga_events(pga_events: list) -> list:
             # split: source of truth moved out of the
             # per-event payload.
             'midi_velocity': ev.get('midi_velocity'),
+            'pga_filter_config': ev.get('pga_filter_config'),
             'filter_reason': ev.get('filter_reason'),
         })
     return out

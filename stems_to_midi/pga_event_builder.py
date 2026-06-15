@@ -82,6 +82,7 @@ __all__ = [
     'build_pga_events',
     'detect_pga_events',
     'apply_pga_prominence_filter',
+    '_build_pga_events_with_filter',
     'PGAEventBuildError',
 ]
 
@@ -456,6 +457,57 @@ def build_pga_events(
     # ``detect_pga_events`` discards the debug, but the legacy
     # ``build_pga_events`` callers (and the existing test
     # contract) expect it on the return value.
+    _pga_event_times, pga_debug = detect_percentile_gated_broad_attacks(
+        audio_mono, sr,
+    )
+
+    raw = detect_pga_events(audio_mono, sr, config)
+    # No filter applied here — all events returned as KEPT.
+    # The sidecar stores the raw all-KEPT list; the WebUI and
+    # rebuild path call apply_pga_prominence_filter separately
+    # with their own threshold. Return shape is preserved
+    # (events_kept=all, events_filtered=[], debug_dict).
+    return raw, [], pga_debug
+
+
+def _build_pga_events_with_filter(
+    audio_mono: np.ndarray,
+    sr: int,
+    config: Dict[str, Any],
+) -> Tuple[List[Dict[str, List]], List[Dict], Dict[str, Any]]:
+    """Run the full PGA event pipeline on mono audio and return
+    the kept/filtered partition plus the detector debug dict.
+
+    This is the **filtered** variant used by the processing_shell
+    call site. It calls :func:`detect_pga_events` (all-KEPT raw) then
+    :func:`apply_pga_prominence_filter` with the configured
+    ``onset_detection.pga_min_prominence`` threshold.
+
+    Preserves the same return shape as the legacy ``build_pga_events``:
+    ``(events_kept, events_filtered, debug_dict)``.
+
+    Args:
+        audio_mono: 1-D float array of mono audio samples.
+        sr: Sample rate in Hz.
+        config: Project config dict. Reads
+            ``onset_detection.pga_min_prominence`` (default
+            ``1000``) and ``midi.min_velocity`` /
+            ``midi.max_velocity`` (defaults ``80``/``110``).
+
+    Returns:
+        ``(events_kept, events_filtered, debug_dict)``:
+          - ``events_kept``: list of event dicts that survived the
+            prominence filter (``status='KEPT'``).
+          - ``events_filtered``: list of event dicts tagged
+            ``status='FILTERED`` by the prominence filter.
+          - ``debug_dict``: detector internals (same shape as
+            ``detect_percentile_gated_broad_attacks`` debug output).
+    """
+    if audio_mono is None or len(audio_mono) == 0:
+        return _empty_result()
+    if sr is None or sr <= 0:
+        return _empty_result()
+
     _pga_event_times, pga_debug = detect_percentile_gated_broad_attacks(
         audio_mono, sr,
     )

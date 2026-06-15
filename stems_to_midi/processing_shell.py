@@ -43,12 +43,13 @@ from .spectral_transient_core import (
     SpectralTransientConfig,
     detect_spectral_transients,
 )
-from .pga_event_builder import build_pga_events
+from .pga_event_builder import build_pga_events, _build_pga_events_with_filter
 
 __all__ = [
     'process_stem_to_midi',
     '_run_spectral_detection',
     'build_pga_events',
+    '_build_pga_events_with_filter',
 ]
 
 
@@ -1742,13 +1743,23 @@ def process_stem_to_midi(
     # at waveform.js:236-242 keys on `events_sensitive.length > 0`
     # for any stem in the project). Cheap to hoist — the function
     # is pure and only requires `audio_mono`, `sr`, and `config`.
-    pga_events_kept, pga_events_filtered, pga_debug = build_pga_events(
+    #
+    # 2026-06-15: after the pga_event_builder refactor, we store
+    # ALL raw events (all-KEPT, no filter applied) in the sidecar
+    # as events_pga. The WebUI and rebuild path re-apply the
+    # prominence filter with the user's chosen threshold. The
+    # _build_pga_events_with_filter path is still used for the
+    # KEPT/filtered split that drives MIDI output and the
+    # events_configured short-circuit.
+    pga_raw, _, pga_debug = build_pga_events(audio_mono, sr, config)
+    pga_events_kept, pga_events_filtered, _ = _build_pga_events_with_filter(
         audio_mono, sr, config,
     )
-    pga_onset_data = list(pga_events_kept) + list(pga_events_filtered)
+    # Sidecar stores ALL raw events (all-KEPT) — WebUI/rebuild re-filter
+    pga_onset_data = list(pga_raw)
     if pga_onset_data:
         print(f"    Percentile-gated detection: {len(pga_onset_data)} candidate onsets "
-              f"({len(pga_events_kept)} KEPT, {len(pga_events_filtered)} FILTERED)")
+              f"({len(pga_events_kept)} KEPT at threshold, {len(pga_events_filtered)} FILTERED)")
 
     # Step 10 (cont.): PGA backfill for sensitive_onset_data.
     # Mirrors the energy-detector's "sensitive = max-sensitivity
@@ -1784,9 +1795,7 @@ def process_stem_to_midi(
     # indexed by KEPT position).
     if stem_type == 'toms':
         events = []
-        for ev in pga_onset_data:
-            if ev.get('status') == 'FILTERED':
-                continue
+        for ev in pga_events_kept:
             events.append({
                 'time': float(ev['time']),
                 'note': int(note),
