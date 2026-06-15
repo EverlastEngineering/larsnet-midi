@@ -626,7 +626,11 @@ def save_analysis_sidecar(
         # absent (older code paths that bypass process_stem_to_midi),
         # fall back to building from all_onset_data + midi_events.
         prebuilt_configured = analysis.get('events_configured')
-        if prebuilt_configured is not None:
+        if stem_type == 'toms':
+            # Toms (2026-06-15): events_pga is the sole source of truth.
+            # events_configured is absent for toms.
+            configured_events = []
+        elif prebuilt_configured is not None:
             # The prebuilt list is a flat list of onset-shaped dicts.
             # KEPT events still need note/velocity from midi_events;
             # the serializer handles that by KEPT-index.
@@ -696,25 +700,37 @@ def save_analysis_sidecar(
         total_configured += len(configured_events)
         total_filtered += sum(1 for e in configured_events if e.get('status') == 'FILTERED')
         total_sensitive += len(sensitive_events)
-
+        total_pga_events = len(pga_events)
         # Assemble stem data. The stem block shape is
         # stable: ``logic``, ``events_configured``,
         # ``events_sensitive``, ``events_spectral``,
         # ``events_pga``. No top-level threshold fields.
-        sidecar_data['stems'][stem_type] = {
-            'logic': logic,
-            'events_configured': configured_events,
-            'events_sensitive': sensitive_events,
-            'events_spectral': spectral_events,
-            'events_pga': pga_events,
-        }
+        # Build stem dict — only include event arrays when non-empty.
+        # Toms (2026-06-15): events_configured and events_sensitive
+        # are absent for toms; events_pga is the sole source of truth.
+        stem_dict = {}
+        if pga_events:
+            stem_dict['events_pga'] = pga_events
+        if configured_events:
+            stem_dict['events_configured'] = configured_events
+        if sensitive_events:
+            stem_dict['events_sensitive'] = sensitive_events
+        if spectral_events:
+            stem_dict['events_spectral'] = spectral_events
+        # Toms (2026-06-15): events_pga is the sole source of truth.
+        # Drop empty arrays so the keys are absent from the sidecar JSON.
+        if not configured_events:
+            stem_dict.pop('events_configured', None)
+        if not sensitive_events:
+            stem_dict.pop('events_sensitive', None)
+        sidecar_data['stems'][stem_type] = stem_dict
 
     # Write JSON
     with open(sidecar_path, 'w') as f:
         json.dump(sidecar_data, f, indent=2)
 
     print(f"  Saved analysis sidecar v3: {sidecar_path.name} "
-          f"({total_configured} configured events, {total_filtered} filtered, "
+          f"({total_pga_events} PGA events, {total_configured} configured events, {total_filtered} filtered, "
           f"{total_sensitive} sensitive events)")
 
     return sidecar_path

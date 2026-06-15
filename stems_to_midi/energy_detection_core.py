@@ -137,7 +137,12 @@ def calculate_energy_envelope(
             hop_length=hop_length
         )
     else:
-        raise ValueError(f"Unknown method: {method}")
+        # Defensive: unknown method falls back to rms. This prevents
+        # crashes when a misconfigured energy_method (e.g. 'percentile_gated'
+        # for toms) is set in the YAML.
+        import warnings
+        warnings.warn(f"Unknown energy method '{method}', falling back to 'rms'")
+        energy = librosa.feature.rms(y=audio, hop_length=hop_length)[0]
     
     # Calculate time for each frame
     times = librosa.frames_to_time(

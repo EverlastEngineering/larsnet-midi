@@ -495,7 +495,8 @@ def _build_pga_events_with_filter(
             ``midi.max_velocity`` (defaults ``80``/``110``).
 
     Returns:
-        ``(events_kept, events_filtered, debug_dict)``:
+        ``(raw, events_kept, events_filtered, debug_dict)``:
+          - ``raw``: the full list of events with no filter applied
           - ``events_kept``: list of event dicts that survived the
             prominence filter (``status='KEPT'``).
           - ``events_filtered``: list of event dicts tagged
@@ -519,4 +520,4 @@ def _build_pga_events_with_filter(
     events_kept, events_filtered = apply_pga_prominence_filter(
         raw, threshold,
     )
-    return events_kept, events_filtered, pga_debug
+    return raw, events_kept, events_filtered, pga_debug

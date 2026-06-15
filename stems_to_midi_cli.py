@@ -254,14 +254,24 @@ def _process_stems_to_midi(
                 # (energy only) and the spectral events never make it
                 # into the sidecar. Bug caught by e2e verifier on
                 # plan_e0953a25, 2026-06-08.
-                analysis_by_stem[stem_type] = {
-                    'events_configured': result.get('events_configured', []),
-                    'all_onset_data': result.get('all_onset_data', []),
-                    'sensitive_onset_data': result.get('sensitive_onset_data', []),
-                    'spectral_onset_data': result.get('spectral_onset_data', []),
-                    'spectral_config': result.get('spectral_config'),
-                    'pga_onset_data': result.get('pga_onset_data', []),
-                }
+                # Toms (2026-06-15): events_pga is the single source of truth.
+                # events_configured and events_sensitive are absent — do not include them.
+                if stem_type == 'toms':
+                    analysis_by_stem[stem_type] = {
+                        'pga_onset_data': result.get('pga_onset_data', []),
+                        'all_onset_data': result.get('all_onset_data', []),
+                        'spectral_onset_data': result.get('spectral_onset_data', []),
+                        'spectral_config': result.get('spectral_config'),
+                    }
+                else:
+                    analysis_by_stem[stem_type] = {
+                        'events_configured': result.get('events_configured', []),
+                        'all_onset_data': result.get('all_onset_data', []),
+                        'sensitive_onset_data': result.get('sensitive_onset_data', []),
+                        'spectral_onset_data': result.get('spectral_onset_data', []),
+                        'spectral_config': result.get('spectral_config'),
+                        'pga_onset_data': result.get('pga_onset_data', []),
+                    }
                 # Store envelope data for waveform visualization
                 if result.get('envelope_data'):
                     envelope_by_stem[stem_type] = result['envelope_data']

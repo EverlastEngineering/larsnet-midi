@@ -805,7 +805,7 @@ def rebuild_events_from_analysis(
                 # current config if sidecar predates the refactor.
                 stored_thr = raw_pga[0].get('pga_filter_config', {}).get('pga_min_prominence')
                 current_pga_thr = config.get('onset_detection', {}).get('pga_min_prominence')
-                pga_threshold = float(stored_thr if stored_thr is not None else (current_pga_thr or 1000.0))
+                pga_threshold = float(stored_thr if (stored_thr is not None and stored_thr >= 0) else (current_pga_thr or 1000.0))
             else:
                 pga_threshold = None
 
@@ -836,11 +836,12 @@ def rebuild_events_from_analysis(
                     ev['pga_filter_config'] = dict(ev.get('pga_filter_config', {}))
                     ev['pga_filter_config']['pga_min_prominence'] = pga_threshold
 
-                # events_configured for toms is the PGA kept list
+                # events_configured for toms is EMPTY — events_pga is the
+                # single source of truth for toms. rebuild_core writes
+                # back the re-filtered statuses to events_pga only.
                 events = list(pga_kept)
-                # Update the sidecar's events_pga with new statuses
                 updated_stems[stem_type]['events_pga'] = raw_pga
-                updated_stems[stem_type]['events_configured'] = list(pga_kept)
+                # events_configured intentionally absent for toms
 
                 # Build MIDI events for toms directly from PGA kept events.
                 # Toms uses ONLY events_pga — skip the energy/spectral path
@@ -868,7 +869,6 @@ def rebuild_events_from_analysis(
                         'duration': float(duration),
                     })
                 midi_events_by_stem[stem_type] = midi_events
-                continue
                 continue
             else:
                 events = list(configured_events)

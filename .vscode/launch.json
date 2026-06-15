@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug: stems_to_midi CLI",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "stems_to_midi_cli",
+            "cwd": "${workspaceFolder}",
+            "python": "/Users/jasoncopp/miniforge3/envs/drumtomidi/bin/python",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "CONDA_DEFAULT_ENV": "drumtomidi"
+            },
+            "args": ["4", "--stems", "toms"]
+        }
+    ]
+}

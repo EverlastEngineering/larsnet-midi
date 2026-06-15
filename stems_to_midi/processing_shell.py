@@ -43,7 +43,8 @@ from .spectral_transient_core import (
     SpectralTransientConfig,
     detect_spectral_transients,
 )
-from .pga_event_builder import build_pga_events, _build_pga_events_with_filter
+from .pga_event_builder import  _build_pga_events_with_filter
+from .processing_shell_percentile_gated import process_percentile_gated
 
 __all__ = [
     'process_stem_to_midi',
@@ -975,15 +976,15 @@ def _build_events_configured(
         the KEPT counter, so the order of energy events here must match
         the order of KEPT events in ``midi_events``.
     """
-    # Toms short-circuit (2026-06-11): PGA-only pipeline.
-    # The energy + spectral-transient inputs are empty for toms
-    # (see process_stem_to_midi), so the legacy 'energy' /
-    # 'spectral' / 'both' modes don't apply. We pass through
-    # the PGA events with their existing status (KEPT / FILTERED)
-    # — the WebUI uses status to render full-opacity vs faded,
-    # and the MIDI serializer skips FILTERED events.
-    if stem_type == 'toms' and pga_onset_data is not None:
-        return list(pga_onset_data)
+    # Toms short-circuit (2026-06-15): events_configured is EMPTY
+    # for toms. events_pga is the single source of truth — it
+    # carries ALL raw events (all-KEPT, no filter applied at
+    # detect time). The rebuild path re-filters events_pga using
+    # the YAML threshold and produces the correct kept/filtered
+    # split for MIDI output. events_configured should be absent
+    # so consumers know to use events_pga for toms.
+    if stem_type == 'toms':
+        return []
 
     # Spectral quality floor: only events with band_max_ratio at or
     # above this threshold are treated as real hits. Events below
@@ -1161,6 +1162,11 @@ def process_stem_to_midi(
             'spectral_config': Spectral config used for this stem
             'envelope_data': Energy envelope for waveform visualization
     """
+    # Percentile-gated shortcut (2026-06-15)
+    # Stems that use PGA exclusively delegate to the dedicated function.
+    if stem_type == 'toms':
+        return process_percentile_gated(audio_path, drum_mapping, config, min_velocity, max_velocity)
+
     # Step 1: Load and validate audio
     audio, sr = _load_and_validate_audio(audio_path, config, stem_type, max_duration)
     if audio is None:
@@ -1180,7 +1186,27 @@ def process_stem_to_midi(
         audio_mono = ensure_mono(audio)
     else:
         audio_mono = audio
-    
+
+    # Step 2: Toms shortcut (2026-06-15)
+    # Toms uses ONLY the PGA detector. Skip all energy/pan/spectral
+    # detection to avoid polluting the sidecar with unused arrays.
+    if stem_type == 'toms':
+        onset_times = np.array([], dtype=float)
+        onset_strengths = np.array([], dtype=float)
+        pan_positions = None
+        pan_classifications = None
+        envelope_data = None
+        all_onset_data = []
+        filtered_onset_data = []
+        sensitive_onset_data = []
+        spectral_onset_data = []
+        spectral_config = None
+        # Skip to after the energy/spectral detection block
+        # (jump to just before the PGA pipeline)
+        onset_times_empty_jump = True
+    else:
+        onset_times_empty_jump = False
+
     # Step 2: Configure and detect onsets
     onset_params = _configure_onset_detection(config, stem_type)
     learning_mode = onset_params['learning_mode']
@@ -1236,7 +1262,7 @@ def process_stem_to_midi(
             center_count = pan_classifications.count('center')
             right_count = pan_classifications.count('right')
             print(f"    Pan distribution: {left_count} left, {center_count} center, {right_count} right")
-    else:
+    elif not onset_times_empty_jump:
         # NEW METHOD (DEFAULT): Energy-based detection with scipy peaks + backtracking
         print(f"    Using energy-based detection (scipy peaks, stereo-aware, backtracked)")
         
@@ -1248,7 +1274,7 @@ def process_stem_to_midi(
         energy_method = config.get(stem_type, {}).get('energy_method', 'rms')
         peak_hold_ms = config.get(stem_type, {}).get('peak_hold_ms', 3.0)
         
-        onset_times, onset_strengths, extra_data = detect_onsets_energy_based(
+        onset_times, onset_strengths, extra_data = envelope_data(
             audio if is_stereo else audio_mono,  # Pass stereo if available
             sr,
             threshold_db=threshold_db,
@@ -1303,7 +1329,7 @@ def process_stem_to_midi(
     if stem_type == 'toms':
         print(f"    [toms] Keeping {len(onset_times)} energy-detector hits for the toms pipeline (will be replaced by PGA events at the end)")
 
-    if len(onset_times) == 0:
+    if len(onset_times) == 0 and not onset_times_empty_jump:
         return {'events': [], 'events_configured': [], 'all_onset_data': [], 'sensitive_onset_data': [], 'spectral_onset_data': [], 'spectral_config': None, 'envelope_data': envelope_data}
     
     # Step 3: Calculate event durations (NEW)
