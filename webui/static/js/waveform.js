@@ -161,6 +161,12 @@ async function initWaveformViewer(project) {
     audioBufferCache = {};
     eventOverrides = {};
     eventOverridesDirty = false;
+    // Clear all tuning state so fresh project loads with logic-block defaults
+    tuningSliderValues = {};
+    clusterNoteOverrides = {};
+    clusterFeatureOverrides = {};
+    tuningBaseEvents = null;
+    lastClassification = null;
 
     if (!project.has_analysis) {
         section.classList.add('hidden');

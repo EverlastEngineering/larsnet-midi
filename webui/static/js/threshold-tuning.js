@@ -618,13 +618,17 @@ function onSliderInput(e) {
         // Classification slider — only needs server reclassify, no local filtering
         scheduleReclassify();
     } else {
-        // Filtering slider — local filter first, then reclassify for note colors
+        // Filtering slider — local filter first. Reclassify only if we have
+        // prior classification results to re-apply (stems with sub-type
+        // clustering like snare/hihat). For PGA-only toms, lastClassification
+        // is null so reclassify is skipped.
         if (tuningRafId) cancelAnimationFrame(tuningRafId);
         tuningRafId = requestAnimationFrame(() => {
             applyTuningFilter();
             tuningRafId = null;
-            // After filtering, reclassify to update note assignments on new KEPT set
-            scheduleReclassify();
+            if (lastClassification) {
+                scheduleReclassify();
+            }
         });
     }
 }
@@ -705,7 +709,9 @@ function onToggleInput(e) {
     tuningRafId = requestAnimationFrame(() => {
         applyTuningFilter();
         tuningRafId = null;
-        scheduleReclassify();
+        if (lastClassification) {
+            scheduleReclassify();
+        }
     });
 }
 
