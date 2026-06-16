@@ -12,3 +12,4 @@ operations_bp = Blueprint('operations', __name__, url_prefix='/api')
 upload_bp = Blueprint('upload', __name__, url_prefix='/api')
 jobs_bp = Blueprint('jobs', __name__, url_prefix='/api')
 downloads_bp = Blueprint('downloads', __name__, url_prefix='/api')
+filters_bp = Blueprint('filters', __name__, url_prefix='/api/filters')  # 2026-06-15: filter registry API
