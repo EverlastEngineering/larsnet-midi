@@ -1,0 +1,67 @@
+{
+  "version": "1.0",
+  "schema_url": "https://larsnet.local/schemas/filter-registry-v1.json",
+  "kinds": [
+    "min_value",
+    "max_value",
+    "nonzero_when_enabled",
+    "and",
+    "or",
+    "not"
+  ],
+  "value_formats": {
+    "int": "Format as integer (no decimal places).",
+    "float1": "Format with 1 decimal place.",
+    "float2": "Format with 2 decimal places."
+  },
+  "filters": [
+    {
+      "id": "pga_min_prominence",
+      "label": "PGA Min Prominence",
+      "description": "Filter PGA events with prominence (scipy find_peaks prominence on the broadband contrast-summed envelope) below the threshold. Catches noise events with no real attack.",
+      "default": 1000,
+      "min": 0,
+      "max": 10000,
+      "step": 100,
+      "unit": "",
+      "ui_control": "slider",
+      "applies_to_stems": ["toms"],
+      "yaml_paths": {
+        "global": ["onset_detection", "pga_min_prominence"],
+        "per_stem": {
+          "toms": ["toms", "pga_min_prominence"]
+        }
+      },
+      "filter": {
+        "kind": "min_value",
+        "field": "prominence",
+        "reason_template": "below pga_min_prominence ({value} < {threshold})",
+        "value_format": "int"
+      }
+    },
+    {
+      "id": "min_decay_col_min_db",
+      "label": "Min Decay Col-Min (dB)",
+      "description": "Filter PGA events with decay_col_min_median_db below the threshold. Catches single-frame noise pops with no sustained ring. Empirically: real toms strikes -60 to -84 dB, noise pops -84 to -90 dB. -80 dB is the safe cut between the two clusters.",
+      "default": -80.0,
+      "min": -120.0,
+      "max": 0.0,
+      "step": 0.5,
+      "unit": "dB",
+      "ui_control": "slider",
+      "applies_to_stems": ["toms"],
+      "yaml_paths": {
+        "global": ["onset_detection", "min_decay_col_min_db"],
+        "per_stem": {
+          "toms": ["toms", "min_decay_col_min_db"]
+        }
+      },
+      "filter": {
+        "kind": "min_value",
+        "field": "decay_col_min_median_db",
+        "reason_template": "below min_decay_col_min_db ({value}dB < {threshold}dB)",
+        "value_format": "float1"
+      }
+    }
+  ]
+}

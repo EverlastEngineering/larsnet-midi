@@ -76,6 +76,11 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
 
 from .percentile_gated_detector import detect_percentile_gated_broad_attacks
+from .filter_kinds import (
+    find_filter,
+    evaluate_filter,
+    build_filter_reason as _build_filter_reason,
+)
 
 
 __all__ = [
@@ -320,6 +325,81 @@ def detect_pga_events(
     return pga_onset_data
 
 
+def _apply_pga_filter(
+    events: List[Dict[str, Any]],
+    filter_spec: Dict[str, Any],
+    threshold: Any,
+    disabled_ids: Optional[Set[Any]] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Apply a filter from the registry to a list of events.
+
+    Shared body for :func:`apply_pga_prominence_filter` and
+    :func:`apply_pga_decay_col_min_filter` (and any future PGA
+    filter added to the registry). The two wrappers exist only
+    to keep the public API stable and to provide stem-specific
+    docstrings; the actual logic is here.
+
+    2026-06-15: this is the centralization point for the
+    2026-06-15 filter-registry refactor. Adding a new filter
+    is now a JSON entry in ``stems_to_midi/filter_registry.json``
+    plus a thin wrapper here that calls this helper — no
+    hand-rolled filter logic per filter.
+
+    The disabled_ids check takes precedence over the threshold
+    (so the WebUI can hide an event the user has explicitly
+    toggled off regardless of the slider value).
+
+    Does NOT mutate the per-event features /
+    pga_filter_config of each event — only touches ``status``
+    and (when changed) adds ``filter_reason``. The consumer is
+    expected to call this with the same threshold multiple
+    times during interactive tuning without losing diagnostic
+    data.
+    """
+    kept: List[Dict[str, Any]] = []
+    filtered: List[Dict[str, Any]] = []
+    disabled_ids = disabled_ids or set()
+
+    for ev in events:
+        # Resolve the stable id for the disabled lookup. The
+        # WebUI identifies events by 'time' (when the pipeline
+        # didn't stamp an explicit 'id') and by 'id' once we
+        # migrate; both work here.
+        ev_id = ev.get('id', ev.get('time'))
+        if ev_id in disabled_ids:
+            ev['status'] = 'FILTERED'
+            ev['filter_reason'] = 'manually disabled via WebUI'
+            filtered.append(ev)
+            continue
+
+        # Delegate to the registry. evaluate_filter returns
+        # True (KEPT) / False (FILTERED) / None (cannot
+        # evaluate — e.g. the field is missing). None is
+        # treated as KEPT (we can't filter what we can't
+        # see; same as the old behavior for events with no
+        # field).
+        result = evaluate_filter(filter_spec, ev, threshold)
+        if result is False:
+            ev['status'] = 'FILTERED'
+            ev['filter_reason'] = _build_filter_reason(
+                filter_spec, ev, threshold,
+            )
+            filtered.append(ev)
+        else:
+            ev['status'] = 'KEPT'
+            # Clear any stale filter_reason from a prior filter
+            # call (e.g. the user moved the slider back up). This
+            # is intentional: the WebUI tooltip only shows the
+            # reason when the event is currently FILTERED, but
+            # leaving a stale reason would be confusing if the
+            # event is re-shown via the tuning panel.
+            if 'filter_reason' in ev:
+                del ev['filter_reason']
+            kept.append(ev)
+
+    return kept, filtered
+
+
 def apply_pga_prominence_filter(
     events: List[Dict[str, Any]],
     threshold: float,
@@ -328,12 +408,21 @@ def apply_pga_prominence_filter(
     """Re-tag PGA events with status='FILTERED' based on prominence
     and an optional manual-disable set.
 
+    Thin wrapper around the filter registry (2026-06-15). The
+    actual filter logic lives in
+    ``stems_to_midi/filter_registry.json`` under the
+    ``pga_min_prominence`` entry, evaluated by
+    :mod:`stems_to_midi.filter_kinds`. The WebUI uses the same
+    registry via :mod:`webui.static.js.filter_kinds`. Adding a
+    new filter is a JSON entry — no per-filter Python code.
+
     Pure function: walks ``events`` in input order, sets
     ``status='FILTERED'`` and ``filter_reason=...`` on any event
     that either:
 
       (a) has ``prominence < threshold`` (with reason
-          ``f"below pga_min_prominence ({prom:.0f} < {thr:.0f})"``),
+          ``"below pga_min_prominence ({value} < {threshold})"``,
+          from the registry's reason_template),
       (b) has an id (or fallback stable identifier) in
           ``disabled_ids`` (with reason
           ``"manually disabled via WebUI"``).
@@ -374,46 +463,9 @@ def apply_pga_prominence_filter(
         ``(kept, filtered)`` — two flat lists partitioning
         ``events`` by final status, both in input order.
     """
-    kept: List[Dict[str, Any]] = []
-    filtered: List[Dict[str, Any]] = []
-    disabled_ids = disabled_ids or set()
-
-    for ev in events:
-        # Resolve the stable id for the disabled lookup. The
-        # WebUI identifies events by 'time' (when the pipeline
-        # didn't stamp an explicit 'id') and by 'id' once we
-        # migrate; both work here.
-        ev_id = ev.get('id', ev.get('time'))
-        is_disabled = ev_id in disabled_ids
-
-        prom = ev.get('prominence')
-        below_threshold = (
-            prom is not None and prom < threshold
-        )
-
-        if is_disabled:
-            ev['status'] = 'FILTERED'
-            ev['filter_reason'] = 'manually disabled via WebUI'
-            filtered.append(ev)
-        elif below_threshold:
-            ev['status'] = 'FILTERED'
-            ev['filter_reason'] = (
-                f"below pga_min_prominence ({prom:.0f} < {threshold:.0f})"
-            )
-            filtered.append(ev)
-        else:
-            ev['status'] = 'KEPT'
-            # Clear any stale filter_reason from a prior filter
-            # call (e.g. the user moved the slider back up). This
-            # is intentional: the WebUI tooltip only shows the
-            # reason when the event is currently FILTERED, but
-            # leaving a stale reason would be confusing if the
-            # event is re-shown via the tuning panel.
-            if 'filter_reason' in ev:
-                del ev['filter_reason']
-            kept.append(ev)
-
-    return kept, filtered
+    return _apply_pga_filter(
+        events, find_filter('pga_min_prominence'), threshold, disabled_ids,
+    )
 
 
 def apply_pga_decay_col_min_filter(
@@ -426,9 +478,12 @@ def apply_pga_decay_col_min_filter(
     manual-disable set (2026-06-15).
 
     Sister function to :func:`apply_pga_prominence_filter` —
-    same contract, different diagnostic field. The detector
-    stamps ``decay_col_min_median_db`` on every event (see
-    :func:`stems_to_midi.event_features.compute_event_features`
+    same contract, different diagnostic field. Also a thin
+    wrapper around the filter registry; see
+    :func:`apply_pga_prominence_filter` for the design.
+
+    The detector stamps ``decay_col_min_median_db`` on every
+    event (see :func:`stems_to_midi.event_features.compute_event_features`
     → :func:`compute_high_res_decay_signature`), so the filter
     layer is decoupled from the detector.
 
@@ -438,7 +493,8 @@ def apply_pga_decay_col_min_filter(
 
       (a) has ``decay_col_min_median_db < threshold`` (with
           reason
-          ``f"below min_decay_col_min_db ({db:.1f}dB < {thr:.1f}dB)"``),
+          ``"below min_decay_col_min_db ({value}dB < {threshold}dB)"``,
+          from the registry's reason_template),
       (b) has an id (or fallback stable identifier) in
           ``disabled_ids`` (with reason
           ``"manually disabled via WebUI"``).
@@ -481,41 +537,9 @@ def apply_pga_decay_col_min_filter(
         ``(kept, filtered)`` — two flat lists partitioning
         ``events`` by final status, both in input order.
     """
-    kept: List[Dict[str, Any]] = []
-    filtered: List[Dict[str, Any]] = []
-    disabled_ids = disabled_ids or set()
-
-    for ev in events:
-        # Same id-resolution pattern as apply_pga_prominence_filter.
-        ev_id = ev.get('id', ev.get('time'))
-        is_disabled = ev_id in disabled_ids
-
-        col_min = ev.get('decay_col_min_median_db')
-        below_threshold = (
-            col_min is not None and col_min < threshold
-        )
-
-        if is_disabled:
-            ev['status'] = 'FILTERED'
-            ev['filter_reason'] = 'manually disabled via WebUI'
-            filtered.append(ev)
-        elif below_threshold:
-            ev['status'] = 'FILTERED'
-            ev['filter_reason'] = (
-                f"below min_decay_col_min_db "
-                f"({col_min:.1f}dB < {threshold:.1f}dB)"
-            )
-            filtered.append(ev)
-        else:
-            ev['status'] = 'KEPT'
-            # Clear any stale filter_reason from a prior filter
-            # call (e.g. the user moved the slider back up). Same
-            # rationale as apply_pga_prominence_filter.
-            if 'filter_reason' in ev:
-                del ev['filter_reason']
-            kept.append(ev)
-
-    return kept, filtered
+    return _apply_pga_filter(
+        events, find_filter('min_decay_col_min_db'), threshold, disabled_ids,
+    )
 
 
 def build_pga_events(
