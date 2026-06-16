@@ -22,6 +22,17 @@ let hihatClassificationEnabled = {};
 /** Current slider values per stem (persisted across tab switches) */
 let tuningSliderValues = {};
 
+/**
+ * Live midiconfig.yaml values for the active stem, fetched from
+ * /api/projects/<n>/tuning-config/<stem_type> on panel open / stem
+ * switch / save completion. Replaces the analysis.json `logic` block
+ * as the source of slider defaults (2026-06-15). yaml is the single
+ * source of truth for config; the sidecar is output only.
+ *
+ * Format: { stemType: { geomean_threshold, pga_min_prominence, ... } }
+ */
+let tuningConfig = {};
+
 /** Animation frame ID for debounced re-filtering */
 let tuningRafId = null;
 
@@ -113,10 +124,34 @@ const STEM_FILTER_MODES = {
 // ─── Public API ──────────────────────────────────────────────────────────
 
 /**
+ * Fetch the live midiconfig.yaml values for a stem and cache them.
+ * Called on panel open, on stem switch, and after Save & Reconvert
+ * commits. The cache is the source of truth for slider defaults —
+ * the analysis.json `logic` block is no longer consulted (2026-06-15).
+ *
+ * On fetch failure, logs a warning and leaves any cached value in
+ * place (fallback). New sliders built before the fetch returns will
+ * fall back to the slider config's `fallback` value.
+ */
+async function loadTuningConfig(stemType) {
+    if (!currentProject || !stemType) return;
+    try {
+        const cfg = await api.getTuningConfig(currentProject.number, stemType);
+        if (cfg && typeof cfg === 'object') {
+            tuningConfig[stemType] = cfg;
+        }
+    } catch (err) {
+        // Soft failure — don't block the panel from opening.
+        // Build sliders from the static `fallback` defaults.
+        console.warn(`loadTuningConfig(${stemType}) failed:`, err.message);
+    }
+}
+
+/**
  * Toggle the tuning panel visibility.
  * Called from the "Tune" button in the analysis section.
  */
-function toggleTuningPanel() {
+async function toggleTuningPanel() {
     tuningPanelOpen = !tuningPanelOpen;
     const panel = document.getElementById('tuning-panel');
     const btn = document.getElementById('tuning-toggle-btn');
@@ -127,13 +162,22 @@ function toggleTuningPanel() {
         panel.classList.remove('hidden');
         if (btn) btn.classList.add('tuning-btn-active');
 
-        // Initialize sliders for the active stem
+        // Load the live yaml config for the active stem BEFORE
+        // building sliders — slider defaults are sourced from the
+        // yaml, not the sidecar. The fetch is awaited so the first
+        // render shows correct values (not a flash of stale fallback
+        // defaults). 2026-06-15.
+        //
+        // Do NOT call applyTuningFilter() / scheduleReclassify()
+        // here. The user wants the Kept count to stay at the
+        // sidecar's value until they actually drag a slider — not
+        // jump to the live-tuned count the moment Tune opens. The
+        // first slider input handler kicks the filter pass off
+        // naturally. 2026-06-15.
         if (waveformActiveStem) {
+            await loadTuningConfig(waveformActiveStem);
             buildSlidersForStem(waveformActiveStem);
             initTuningBaseEvents(waveformActiveStem);
-            applyTuningFilter();
-            // Immediately reclassify so events get colored on open
-            scheduleReclassify();
         }
     } else {
         panel.classList.add('hidden');
@@ -165,17 +209,23 @@ function toggleTuningPanel() {
  * Called when the active stem changes (from selectStem in waveform.js).
  * Updates sliders if the tuning panel is open.
  */
-function onTuningStemChanged(stemType) {
+async function onTuningStemChanged(stemType) {
     if (!tuningPanelOpen) return;
     // Cancel any pending reclassify from the previous stem
     if (reclassifyTimeoutId) { clearTimeout(reclassifyTimeoutId); reclassifyTimeoutId = null; }
     hideClusterCards();
     tuningBaseEvents = null;
     lastClassification = null;
+    // Fetch the new stem's live yaml config before rebuilding
+    // sliders. Same rationale as toggleTuningPanel: avoid a flash
+    // of fallback defaults between stem switches. 2026-06-15.
+    //
+    // Like on open, don't call applyTuningFilter() here — the
+    // Kept count should hold at the sidecar's value until the
+    // user moves a slider on the new stem. 2026-06-15.
+    await loadTuningConfig(stemType);
     buildSlidersForStem(stemType);
     initTuningBaseEvents(stemType);
-    applyTuningFilter();
-    scheduleReclassify();
 }
 
 /**
@@ -216,9 +266,14 @@ function buildSlidersForStem(stemType) {
         return;
     }
 
-    // Get defaults from analysis.json logic block
+    // Get defaults from live midiconfig.yaml (2026-06-15). The
+    // analysis.json `logic` block is no longer consulted — yaml is
+    // the single source of truth for config. tuningConfig is loaded
+    // by loadTuningConfig() on panel open / stem switch / save
+    // completion. Falls back to an empty dict while the fetch is in
+    // flight (slider config's `fallback` then wins).
     const stemData = waveformAnalysisData?.stems?.[stemType];
-    const logic = stemData?.logic || {};
+    const logic = tuningConfig[stemType] || {};
 
     // Compute the dataset's actual band_max_ratio max (2026-06-10).
     // The ratio slider in the sidecar exposes the full range so
@@ -1040,8 +1095,13 @@ function updateTuningSaveButton() {
     if (!btn || !waveformActiveStem) return;
 
     const stemType = waveformActiveStem;
-    const stemData = waveformAnalysisData?.stems?.[stemType];
-    const logic = stemData?.logic || {};
+    // Get defaults from live midiconfig.yaml (2026-06-15). The
+    // analysis.json `logic` block is no longer consulted — yaml is
+    // the single source of truth for config. tuningConfig is loaded
+    // by loadTuningConfig() on panel open / stem switch / save
+    // completion. Falls back to an empty dict while the fetch is in
+    // flight (slider config's `fallback` then wins).
+    const logic = tuningConfig[stemType] || {};
     const sliderConfigs = STEM_SLIDER_CONFIGS[stemType];
     const stored = tuningSliderValues[stemType] || {};
 
@@ -1127,8 +1187,13 @@ function _sliderValueChanged(slider, currentVal, configuredVal) {
 function buildConfigUpdates(stemType) {
     const sliderConfigs = STEM_SLIDER_CONFIGS[stemType];
     const stored = tuningSliderValues[stemType] || {};
-    const stemData = waveformAnalysisData?.stems?.[stemType];
-    const logic = stemData?.logic || {};
+    // Get defaults from live midiconfig.yaml (2026-06-15). The
+    // analysis.json `logic` block is no longer consulted — yaml is
+    // the single source of truth for config. tuningConfig is loaded
+    // by loadTuningConfig() on panel open / stem switch / save
+    // completion. Falls back to an empty dict while the fetch is in
+    // flight (slider config's `fallback` then wins).
+    const logic = tuningConfig[stemType] || {};
     const updates = [];
 
     if (!sliderConfigs) return updates;
@@ -1206,6 +1271,11 @@ async function saveTuningAndReconvert() {
     try {
         // Step 1: Save config changes
         await api.updateConfig(currentProject.number, 'midiconfig', updates);
+        // Re-fetch the live yaml so tuningConfig reflects the
+        // committed values (the Save button reset below clears
+        // tuningSliderValues, so the next panel open will read
+        // straight from tuningConfig). 2026-06-15.
+        await loadTuningConfig(stemType);
         showToast(`Saved ${updates.length} threshold${updates.length > 1 ? 's' : ''} for ${stemType}`, 'success');
 
         // Step 2: Try fast rebuild from cached analysis
@@ -1440,13 +1510,21 @@ function applyTuningFilter() {
 
     // Run the energy-derived filters (Pass 1 and Pass 2) so
     // their statuses are consistent with the saved sidecar.
-    // Pass 1: Spectral filter (geomean + sustain + strength)
-    applySpectralFilter(tuningBaseEvents, params, filterMode);
+    // For toms, events are all method='percentile_gated' and have
+    // no geomean / sustain / strength / attack_sharpness fields —
+    // applySpectralFilter would reset them all to KEPT and the
+    // geomean/sustain/strength checks would silently no-op on
+    // null values, wiping out the PGA filter's KEPT/FILTERED
+    // decisions above. Skip both passes for toms. 2026-06-15.
+    if (stemType !== 'toms') {
+        // Pass 1: Spectral filter (geomean + sustain + strength)
+        applySpectralFilter(tuningBaseEvents, params, filterMode);
 
-    // Pass 2: Reverb continuation filter
-    const attackThreshold = params.reverb_continuation_attack_threshold;
-    if (attackThreshold != null) {
-        applyReverbContinuationFilter(tuningBaseEvents, attackThreshold);
+        // Pass 2: Reverb continuation filter
+        const attackThreshold = params.reverb_continuation_attack_threshold;
+        if (attackThreshold != null) {
+            applyReverbContinuationFilter(tuningBaseEvents, attackThreshold);
+        }
     }
 
     // If the onset events gate is off, drop energy events from

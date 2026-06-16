@@ -306,7 +306,7 @@ async function selectStem(stemType) {
     ensureAudioBuffer(stemType);
 
     if (typeof onTuningStemChanged === 'function') {
-        onTuningStemChanged(stemType);
+        await onTuningStemChanged(stemType);
     }
 }
 
@@ -353,7 +353,16 @@ function drawWaveform() {
     const stemData = waveformAnalysisData.stems[waveformActiveStem];
     const configuredEvents = getEventsForStem(stemData);
     const sensitiveEvents = getSensitiveEventsForStem(stemData);
-    const pgaEvents = getPgaEventsForStem(stemData);
+    // 2026-06-15: in tuning mode, render the PGA layer from the
+    // live tuning events (with slider-driven KEPT/FILTERED status)
+    // instead of the unmodified sidecar. This is the fix for the
+    // "faded lines should show up as kept" symptom: the PGA bar
+    // layer now follows the slider drag in real time, matching the
+    // event count display (which already reads from
+    // waveformTuningEvents).
+    const pgaEvents = (waveformTuningActive && waveformTuningEvents)
+        ? waveformTuningEvents
+        : getPgaEventsForStem(stemData);
     const envelope = waveformEnvelopeCache[waveformActiveStem];
 
     const displayEvents = (waveformTuningActive && waveformTuningEvents)
@@ -441,11 +450,18 @@ function drawEnvelopePanel(envelope, tMin, tMax, stemData, configuredEvents, sen
         drawEnvelope(ctx, envelope, timeToX, PAD, plotH, envelopeMax);
     }
 
-    // Threshold line (on geomean scale)
+    // Threshold line (on geomean scale). Priority:
+    //   1. Live slider value (tuning mode) — what the user just moved
+    //   2. Live midiconfig.yaml (tuningConfig) — the committed value
+    //      (2026-06-15: the analysis.json `logic` block is no longer
+    //      read; yaml is the single source of truth)
+    //   3. Hidden (null) — no threshold configured for this stem
     const geomeanMax = computeMaxGeomean(configuredEvents, sensitiveEvents);
-    const logic = stemData.logic || {};
     const tuningGeomean = waveformTuningActive && tuningSliderValues?.[waveformActiveStem]?.geomean_threshold;
-    const thresholdVal = tuningGeomean != null ? tuningGeomean : logic.geomean_threshold;
+    const liveYamlGeomean = (typeof tuningConfig !== 'undefined' && tuningConfig[waveformActiveStem])
+        ? tuningConfig[waveformActiveStem].geomean_threshold
+        : null;
+    const thresholdVal = tuningGeomean != null ? tuningGeomean : liveYamlGeomean;
     if (thresholdVal != null && geomeanMax > 0) {
         const geomeanToY = v => PAD.top + plotH - (v / (geomeanMax * 1.2 || 1)) * plotH;
         drawThresholdLine(ctx, thresholdVal, geomeanToY, PAD, plotW);
@@ -1635,7 +1651,13 @@ function onCanvasMouseMove(e) {
     const stemData = waveformAnalysisData.stems[waveformActiveStem];
     const configuredEvents = getEventsForStem(stemData);
     const sensitiveEvents = getSensitiveEventsForStem(stemData);
-    const pgaEvents = getPgaEventsForStem(stemData);
+    // 2026-06-15: in tuning mode, hit-test against the live tuning
+    // events so the user can hover over faded bars that are about
+    // to become KEPT as they drag the slider. See drawWaveform for
+    // the same logic in the render path.
+    const pgaEvents = (typeof waveformTuningActive !== 'undefined' && waveformTuningActive && waveformTuningEvents)
+        ? waveformTuningEvents
+        : getPgaEventsForStem(stemData);
     const envelope = waveformEnvelopeCache[waveformActiveStem];
 
         const { tMin: tMinFull, tMax: tMaxFull } = computeTimeRange(configuredEvents, sensitiveEvents, envelope, pgaEvents);

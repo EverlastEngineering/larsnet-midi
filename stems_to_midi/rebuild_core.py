@@ -770,18 +770,33 @@ def rebuild_events_from_analysis(
         stem_data = updated_stems[stem_type]
         configured_events = stem_data.get('events_configured', [])
         sensitive_events = stem_data.get('events_sensitive', [])
-        stored_logic = stem_data.get('logic', {})
+        # 2026-06-15: toms no longer reads or writes a sidecar logic
+        # block. The PGA-only rebuild path resolves its threshold
+        # directly from yaml; the comparison helpers
+        # (_thresholds_changed / _thresholds_lowered /
+        # _classification_thresholds_changed) below are only needed
+        # for the energy/spectral stems that still use the logic
+        # block for change detection.
+        stored_logic = {} if stem_type == 'toms' else stem_data.get('logic', {})
         stem_overrides = overrides.get(stem_type, {})
 
         # Get current spectral config for this stem (reads thresholds from config)
         spectral_config = get_spectral_config_for_stem(stem_type, config)
 
-        # Determine rebuild strategy based on threshold changes
-        changed = _thresholds_changed(spectral_config, stored_logic)
-        lowered = changed and _thresholds_lowered(spectral_config, stored_logic)
-        classification_changed = _classification_thresholds_changed(
-            spectral_config, stored_logic, config, stem_type,
-        )
+        # Determine rebuild strategy based on threshold changes.
+        # Skipped for toms: the PGA prominence filter always re-runs
+        # and reads its threshold from yaml directly (see below), so
+        # the change-detection helpers are not needed for toms.
+        if stem_type == 'toms':
+            changed = False
+            lowered = False
+            classification_changed = False
+        else:
+            changed = _thresholds_changed(spectral_config, stored_logic)
+            lowered = changed and _thresholds_lowered(spectral_config, stored_logic)
+            classification_changed = _classification_thresholds_changed(
+                spectral_config, stored_logic, config, stem_type,
+            )
 
         # ------------------------------------------------------------------
         # PGA prominence re-filter for toms (2026-06-15).
@@ -801,16 +816,21 @@ def rebuild_events_from_analysis(
         if stem_type == 'toms':
             raw_pga = list(stem_data.get('events_pga', []))
             if raw_pga:
-                # Priority: stem-specific YAML > global onset_detection YAML >
-                # stored sidecar > hard default. Stem-specific wins when both
-                # exist (e.g. toms.pga_min_prominence overrides the global).
+                # 2026-06-15: yaml is the single source of truth for
+                # toms' PGA prominence. The per-event pga_filter_config
+                # threshold in the sidecar is the detect-time value
+                # (informational; not used as a fallback) and the
+                # sidecar's logic block is no longer emitted for toms.
+                # Priority: stem-specific YAML > global onset_detection
+                # YAML > hard default. The hard default (1000) is
+                # never reached in practice because the project yaml
+                # always carries a value, but we keep it as a
+                # defensive floor.
                 stem_pga = config.get(stem_type, {}).get('pga_min_prominence')
                 global_pga = config.get('onset_detection', {}).get('pga_min_prominence')
-                stored_thr = raw_pga[0].get('pga_filter_config', {}).get('pga_min_prominence')
                 pga_threshold = float(
                     stem_pga if stem_pga is not None
                     else global_pga if global_pga is not None
-                    else stored_thr if stored_thr is not None
                     else 1000.0
                 )
             else:
@@ -876,6 +896,14 @@ def rebuild_events_from_analysis(
                         'duration': float(duration),
                     })
                 midi_events_by_stem[stem_type] = midi_events
+                # Toms: the early-return `continue` below skips the
+                # non-toms branch that would have written the logic
+                # block and updated events_configured / events_sensitive.
+                # Toms uses ONLY events_pga, so we still need to strip
+                # any stale logic block from the loaded sidecar here
+                # (the non-toms cleanup at the end of the loop body
+                # doesn't run for toms). 2026-06-15.
+                stem_data.pop('logic', None)
                 continue
             else:
                 events = list(configured_events)
@@ -1007,10 +1035,23 @@ def rebuild_events_from_analysis(
             # Only update sensitive if we merged them in
             stem_data['events_sensitive'] = sensitive_events  # Keep original
 
-        # Update stored logic to reflect current thresholds and classification params
-        stem_data['logic'] = _build_logic_block(
-            spectral_config, stored_logic, stem_type, config,
-        )
+        # Update stored logic to reflect current thresholds and classification
+        # params (2026-06-15: skipped for toms — toms no longer emits a
+        # logic block. The WebUI reads yaml directly via the
+        # tuning-config endpoint, and the rebuild path's PGA
+        # prominence filter reads yaml directly too. The other stems
+        # still use the logic block for their change-detection
+        # comparison against the live yaml; drop this guard for them
+        # when they migrate to PGA).
+        if stem_type != 'toms':
+            stem_data['logic'] = _build_logic_block(
+                spectral_config, stored_logic, stem_type, config,
+            )
+        else:
+            # Toms: strip any stale logic block from the loaded
+            # sidecar (older projects still have it). The next save
+            # will also not emit one (see midi.py save_analysis_sidecar).
+            stem_data.pop('logic', None)
 
     # Build updated analysis output
     updated_analysis = dict(analysis_data)

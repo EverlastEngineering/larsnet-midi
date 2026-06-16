@@ -568,66 +568,75 @@ def save_analysis_sidecar(
         sensitive_onset_data = analysis.get('sensitive_onset_data', [])
         spectral_config = analysis.get('spectral_config')
 
-        # Build logic block from spectral_config
+        # Build logic block from spectral_config (2026-06-15: skipped
+        # for toms — toms switched to yaml-as-source-of-truth via
+        # /api/projects/<n>/tuning-config/<stem>. The sidecar's logic
+        # block was a stale snapshot that misled the WebUI slider into
+        # reading pga_min_prominence=3001 (the value at last save) when
+        # the live yaml was 3100. The other stems still write the
+        # block because their rebuild path still uses it for threshold
+        # change detection — when they migrate to PGA, drop the block
+        # for them too).
         logic = {}
-        if spectral_config:
-            logic['geomean_threshold'] = _round_value(spectral_config.get('geomean_threshold'), 2)
-            logic['min_sustain_ms'] = _round_value(spectral_config.get('min_sustain_ms'), 2)
+        if stem_type != 'toms':
+            if spectral_config:
+                logic['geomean_threshold'] = _round_value(spectral_config.get('geomean_threshold'), 2)
+                logic['min_sustain_ms'] = _round_value(spectral_config.get('min_sustain_ms'), 2)
 
-            # Record frequency band metadata so sidecar is self-documenting
-            geomean_bands = spectral_config.get('geomean_bands', [])
-            if geomean_bands:
-                logic['freq_bands'] = geomean_bands
+                # Record frequency band metadata so sidecar is self-documenting
+                geomean_bands = spectral_config.get('geomean_bands', [])
+                if geomean_bands:
+                    logic['freq_bands'] = geomean_bands
 
-            # Cymbal-specific logic
-            if stem_type == 'cymbals':
-                logic['decay_filter_enabled'] = spectral_config.get('decay_filter_enabled', True)
-                logic['decay_window_sec'] = _round_value(spectral_config.get('decay_window_sec'), 2)
+                # Cymbal-specific logic
+                if stem_type == 'cymbals':
+                    logic['decay_filter_enabled'] = spectral_config.get('decay_filter_enabled', True)
+                    logic['decay_window_sec'] = _round_value(spectral_config.get('decay_window_sec'), 2)
 
-            # Kick-specific logic
-            if stem_type == 'kick':
-                logic['statistical_enabled'] = spectral_config.get('statistical_enabled', False)
+                # Kick-specific logic
+                if stem_type == 'kick':
+                    logic['statistical_enabled'] = spectral_config.get('statistical_enabled', False)
 
-            # Determine passes (simplified - could be made more sophisticated)
-            passes = ['geomean']
-            if spectral_config.get('min_sustain_ms'):
-                passes.append('sustain')
-            if stem_type == 'cymbals' and logic.get('decay_filter_enabled'):
-                passes.append('decay')
-            if stem_type == 'kick' and logic.get('statistical_enabled'):
-                passes.append('statistical')
-            logic['passes'] = passes
+                # Determine passes (simplified - could be made more sophisticated)
+                passes = ['geomean']
+                if spectral_config.get('min_sustain_ms'):
+                    passes.append('sustain')
+                if stem_type == 'cymbals' and logic.get('decay_filter_enabled'):
+                    passes.append('decay')
+                if stem_type == 'kick' and logic.get('statistical_enabled'):
+                    passes.append('statistical')
+                logic['passes'] = passes
 
-        # Include global filtering thresholds for frontend slider defaults
-        if config:
-            filtering_config = config.get('filtering', {})
-            logic['reverb_continuation_attack_threshold'] = filtering_config.get(
-                'reverb_continuation_attack_threshold', 0.4
-            )
+            # Include global filtering thresholds for frontend slider defaults
+            if config:
+                filtering_config = config.get('filtering', {})
+                logic['reverb_continuation_attack_threshold'] = filtering_config.get(
+                    'reverb_continuation_attack_threshold', 0.4
+                )
 
-        # Include onset_detection thresholds for frontend slider defaults
-        if config:
-            onset_config = config.get('onset_detection', {})
-            logic['pga_min_prominence'] = onset_config.get('pga_min_prominence', 1000.0)
+            # Include onset_detection thresholds for frontend slider defaults
+            if config:
+                onset_config = config.get('onset_detection', {})
+                logic['pga_min_prominence'] = onset_config.get('pga_min_prominence', 1000.0)
 
-        # Include stem-specific PGA threshold (stem wins over global onset_detection)
-        if config and stem_type == 'toms':
-            toms_config = config.get('toms', {})
-            stem_pga = toms_config.get('pga_min_prominence')
-            if stem_pga is not None:
-                logic['pga_min_prominence'] = stem_pga
+            # Include stem-specific PGA threshold (stem wins over global onset_detection)
+            if config and stem_type == 'toms':
+                toms_config = config.get('toms', {})
+                stem_pga = toms_config.get('pga_min_prominence')
+                if stem_pga is not None:
+                    logic['pga_min_prominence'] = stem_pga
 
-        # Include classification thresholds for frontend slider defaults
-        if config:
-            stem_config = config.get(stem_type, {})
-            if stem_type == 'hihat':
-                logic['open_geomean_min'] = stem_config.get('open_geomean_min', 262.0)
-                logic['open_sustain_ms'] = stem_config.get('open_sustain_ms', 100.0)
-            if stem_type in ('snare', 'toms', 'cymbals'):
-                defaults = {'snare': 2, 'toms': 3, 'cymbals': 2}
-                raw = stem_config.get('expected_clusters')
-                logic['expected_clusters'] = int(raw) if raw is not None else defaults[stem_type]
-                logic['cluster_feature'] = stem_config.get('cluster_feature', 'auto')
+            # Include classification thresholds for frontend slider defaults
+            if config:
+                stem_config = config.get(stem_type, {})
+                if stem_type == 'hihat':
+                    logic['open_geomean_min'] = stem_config.get('open_geomean_min', 262.0)
+                    logic['open_sustain_ms'] = stem_config.get('open_sustain_ms', 100.0)
+                if stem_type in ('snare', 'toms', 'cymbals'):
+                    defaults = {'snare': 2, 'toms': 3, 'cymbals': 2}
+                    raw = stem_config.get('expected_clusters')
+                    logic['expected_clusters'] = int(raw) if raw is not None else defaults[stem_type]
+                    logic['cluster_feature'] = stem_config.get('cluster_feature', 'auto')
 
         # Serialize configured events (KEPT + FILTERED from configured detection)
         # The processing_shell pipeline may have already prebuilt

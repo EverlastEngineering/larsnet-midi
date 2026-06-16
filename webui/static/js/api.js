@@ -159,6 +159,22 @@ class LarsNetAPI {
         return await this.get(`/projects/${projectNumber}/config/${configName}`);
     }
 
+    /**
+     * Get live midiconfig.yaml values for the threshold tuning panel.
+     *
+     * Returns the resolved per-stem tuning values read directly from
+     * midiconfig.yaml at request time. This is the source of truth for
+     * slider defaults — the analysis.json `logic` block is a stale
+     * snapshot and is no longer consulted by the WebUI (2026-06-15).
+     *
+     * @param {number} projectNumber
+     * @param {string} stemType - 'kick' | 'snare' | 'toms' | 'hihat' | 'cymbals'
+     * @returns {Promise<Object>} Flat dict of resolved tuning values.
+     */
+    async getTuningConfig(projectNumber, stemType) {
+        return await this.get(`/projects/${projectNumber}/tuning-config/${stemType}`);
+    }
+
     async updateConfig(projectId, configType, updates) {
         return await this.post(`/config/${projectId}/${configType}`, { updates });
     }

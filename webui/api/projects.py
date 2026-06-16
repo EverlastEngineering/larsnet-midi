@@ -250,6 +250,127 @@ def get_project_config(project_number, config_name):
         }), 500
 
 
+# Stem types the tune panel supports. Kept narrow on purpose — the
+# endpoint is for the threshold tuning slideout, not a generic config
+# dump. Adding a stem here means the WebUI's threshold-tuning module
+# will see its values via this endpoint.
+TUNING_STEM_TYPES = ('kick', 'snare', 'toms', 'hihat', 'cymbals')
+
+
+@projects_bp.route('/<int:project_number>/tuning-config/<stem_type>',
+                   methods=['GET'])
+def get_project_tuning_config(project_number, stem_type):
+    """
+    GET /api/projects/<n>/tuning-config/<stem_type>
+
+    Return the live threshold-tuning config values for a stem, resolved
+    from midiconfig.yaml at request time.
+
+    Architecture (2026-06-15): yaml is the single source of truth for
+    config; the analysis.json ``logic`` block is a stale snapshot
+    written at save time and is no longer read by the WebUI tune panel.
+    This endpoint is the WebUI's replacement: it returns the values the
+    threshold-tuning module needs to render slider defaults, with
+    per-stem resolution applied (e.g. ``toms.pga_min_prominence`` wins
+    over ``onset_detection.pga_min_prominence`` for toms).
+
+    No caching — yaml is small and re-read on every request so a
+    Save & Reconvert that mutates the yaml is visible on the next
+    tune-panel open.
+
+    Returns:
+        200: Flat dict of resolved tuning values for the stem.
+        400: Invalid stem type.
+        404: Project or midiconfig.yaml not found.
+        500: Internal error.
+    """
+    try:
+        if stem_type not in TUNING_STEM_TYPES:
+            return jsonify({
+                'error': 'Invalid stem type',
+                'message': f'stem_type must be one of: {", ".join(TUNING_STEM_TYPES)}',
+            }), 400
+
+        project = get_project_by_number(project_number, USER_FILES_DIR)
+        if project is None:
+            return jsonify({
+                'error': 'Project not found',
+                'message': f'No project with number {project_number}',
+            }), 404
+
+        config_path = project['path'] / 'midiconfig.yaml'
+        if not config_path.exists():
+            return jsonify({
+                'error': 'Config not found',
+                'message': 'midiconfig.yaml not found in project',
+            }), 404
+
+        # Lazy import — config loader pulls in the yaml stack and we
+        # don't want to pay for it on every unrelated API call.
+        from stems_to_midi.config import load_config
+        from stems_to_midi.analysis_core.spectral_utils import (
+            get_spectral_config_for_stem,
+        )
+
+        config = load_config(config_path)
+
+        # Per-stem resolution: get_spectral_config_for_stem reads the
+        # geomean / sustain / strength / onset_events_enabled bundle
+        # for the given stem, with per-stem keys winning over the
+        # global [filtering] section. This is the same function the
+        # rebuild path uses, so the values the WebUI shows match the
+        # values the server will apply on Save & Reconvert.
+        spectral_cfg = get_spectral_config_for_stem(stem_type, config)
+        stem_cfg = config.get(stem_type, {}) or {}
+        filtering_cfg = config.get('filtering', {}) or {}
+        onset_cfg = config.get('onset_detection', {}) or {}
+
+        resolved = {
+            # Spectral filter bundle (geomean / sustain / strength /
+            # onset_events_enabled / filter_mode) — per-stem resolved.
+            'geomean_threshold': spectral_cfg.get('geomean_threshold'),
+            'min_sustain_ms': spectral_cfg.get('min_sustain_ms'),
+            'min_strength_threshold': spectral_cfg.get('min_strength_threshold'),
+            'onset_events_enabled': spectral_cfg.get('onset_events_enabled'),
+
+            # Global filtering threshold (lives in [filtering], not
+            # per-stem). Default matches the global config default.
+            'reverb_continuation_attack_threshold': filtering_cfg.get(
+                'reverb_continuation_attack_threshold', 0.4,
+            ),
+
+            # Toms PGA prominence: per-stem key (toms.pga_min_prominence)
+            # wins over the global onset_detection key. The WebUI
+            # slider reads this directly; the rebuild path resolves
+            # the same way (see rebuild_core._refilter_stem_pga).
+            'pga_min_prominence': (
+                stem_cfg.get('pga_min_prominence')
+                if stem_cfg.get('pga_min_prominence') is not None
+                else onset_cfg.get('pga_min_prominence', 1000.0)
+            ),
+
+            # Hihat open/closed classification (2026-06-13).
+            'open_geomean_min': stem_cfg.get('open_geomean_min', 262.0),
+            'open_sustain_ms': stem_cfg.get('open_sustain_ms', 100.0),
+
+            # Cluster assignment (k-means, used by snare/toms/cymbals).
+            'expected_clusters': stem_cfg.get('expected_clusters', 2),
+            'cluster_feature': stem_cfg.get('cluster_feature', 'auto'),
+
+            # Toms snap-mask + band-ratio filters (2026-06-10).
+            'show_only_snap_events': stem_cfg.get('show_only_snap_events', False),
+            'band_max_ratio_max': stem_cfg.get('band_max_ratio_max', 0),
+        }
+
+        return jsonify(resolved), 200
+
+    except Exception as e:
+        return jsonify({
+            'error': 'Failed to get tuning config',
+            'message': str(e),
+        }), 500
+
+
 @projects_bp.route('/<int:project_number>/analysis', methods=['GET'])
 def get_project_analysis(project_number):
     """

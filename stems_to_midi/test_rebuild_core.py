@@ -807,19 +807,24 @@ class TestRebuildEventsFromAnalysis:
 
     def test_logic_block_includes_reverb_threshold(self):
         """Logic block includes reverb_continuation_attack_threshold from filtering config."""
+        # 2026-06-15: switched stem from 'toms' to 'kick' — toms no
+        # longer emits a logic block (yaml is the source of truth for
+        # toms' PGA threshold; the sidecar's logic block is stale).
+        # The reverb-threshold serialization path is identical across
+        # the remaining non-toms stems, so kick exercises it cleanly.
         analysis = _make_analysis_data({
-            'toms': {
+            'kick': {
                 'logic': {'geomean_threshold': 80.0, 'min_sustain_ms': None},
                 'events_configured': [_make_event(1.0, geomean=100.0, status='KEPT')],
                 'events_sensitive': [],
             }
         })
-        config = _make_config('toms', geomean_threshold=80.0)
+        config = _make_config('kick', geomean_threshold=80.0)
         config['filtering'] = {'reverb_continuation_attack_threshold': 0.3}
 
         updated, _ = rebuild_events_from_analysis(analysis, {}, config)
 
-        logic = updated['stems']['toms']['logic']
+        logic = updated['stems']['kick']['logic']
         assert logic['reverb_continuation_attack_threshold'] == 0.3
 
     def test_logic_block_reverb_threshold_defaults_when_missing(self):
