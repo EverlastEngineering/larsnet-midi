@@ -52,6 +52,7 @@ Public entry point: :func:`detect_percentile_gated_broad_attacks`.
 """
 import numpy as np
 from scipy.signal import find_peaks
+from typing import Tuple
 
 # Frequency band cutoffs (Hz) — must match DEFAULT_BANDS in
 # spectral_transient_core.py.
@@ -112,8 +113,10 @@ DEFAULT_NMS_MIN_FRAMES = 20
 DEFAULT_STRIKE_OFFSET_SEC = 0.008
 
 
-def _build_static_noise_floor(s_db: np.ndarray) -> np.ndarray:
-    """Per-bin static noise floor. Shape (n_bins,).
+def _build_static_noise_floor(
+    s_db: np.ndarray,
+) -> Tuple[np.ndarray, float, np.ndarray, int]:
+    """Per-bin static noise floor + global noise gate. 2026-06-15.
 
     For each freq bin:
       1. Find the bin's absolute minimum value (artificial digital
@@ -125,14 +128,41 @@ def _build_static_noise_floor(s_db: np.ndarray) -> np.ndarray:
          This is a robust estimator: it's not fooled by a single
          loud transient pulling the mean up.
 
+    After the per-bin pass, a **global noise gate** is applied: every
+    bin's floor is clamped to ``max(floor[b], gate_db)`` where
+    ``gate_db = max(p5 across all bins)``. This is the upper bound of
+    the quietest portions of the song — the loudest of the per-bin
+    p5 values.
+
+    Why a gate: stem-splitter silence frames (~-160 dB in every bin)
+    can pull a per-bin floor down to digital silence. When the noise
+    resumes at -75 dB, the contrast ``max(0, s_db - floor)`` jumps
+    85 dB and the IQR-gated ``find_peaks`` calls it a high-prominence
+    attack — a phantom event. Lifting every bin's floor to the
+    global gate zeros the contrast for that silence-to-noise
+    transition (contrast becomes ``max(0, -75 - gate) ≈ 0`` when
+    ``gate ≈ -70``). The gate is the loudest quiet bin, so it
+    doesn't lift any bin above its true noise level — it only
+    pushes under-estimating bins back up to the song's true quiet
+    floor.
+
     Args:
         s_db: log-magnitude spectrogram of shape (n_bins, n_frames).
 
     Returns:
-        floor: per-bin noise floor of shape (n_bins,).
+        (floor, gate_db, p5_per_bin, n_lifted):
+          - floor: per-bin noise floor after the gate clamp,
+            shape (n_bins,).
+          - gate_db: the max p5 across all bins (the gate value in
+            dB). 0.0 if the input is empty.
+          - p5_per_bin: the pre-clamp p5 per bin, shape (n_bins,).
+            Exposed for the summary print and future WebUI use.
+          - n_lifted: count of bins where the gate raised the floor
+            (``floor_pre[b] < gate_db``). 0 if the input is empty.
     """
     n_bins = s_db.shape[0]
     floor = np.zeros(n_bins)
+    p5_per_bin = np.zeros(n_bins)
     eps = 0.5
     p5_pct = DEFAULT_P5_PERCENTILE
     for b in range(n_bins):
@@ -142,6 +172,7 @@ def _build_static_noise_floor(s_db: np.ndarray) -> np.ndarray:
         if len(real) < 10:
             # All silence or nearly all silence — use the global min.
             floor[b] = abs_min
+            p5_per_bin[b] = abs_min
             continue
         p5 = np.percentile(real, p5_pct)
         quiet = real[real <= p5]
@@ -149,7 +180,15 @@ def _build_static_noise_floor(s_db: np.ndarray) -> np.ndarray:
             floor[b] = p5
         else:
             floor[b] = quiet.mean()
-    return floor
+        p5_per_bin[b] = p5
+    if n_bins > 0:
+        gate_db = float(np.max(p5_per_bin))
+        n_lifted = int(np.sum(floor < gate_db))
+        floor = np.maximum(floor, gate_db)
+    else:
+        gate_db = 0.0
+        n_lifted = 0
+    return floor, gate_db, p5_per_bin, n_lifted
 
 
 def _broad_attack_envelope(
@@ -264,8 +303,14 @@ def detect_percentile_gated_broad_attacks(
 
     freqs, times, s_db = compute_stft_db(audio, sr, n_fft=n_fft, hop=hop)
 
-    # Step 2: per-bin static noise floor.
-    floor = _build_static_noise_floor(s_db)
+    # Step 2: per-bin static noise floor + global noise gate.
+    # The helper now returns (floor, gate_db, p5_per_bin, n_lifted)
+    # — the floor is post-clamp, gate_db is the max p5 across bins,
+    # p5_per_bin and n_lifted are exposed for the summary print
+    # and future WebUI surfacing. See _build_static_noise_floor
+    # for the rationale (kills the silence-to-noise phantom
+    # that arises from stem-splitter digital-silence gaps).
+    floor, gate_db, p5_per_bin, n_lifted = _build_static_noise_floor(s_db)
 
     # Steps 3+4: foreground contrast + broad-frequency attack envelope.
     envelope = _broad_attack_envelope(
@@ -309,5 +354,27 @@ def detect_percentile_gated_broad_attacks(
         'envelope': envelope,
         'peaks': peaks,
         'prominences': props.get('prominences', np.array([])),
+        # Noise-gate summary (2026-06-15) — exposed for the
+        # end-of-detect summary print and future WebUI
+        # surfacing. gate_db is the max p5 across all bins;
+        # p5_per_bin is the pre-clamp per-bin p5; n_lifted
+        # is the count of bins the gate raised. See
+        # _build_static_noise_floor for the algorithm.
+        'gate_db': gate_db,
+        'p5_per_bin': p5_per_bin,
+        'n_lifted': n_lifted,
     }
+    # One-line summary of the noise-floor gate. This is the
+    # imperative-shell residue; the helper is pure and
+    # returns the values, this site is what the user sees
+    # in the console. Format chosen to be scannable in a
+    # pipeline log without scrolling.
+    if len(p5_per_bin) > 0:
+        p5_min = float(np.min(p5_per_bin))
+        p5_max = float(np.max(p5_per_bin))
+        print(
+            f"[percentile_gated] noise floor: gate={gate_db:.1f}dB, "
+            f"per-bin p5 range=[{p5_min:.1f}, {p5_max:.1f}]dB, "
+            f"lifted {n_lifted}/{len(p5_per_bin)} bins"
+        )
     return event_times, debug

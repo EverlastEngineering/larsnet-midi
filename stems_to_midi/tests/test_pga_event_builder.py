@@ -29,6 +29,7 @@ The real-audio test gracefully skips if the fixture is missing
 so the test file runs in CI without bundled audio.
 """
 import os
+import re
 import sys
 import numpy as np
 import pytest
@@ -51,6 +52,7 @@ from stems_to_midi.pga_event_builder import (  # noqa: E402
 )
 from stems_to_midi.percentile_gated_detector import (  # noqa: E402
     detect_percentile_gated_broad_attacks,
+    _build_static_noise_floor,
 )
 
 
@@ -206,7 +208,14 @@ class TestStemTypeGating:
         config = _default_config(
             onset_detection={'pga_min_prominence': 3000.0},
         )
-        kept, filtered, _ = _build_pga_events_with_filter(audio_mono, sr, config)
+        # 2026-06-15: _build_pga_events_with_filter returns
+        # (raw, events_kept, events_filtered, pga_debug) — a
+        # 4-tuple. Earlier versions returned a 3-tuple. The
+        # raw list is not used here; the partition contract
+        # is what we verify.
+        _raw, kept, filtered, _debug = _build_pga_events_with_filter(
+            audio_mono, sr, config,
+        )
         # The toms consumer in process_stem_to_midi reassembles
         # pga_onset_data as kept + filtered, and the downstream
         # MIDI builder iterates that list skipping FILTERED. The
@@ -244,7 +253,10 @@ class TestProminenceFilterMovesEvents:
 
     def test_high_threshold_filters_everything(self):
         y = _make_synthetic_broadband_burst_stem()
-        kept, filtered, debug = _build_pga_events_with_filter(
+        # 2026-06-15: _build_pga_events_with_filter returns
+        # 4-tuple (raw, kept, filtered, debug). The raw list
+        # and debug dict are not used here.
+        _raw, kept, filtered, _debug = _build_pga_events_with_filter(
             y, 44100, _default_config(
                 onset_detection={'pga_min_prominence': 1e9},
             ),
@@ -262,7 +274,8 @@ class TestProminenceFilterMovesEvents:
         y = _make_synthetic_broadband_burst_stem()
         prev_kept = None
         for thr in (0.0, 100.0, 1000.0, 10000.0, 1e9):
-            kept, filtered, _ = _build_pga_events_with_filter(
+            # 2026-06-15: 4-tuple unpacking (see above).
+            _raw, kept, filtered, _debug = _build_pga_events_with_filter(
                 y, 44100, _default_config(
                     onset_detection={'pga_min_prominence': thr},
                 ),
@@ -506,3 +519,115 @@ class TestOnRealAudio:
             assert times == sorted(times), (
                 f"FILTERED events not time-ordered: {times}"
             )
+
+
+# --- Noise-floor gate (2026-06-15) -----------------------------------------
+
+
+class TestNoiseFloorGate:
+    """Noise-floor gate (2026-06-15) added to
+    ``_build_static_noise_floor`` after observing the
+    silence-to-noise phantom in real toms stems: stem-splitter
+    digital-silence gaps (-160 dB in every bin) can pull a
+    per-bin floor down to digital silence, so when the noise
+    resumes at ~-75 dB the contrast envelope sees an 85 dB
+    jump and the IQR-gated ``find_peaks`` calls it a
+    high-prominence attack.
+
+    The fix is a global **gate** = ``max(p5 across all bins)``,
+    the upper bound of the quietest portions of the song. Every
+    bin's floor is clamped to ``>=`` the gate after the per-bin
+    pass. This test class locks the gate's behavior so the
+    phantom cannot reappear unnoticed.
+
+    All three tests are pure unit tests on synthetic spectrograms
+    (no audio round-trip) so they run in milliseconds.
+    """
+
+    def test_gate_lifts_quiet_bin(self):
+        """A bin whose noise floor is well below the global
+        gate gets lifted to the gate. The gate is the max
+        p5 across all bins — the upper bound of the
+        quietest portions of the song. The quiet bin's
+        pre-clamp floor is below the gate, so the clamp
+        raises it.
+
+        This is the core gate contract: no bin's floor
+        can be lower than the loudest of the per-bin p5
+        values.
+        """
+        n_bins = 8
+        n_frames = 200
+        s_db = np.full((n_bins, n_frames), -70.0)
+        # Pull bin 0 down to a quieter level. Its p5 is -90,
+        # which is below the gate (max p5 = -70 from bins 1-7).
+        s_db[0] = -90.0
+        floor, gate_db, p5_per_bin, n_lifted = _build_static_noise_floor(s_db)
+        # Gate is the max p5 — -70 from bins 1-7.
+        assert gate_db == pytest.approx(-70.0, abs=0.1)
+        # Every floor must be >= the gate.
+        assert np.all(floor >= gate_db - 1e-9), (
+            f"floors below gate: floor={floor}, gate={gate_db}"
+        )
+        # Bin 0 was lifted (its pre-clamp p5 was -90 < -70).
+        assert n_lifted >= 1
+        # p5_per_bin exposes the per-bin p5 values: bin 0 is
+        # the quietest (-90), bins 1-7 are at the gate (-70).
+        assert p5_per_bin[0] == pytest.approx(-90.0, abs=0.1)
+        assert p5_per_bin[1] == pytest.approx(-70.0, abs=0.1)
+        # The gate value is the max of p5_per_bin.
+        assert gate_db == pytest.approx(float(p5_per_bin.max()), abs=1e-6)
+
+    def test_silence_gap_does_not_lower_gate(self):
+        """A bin with a long digital-silence gap in the
+        middle and noise at -75 dB on either side. The
+        silence frames are excluded by the 0.5-dB
+        neighborhood rule, so the pre-clamp floor is -75
+        (from the noise frames). The gate is also -75
+        (all bins are at -75). No bin is lifted, and the
+        gate is stable — this is the regression test for
+        the phantom-attack scenario: with the gate in
+        place, a silence gap in the middle of a bin does
+        not pull the floor or the gate below the noise
+        level.
+        """
+        n_bins = 4
+        n_frames = 1000
+        s_db = np.full((n_bins, n_frames), -75.0)
+        # Insert a digital-silence gap in frames 400-500 in
+        # every bin (the stem-splitter scenario).
+        s_db[:, 400:500] = -160.0
+        floor, gate_db, p5_per_bin, n_lifted = _build_static_noise_floor(s_db)
+        # All floors are at the noise level (or the gate, which
+        # is the same value here).
+        assert np.all(floor >= -75.0 - 1e-9)
+        assert np.all(floor <= -75.0 + 1e-9)
+        # Gate is -75 (max p5 across bins; the silence frames
+        # are excluded by the 0.5-dB rule).
+        assert gate_db == pytest.approx(-75.0, abs=0.1)
+        # No bin was lifted (all floors are at the gate already).
+        assert n_lifted == 0
+        # p5_per_bin is uniform across bins.
+        assert np.allclose(p5_per_bin, -75.0, atol=0.1)
+
+    def test_summary_line_emitted(self, capsys):
+        """The detector prints exactly one ``[percentile_gated]
+        noise floor: gate=XdB, ...`` line per call, in the
+        format documented in the plan. Format-locked so
+        downstream tools that grep the console don't break.
+        """
+        y = _make_synthetic_broadband_burst_stem()
+        detect_percentile_gated_broad_attacks(y, 44100)
+        captured = capsys.readouterr()
+        # The line must appear at least once.
+        assert "[percentile_gated] noise floor:" in captured.out
+        # Format check: the line must match the documented
+        # pattern exactly.
+        pattern = (
+            r"\[percentile_gated\] noise floor: gate=-?\d+\.\d+dB, "
+            r"per-bin p5 range=\[-?\d+\.\d+, -?\d+\.\d+\]dB, "
+            r"lifted \d+/\d+ bins"
+        )
+        assert re.search(pattern, captured.out), (
+            f"summary line format mismatch; captured:\n{captured.out}"
+        )
