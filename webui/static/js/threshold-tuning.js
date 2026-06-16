@@ -11,6 +11,46 @@
  *   - drawWaveform(): called after each re-filter
  */
 
+// ─── Filter registry (2026-06-15) ────────────────────────────────────────
+//
+// The STEM_SLIDER_CONFIGS below is the hard-coded FALLBACK. The
+// real metadata comes from the filter registry JSON (same file
+// the Python side reads). After the registry loads (see
+// _ensureFilterRegistryLoaded), the toms entry is OVERRIDDEN
+// with the registry-derived version. This is the "single
+// source of truth" hook: the JSON is the metadata, the
+// hard-coded entry is the offline fallback.
+
+let _filterRegistryCache = null;
+let _filterRegistryLoadInFlight = null;
+
+async function _ensureFilterRegistryLoaded() {
+    if (_filterRegistryCache) return _filterRegistryCache;
+    if (_filterRegistryLoadInFlight) return _filterRegistryLoadInFlight;
+    _filterRegistryLoadInFlight = (async () => {
+        try {
+            _filterRegistryCache = await loadFilterRegistry();
+            // If the registry has entries for the toms stem,
+            // override the hard-coded STEM_SLIDER_CONFIGS.toms
+            // entry with the registry-derived one. The other
+            // stems stay hard-coded until they're migrated in
+            // Phase 6.
+            const tomsFromRegistry = buildSliderConfigsForStem(
+                _filterRegistryCache, 'toms'
+            );
+            if (Array.isArray(tomsFromRegistry) && tomsFromRegistry.length > 0) {
+                STEM_SLIDER_CONFIGS.toms = tomsFromRegistry;
+            }
+        } catch (err) {
+            // Soft failure — fall back to the hard-coded STEM_SLIDER_CONFIGS.
+            console.warn('Failed to load filter registry:', err.message);
+        }
+        _filterRegistryLoadInFlight = null;
+        return _filterRegistryCache;
+    })();
+    return _filterRegistryLoadInFlight;
+}
+
 // ─── State ───────────────────────────────────────────────────────────────
 
 /** Whether the tuning panel is open */
@@ -135,6 +175,13 @@ const STEM_FILTER_MODES = {
  */
 async function loadTuningConfig(stemType) {
     if (!currentProject || !stemType) return;
+    // 2026-06-15: ensure the filter registry is loaded so the
+    // STEM_SLIDER_CONFIGS can be derived from it. Awaited so
+    // the first slider render uses the registry values, not
+    // the hard-coded fallback. Soft-fails on API error —
+    // _ensureFilterRegistryLoaded leaves the fallback in
+    // place if the API is down.
+    await _ensureFilterRegistryLoaded();
     try {
         const cfg = await api.getTuningConfig(currentProject.number, stemType);
         if (cfg && typeof cfg === 'object') {
@@ -1426,23 +1473,52 @@ function reapplyClassification(events) {
  * @param {Set}    disabledIds - Optional set of event ids to force-FILTER
  */
 function applyPgaProminenceFilter(events, threshold, disabledIds) {
+    // 2026-06-15: thin wrapper around the filter registry. The
+    // filter logic lives in stems_to_midi/filter_registry.json
+    // and is evaluated by the shared `evaluateFilter` in
+    // filter_kinds.js — same JSON, same evaluator as the
+    // Python side. This is the JS mirror of the Python
+    // apply_pga_prominence_filter; both call the same
+    // registry. Adding a new filter is a JSON entry.
+    //
+    // The disabled_ids check stays in the wrapper (it's a
+    // WebUI-specific concept, not a registry concept). The
+    // pga_filter_config.pga_min_prominence update also
+    // stays here (it's a sidecar-format concern).
+    const registry = _filterRegistryCache;
+    const spec = registry ? findFilter(registry, 'pga_min_prominence') : null;
     const disabled = disabledIds || new Set();
     for (const ev of events) {
         const evId = ev.id != null ? ev.id : ev.time;
         const isDisabled = disabled.has(evId);
-        const prom = ev.prominence;
 
         if (isDisabled) {
             ev.status = 'FILTERED';
             ev.filter_reason = 'manually disabled via WebUI';
-        } else if (prom != null && prom < threshold) {
-            ev.status = 'FILTERED';
-            ev.filter_reason = (
-                `below pga_min_prominence (${prom.toFixed(0)} < ${threshold.toFixed(0)})`
-            );
+        } else if (spec) {
+            // Registry-driven evaluation.
+            const result = evaluateFilter(spec, ev, threshold);
+            if (result === false) {
+                ev.status = 'FILTERED';
+                ev.filter_reason = buildFilterReason(spec, ev, threshold);
+            } else {
+                ev.status = 'KEPT';
+                delete ev.filter_reason;
+            }
         } else {
-            ev.status = 'KEPT';
-            delete ev.filter_reason;
+            // Fallback: registry not loaded (e.g., API down).
+            // Mirror the old hard-coded behavior so the
+            // panel still works offline.
+            const prom = ev.prominence;
+            if (prom != null && prom < threshold) {
+                ev.status = 'FILTERED';
+                ev.filter_reason = (
+                    `below pga_min_prominence (${prom.toFixed(0)} < ${threshold.toFixed(0)})`
+                );
+            } else {
+                ev.status = 'KEPT';
+                delete ev.filter_reason;
+            }
         }
         // Update pga_filter_config so the tooltip shows the live threshold
         if (ev.pga_filter_config) {
