@@ -49,6 +49,7 @@ if str(_PKG_PARENT) not in sys.path:
 from stems_to_midi.pga_event_builder import (  # noqa: E402
     build_pga_events,
     _build_pga_events_with_filter,
+    apply_pga_decay_col_min_filter,
 )
 from stems_to_midi.percentile_gated_detector import (  # noqa: E402
     detect_percentile_gated_broad_attacks,
@@ -631,3 +632,160 @@ class TestNoiseFloorGate:
         assert re.search(pattern, captured.out), (
             f"summary line format mismatch; captured:\n{captured.out}"
         )
+
+
+# --- decay_col_min filter (2026-06-15) -------------------------------------
+
+
+class TestDecayColMinFilter:
+    """``apply_pga_decay_col_min_filter`` (2026-06-15) — sister
+    function to ``apply_pga_prominence_filter``. Same contract,
+    different diagnostic field (``decay_col_min_median_db``
+    instead of ``prominence``).
+
+    The detector stamps ``decay_col_min_median_db`` on every
+    event via ``compute_high_res_decay_signature`` in
+    ``event_features.py``. This test class locks the filter
+    behavior so the contract cannot drift.
+
+    All four tests are pure unit tests on synthetic event
+    dicts (no audio round-trip) so they run in milliseconds.
+    """
+
+    def test_drops_quiet_events(self):
+        """An event with ``decay_col_min_median_db`` below the
+        threshold is tagged FILTERED with a reason naming the
+        configured threshold. An event above the threshold is
+        KEPT and has no filter_reason."""
+        events = [
+            {'time': 0.5, 'decay_col_min_median_db': -70.0},
+            {'time': 1.0, 'decay_col_min_median_db': -90.0},
+            {'time': 1.5, 'decay_col_min_median_db': -75.0},
+        ]
+        kept, filtered = apply_pga_decay_col_min_filter(events, -80.0)
+        # -70 > -80: KEPT
+        # -90 < -80: FILTERED
+        # -75 > -80: KEPT
+        assert len(kept) == 2
+        assert len(filtered) == 1
+        # Verify the times.
+        kept_times = sorted(e['time'] for e in kept)
+        filtered_times = sorted(e['time'] for e in filtered)
+        assert kept_times == [0.5, 1.5]
+        assert filtered_times == [1.0]
+        # Verify the status and reason on the filtered event.
+        ev = filtered[0]
+        assert ev['status'] == 'FILTERED'
+        assert 'min_decay_col_min_db' in ev['filter_reason']
+        assert '-90.0dB' in ev['filter_reason']
+        assert '-80.0dB' in ev['filter_reason']
+        # Verify the kept events have KEPT status and no
+        # stale filter_reason.
+        for ev in kept:
+            assert ev['status'] == 'KEPT'
+            assert 'filter_reason' not in ev
+
+    def test_skips_none_values(self):
+        """An event with no ``decay_col_min_median_db`` field
+        cannot be filtered by the threshold — it has no value
+        to compare. Same pattern as
+        ``apply_pga_prominence_filter`` for events with no
+        ``prominence`` field. The event is still tagged
+        ``status='KEPT'`` (it survived the filter because the
+        filter could not act on it) but it has no
+        ``filter_reason``."""
+        events = [
+            {'time': 0.5, 'decay_col_min_median_db': -70.0},
+            {'time': 1.0},  # no decay_col_min_median_db
+            {'time': 1.5, 'decay_col_min_median_db': -90.0},
+        ]
+        kept, filtered = apply_pga_decay_col_min_filter(events, -80.0)
+        # -70 > -80: KEPT
+        # 1.0 (no field): KEPT (cannot be filtered)
+        # -90 < -80: FILTERED
+        assert len(kept) == 2
+        assert len(filtered) == 1
+        # The event with no field is in kept, tagged KEPT,
+        # and has no filter_reason (the filter did not act
+        # on it).
+        none_event = next(e for e in kept if e['time'] == 1.0)
+        assert none_event['status'] == 'KEPT'
+        assert 'filter_reason' not in none_event
+        # Sanity: the -90 event is the only filtered one.
+        assert filtered[0]['time'] == 1.5
+
+    def test_disabled_ids_takes_precedence(self):
+        """A manually-disabled event is tagged FILTERED with
+        reason "manually disabled via WebUI" even if its
+        ``decay_col_min_median_db`` passes the threshold. Same
+        pattern as the prominence filter."""
+        events = [
+            {'time': 0.5, 'decay_col_min_median_db': -70.0},  # passes, but disabled
+            {'time': 1.0, 'decay_col_min_median_db': -90.0},  # fails threshold
+            {'time': 1.5, 'decay_col_min_median_db': -70.0},  # passes
+        ]
+        # 0.5 is in disabled_ids but its decay_col_min is above
+        # the threshold. Disabled check should win.
+        kept, filtered = apply_pga_decay_col_min_filter(
+            events, -80.0, disabled_ids={0.5},
+        )
+        assert len(kept) == 1
+        assert len(filtered) == 2
+        # 0.5 is in filtered (disabled) with the disabled reason.
+        ev_disabled = next(e for e in filtered if e['time'] == 0.5)
+        assert ev_disabled['status'] == 'FILTERED'
+        assert ev_disabled['filter_reason'] == 'manually disabled via WebUI'
+        # 1.0 is in filtered (threshold) with the threshold reason.
+        ev_threshold = next(e for e in filtered if e['time'] == 1.0)
+        assert ev_threshold['status'] == 'FILTERED'
+        assert 'min_decay_col_min_db' in ev_threshold['filter_reason']
+        # 1.5 is the only KEPT.
+        assert kept[0]['time'] == 1.5
+        assert kept[0]['status'] == 'KEPT'
+
+    def test_threshold_resolution_in_build_pga_events_with_filter(self):
+        """The threshold resolution in
+        ``_build_pga_events_with_filter`` follows per-stem >
+        global > -80.0 default. The per-event ``pga_filter_config``
+        records the resolved value on every event (so the
+        sidecar tooltip can show it)."""
+        # Case 1: per-stem wins over global.
+        cfg = {
+            'toms': {'pga_min_prominence': 0.0, 'min_decay_col_min_db': -70.0},
+            'onset_detection': {
+                'pga_min_prominence': 0.0,
+                'min_decay_col_min_db': -90.0,
+            },
+        }
+        y = _make_synthetic_broadband_burst_stem()
+        _raw, kept, _filtered, _debug = _build_pga_events_with_filter(y, 44100, cfg)
+        # At least one event should have a pga_filter_config
+        # entry for min_decay_col_min_db.
+        if _raw:
+            ev = _raw[0]
+            assert ev['pga_filter_config']['min_decay_col_min_db'] == -70.0
+        # Case 2: global wins when per-stem is absent.
+        cfg2 = {
+            'toms': {'pga_min_prominence': 0.0},
+            'onset_detection': {
+                'pga_min_prominence': 0.0,
+                'min_decay_col_min_db': -75.0,
+            },
+        }
+        _raw2, _kept2, _filtered2, _debug2 = _build_pga_events_with_filter(
+            y, 44100, cfg2,
+        )
+        if _raw2:
+            ev2 = _raw2[0]
+            assert ev2['pga_filter_config']['min_decay_col_min_db'] == -75.0
+        # Case 3: default -80.0 when both are absent.
+        cfg3 = {
+            'toms': {'pga_min_prominence': 0.0},
+            'onset_detection': {'pga_min_prominence': 0.0},
+        }
+        _raw3, _kept3, _filtered3, _debug3 = _build_pga_events_with_filter(
+            y, 44100, cfg3,
+        )
+        if _raw3:
+            ev3 = _raw3[0]
+            assert ev3['pga_filter_config']['min_decay_col_min_db'] == -80.0

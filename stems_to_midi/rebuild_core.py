@@ -837,13 +837,39 @@ def rebuild_events_from_analysis(
                 pga_threshold = None
 
         if stem_type == 'toms' and pga_threshold is not None:
-            from .pga_event_builder import apply_pga_prominence_filter
+            from .pga_event_builder import (
+                apply_pga_prominence_filter,
+                apply_pga_decay_col_min_filter,
+            )
             raw_pga = list(stem_data.get('events_pga', []))
             if raw_pga:
+                # 2026-06-15: also resolve the decay_col_min
+                # threshold (per-stem > global > -80.0 default).
+                # Mirrors the resolution in
+                # _build_pga_events_with_filter and
+                # detect_pga_events.
+                stem_col_min = config.get(stem_type, {}).get('min_decay_col_min_db')
+                global_col_min = config.get('onset_detection', {}).get('min_decay_col_min_db')
+                col_min_threshold = float(
+                    stem_col_min if stem_col_min is not None
+                    else global_col_min if global_col_min is not None
+                    else -80.0
+                )
+                # Run the prominence filter first.
                 pga_kept, pga_filtered = apply_pga_prominence_filter(
                     raw_pga,
                     pga_threshold,
                 )
+                # 2026-06-15: run the decay_col_min filter on
+                # top of the prominence filter. Events that
+                # passed the prominence check but failed the
+                # ring-quality check (decay_col_min_median_db
+                # below the threshold) are tagged FILTERED.
+                pga_kept, col_min_filtered = apply_pga_decay_col_min_filter(
+                    pga_kept,
+                    col_min_threshold,
+                )
+                pga_filtered = pga_filtered + col_min_filtered
                 # Build time-keyed lookup for status assignment
                 kept_times = {round(e['time'], 4) for e in pga_kept}
                 filtered_times = {round(e['time'], 4) for e in pga_filtered}
@@ -854,14 +880,24 @@ def rebuild_events_from_analysis(
                         ev.pop('filter_reason', None)
                     elif t in filtered_times:
                         ev['status'] = 'FILTERED'
-                        prom = ev.get('prominence')
-                        ev['filter_reason'] = (
-                            f"below pga_min_prominence ({prom:.0f} < {pga_threshold:.0f})"
-                            if prom is not None else 'below pga_min_prominence'
-                        )
-                    # Update pga_filter_config to reflect the new threshold
+                        # Determine which filter dropped this event
+                        # based on its filter_reason (set by the
+                        # filter that tagged it).
+                        existing_reason = ev.get('filter_reason', '')
+                        if 'min_decay_col_min_db' in existing_reason:
+                            # Already has the decay_col_min reason
+                            # from apply_pga_decay_col_min_filter.
+                            pass
+                        else:
+                            prom = ev.get('prominence')
+                            ev['filter_reason'] = (
+                                f"below pga_min_prominence ({prom:.0f} < {pga_threshold:.0f})"
+                                if prom is not None else 'below pga_min_prominence'
+                            )
+                    # Update pga_filter_config to reflect the new thresholds
                     ev['pga_filter_config'] = dict(ev.get('pga_filter_config', {}))
                     ev['pga_filter_config']['pga_min_prominence'] = pga_threshold
+                    ev['pga_filter_config']['min_decay_col_min_db'] = col_min_threshold
 
                 # events_configured for toms is EMPTY — events_pga is the
                 # single source of truth for toms. rebuild_core writes

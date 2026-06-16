@@ -82,6 +82,7 @@ __all__ = [
     'build_pga_events',
     'detect_pga_events',
     'apply_pga_prominence_filter',
+    'apply_pga_decay_col_min_filter',
     '_build_pga_events_with_filter',
     'PGAEventBuildError',
 ]
@@ -152,10 +153,14 @@ def detect_pga_events(
             ``midi.min_velocity`` / ``midi.max_velocity`` (defaults
             ``80``/``110``) for the MIDI velocity mapping, and
             ``onset_detection.pga_min_prominence`` (default
-            ``1000``) for the ``pga_filter_config`` record.
-            ``detect_pga_events`` itself does NOT apply the
-            prominence filter — it only records the configured
-            threshold for downstream consumers to use.
+            ``1000``) and ``onset_detection.min_decay_col_min_db``
+            (default ``-80.0`` dB) for the ``pga_filter_config``
+            record. Per-stem overrides (``toms.pga_min_prominence``,
+            ``toms.min_decay_col_min_db``) win over the global
+            onset_detection equivalents. ``detect_pga_events``
+            itself does NOT apply either filter — it only records
+            the configured thresholds for downstream consumers
+            to use.
 
     Returns:
         Flat list of event dicts in detection order, all with
@@ -238,15 +243,29 @@ def detect_pga_events(
 
     # Step 4: Record the active filter config on each event so
     # the sidecar / WebUI can show "which filter dropped which
-    # event" without re-reading midiconfig.yaml. The threshold
-    # recorded here is the configured ``pga_min_prominence`` at
-    # detect time; the WebUI tuning panel re-applies the filter
-    # at re-filter time using its own slider value.
+    # event" without re-reading midiconfig.yaml. The thresholds
+    # recorded here are the configured values at detect time;
+    # the WebUI tuning panel re-applies the filters at
+    # re-filter time using its own slider values.
+    # 2026-06-15: per-stem overrides (toms.pga_min_prominence,
+    # toms.min_decay_col_min_db) win over the global
+    # onset_detection equivalents. Same precedence pattern as
+    # the prominence filter in _build_pga_events_with_filter.
+    onset_cfg = config.get('onset_detection', {})
+    toms_cfg = config.get('toms', {})
     pga_min_prominence = float(
-        config.get('onset_detection', {}).get('pga_min_prominence', 1000.0)
+        toms_cfg.get('pga_min_prominence')
+        if toms_cfg.get('pga_min_prominence') is not None
+        else onset_cfg.get('pga_min_prominence', 1000.0)
+    )
+    min_decay_col_min_db = float(
+        toms_cfg.get('min_decay_col_min_db')
+        if toms_cfg.get('min_decay_col_min_db') is not None
+        else onset_cfg.get('min_decay_col_min_db', -80.0)
     )
     pga_filter_config = {
         'pga_min_prominence': pga_min_prominence,
+        'min_decay_col_min_db': min_decay_col_min_db,
         'min_velocity': midi_min,
         'max_velocity': midi_max,
     }
@@ -397,6 +416,108 @@ def apply_pga_prominence_filter(
     return kept, filtered
 
 
+def apply_pga_decay_col_min_filter(
+    events: List[Dict[str, Any]],
+    threshold: float,
+    disabled_ids: Optional[Set[Any]] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Re-tag PGA events with status='FILTERED' based on the
+    high-resolution decay ``col_min`` diagnostic and an optional
+    manual-disable set (2026-06-15).
+
+    Sister function to :func:`apply_pga_prominence_filter` —
+    same contract, different diagnostic field. The detector
+    stamps ``decay_col_min_median_db`` on every event (see
+    :func:`stems_to_midi.event_features.compute_event_features`
+    → :func:`compute_high_res_decay_signature`), so the filter
+    layer is decoupled from the detector.
+
+    Pure function: walks ``events`` in input order, sets
+    ``status='FILTERED'`` and ``filter_reason=...`` on any event
+    that either:
+
+      (a) has ``decay_col_min_median_db < threshold`` (with
+          reason
+          ``f"below min_decay_col_min_db ({db:.1f}dB < {thr:.1f}dB)"``),
+      (b) has an id (or fallback stable identifier) in
+          ``disabled_ids`` (with reason
+          ``"manually disabled via WebUI"``).
+
+    The disabled check takes precedence — an event in
+    ``disabled_ids`` is tagged FILTERED even if its
+    ``decay_col_min_median_db`` passes the threshold, so the
+    WebUI can hide an event the user has explicitly toggled
+    off regardless of the slider value.
+
+    An event with no ``decay_col_min_median_db`` field is left
+    untouched (it cannot be filtered by threshold — same as
+    the prominence pattern for events with no ``prominence``).
+
+    The function does NOT mutate the per-event features /
+    pga_filter_config of each event — it only touches
+    ``status`` and (when changed) adds ``filter_reason``. The
+    consumer is expected to call this with the same threshold
+    multiple times during interactive tuning without losing
+    diagnostic data.
+
+    Args:
+        events: Flat list of event dicts from
+            :func:`detect_pga_events` (or any list of PGA-shaped
+            dicts). The list may be in any status; this function
+            re-derives the partition from scratch.
+        threshold: Minimum ``decay_col_min_median_db`` (dB) for
+            an event to remain ``status='KEPT'``. Events with
+            ``decay_col_min_median_db < threshold`` are tagged
+            ``status='FILTERED'``. An event with no
+            ``decay_col_min_median_db`` field is left untouched.
+        disabled_ids: Optional set of event identifiers. If
+            provided, any event whose id is in the set is
+            tagged ``status='FILTERED'`` with reason
+            ``"manually disabled via WebUI"``. The id resolution
+            order is: ``event['id']``, then fallback to
+            ``event['time']``.
+
+    Returns:
+        ``(kept, filtered)`` — two flat lists partitioning
+        ``events`` by final status, both in input order.
+    """
+    kept: List[Dict[str, Any]] = []
+    filtered: List[Dict[str, Any]] = []
+    disabled_ids = disabled_ids or set()
+
+    for ev in events:
+        # Same id-resolution pattern as apply_pga_prominence_filter.
+        ev_id = ev.get('id', ev.get('time'))
+        is_disabled = ev_id in disabled_ids
+
+        col_min = ev.get('decay_col_min_median_db')
+        below_threshold = (
+            col_min is not None and col_min < threshold
+        )
+
+        if is_disabled:
+            ev['status'] = 'FILTERED'
+            ev['filter_reason'] = 'manually disabled via WebUI'
+            filtered.append(ev)
+        elif below_threshold:
+            ev['status'] = 'FILTERED'
+            ev['filter_reason'] = (
+                f"below min_decay_col_min_db "
+                f"({col_min:.1f}dB < {threshold:.1f}dB)"
+            )
+            filtered.append(ev)
+        else:
+            ev['status'] = 'KEPT'
+            # Clear any stale filter_reason from a prior filter
+            # call (e.g. the user moved the slider back up). Same
+            # rationale as apply_pga_prominence_filter.
+            if 'filter_reason' in ev:
+                del ev['filter_reason']
+            kept.append(ev)
+
+    return kept, filtered
+
+
 def build_pga_events(
     audio_mono: np.ndarray,
     sr: int,
@@ -514,10 +635,42 @@ def _build_pga_events_with_filter(
     )
 
     raw = detect_pga_events(audio_mono, sr, config)
-    threshold = float(
-        config.get('onset_detection', {}).get('pga_min_prominence', 1000.0)
+    # Apply the PGA prominence filter (existing behavior).
+    # 2026-06-15: per-stem override (toms.pga_min_prominence)
+    # wins over the global onset_detection.pga_min_prominence.
+    onset_cfg = config.get('onset_detection', {})
+    toms_cfg = config.get('toms', {})
+    prom_threshold = float(
+        toms_cfg.get('pga_min_prominence')
+        if toms_cfg.get('pga_min_prominence') is not None
+        else onset_cfg.get('pga_min_prominence', 1000.0)
     )
     events_kept, events_filtered = apply_pga_prominence_filter(
-        raw, threshold,
+        raw, prom_threshold,
     )
+    # 2026-06-15: apply the decay_col_min filter on top of the
+    # prominence filter. Same per-stem > global > default
+    # resolution pattern. Default -80.0 dB matches the empirical
+    # split (real strikes -60 to -84 dB, noise pops -84 to -90 dB).
+    decay_col_min_threshold = float(
+        toms_cfg.get('min_decay_col_min_db')
+        if toms_cfg.get('min_decay_col_min_db') is not None
+        else onset_cfg.get('min_decay_col_min_db', -80.0)
+    )
+    events_kept, decay_filtered = apply_pga_decay_col_min_filter(
+        events_kept, decay_col_min_threshold,
+    )
+    # Concatenate the two filtered lists. The decay_col_min
+    # filter is downstream of the prominence filter, so events
+    # it filters were already KEPT (i.e., they had high
+    # prominence) but failed the ring-quality check.
+    events_filtered = events_filtered + decay_filtered
+    # Record the active thresholds in pga_filter_config so the
+    # sidecar tooltip can show what filter the event was
+    # processed under.
+    for ev in raw:
+        pga_filter_config = dict(ev.get('pga_filter_config', {}))
+        pga_filter_config['pga_min_prominence'] = prom_threshold
+        pga_filter_config['min_decay_col_min_db'] = decay_col_min_threshold
+        ev['pga_filter_config'] = pga_filter_config
     return raw, events_kept, events_filtered, pga_debug

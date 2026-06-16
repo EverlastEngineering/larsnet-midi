@@ -238,6 +238,18 @@ toms:
   fundamental_freq_max: 150      # End of fundamental range
   body_freq_min: 150             # Start of body/attack range
   body_freq_max: 400             # End of body/attack range
+
+  # 2026-06-15: per-stem override of the global
+  # onset_detection.min_decay_col_min_db. Toms events whose
+  # decay_col_min_median_db (high-res STFT 15ms-post-peak
+  # col_min median, in dB) is below this threshold are
+  # tagged FILTERED. Empirically: real toms strikes
+  # -60 to -84 dB, noise pops -84 to -90 dB. -80 dB is the
+  # safe cut between the two clusters. Set to -120 to
+  # effectively disable. See
+  # stems_to_midi.pga_event_builder.apply_pga_decay_col_min_filter
+  # for the filter logic.
+  min_decay_col_min_db: -80.0
   
 hihat:
   # MIDI note mappings (General MIDI standard)
