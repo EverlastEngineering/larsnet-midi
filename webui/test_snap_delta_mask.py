@@ -311,6 +311,127 @@ class TestTomsSpectrogramFilterFunctions:
         )
 
 
+# ─── 2b. PGA filter functions (2026-06-15) ─────────────────────────────
+
+class TestPgaFilterFunctions:
+    """The 2 PGA filters (pga_min_prominence, min_decay_col_min_db)
+    must exist in threshold-tuning.js and be wired into
+    applyTuningFilter. This is the JS mirror of the Python
+    apply_pga_prominence_filter and apply_pga_decay_col_min_filter
+    in stems_to_midi.pga_event_builder — both consume the
+    same filter registry (stems_to_midi/filter_registry.json).
+
+    Bug fix (2026-06-15): the original WebUI only had
+    applyPgaProminenceFilter. When the registry refactor
+    added the min_decay_col_min_db slider to the toms
+    STEM_SLIDER_CONFIGS, the filter function for it was
+    missing — moving the slider had no effect on the live
+    waveform preview, and the slider value reset to the
+    default -80 on every panel open. This test class
+    locks both functions exist and are wired.
+    """
+
+    def test_apply_pga_prominence_filter_function_exists(self, threshold_tuning_js_text):
+        m = re.search(
+            r"function\s+applyPgaProminenceFilter\s*\(\s*events\s*,\s*threshold",
+            threshold_tuning_js_text,
+        )
+        assert m is not None, (
+            "expected `function applyPgaProminenceFilter(events, "
+            "threshold, disabledIds)` in threshold-tuning.js"
+        )
+
+    def test_apply_pga_decay_col_min_filter_function_exists(self, threshold_tuning_js_text):
+        m = re.search(
+            r"function\s+applyPgaDecayColMinFilter\s*\(\s*events\s*,\s*threshold",
+            threshold_tuning_js_text,
+        )
+        assert m is not None, (
+            "expected `function applyPgaDecayColMinFilter(events, "
+            "threshold, disabledIds)` in threshold-tuning.js. This "
+            "is the JS mirror of the Python "
+            "apply_pga_decay_col_min_filter; both consume the same "
+            "filter registry. Without it, the min_decay_col_min_db "
+            "slider has no effect on the live waveform preview."
+        )
+
+    def test_pga_prominence_wired_into_apply_tuning_filter(self, threshold_tuning_js_text):
+        """applyPgaProminenceFilter must be called from within
+        applyTuningFilter when the stem is toms."""
+        m = re.search(
+            r"function\s+applyTuningFilter\s*\(\s*\)\s*\{(.*?)\n\}\n",
+            threshold_tuning_js_text,
+            re.DOTALL,
+        )
+        assert m is not None, "could not locate applyTuningFilter block"
+        body = m.group(1)
+        assert "applyPgaProminenceFilter" in body, (
+            "applyTuningFilter must call applyPgaProminenceFilter "
+            "for the toms stem (the prominence filter is the first "
+            "PGA pass)."
+        )
+
+    def test_pga_decay_col_min_wired_into_apply_tuning_filter(self, threshold_tuning_js_text):
+        """applyPgaDecayColMinFilter must be called from within
+        applyTuningFilter when the stem is toms. Without this, the
+        min_decay_col_min_db slider has no live-preview effect."""
+        m = re.search(
+            r"function\s+applyTuningFilter\s*\(\s*\)\s*\{(.*?)\n\}\n",
+            threshold_tuning_js_text,
+            re.DOTALL,
+        )
+        assert m is not None, "could not locate applyTuningFilter block"
+        body = m.group(1)
+        assert "applyPgaDecayColMinFilter" in body, (
+            "applyTuningFilter must call applyPgaDecayColMinFilter "
+            "for the toms stem (the decay_col_min filter is the "
+            "second PGA pass, layered on top of the prominence "
+            "filter). Without this wiring, the min_decay_col_min_db "
+            "slider had no effect on the live waveform preview — "
+            "the bug the user reported on 2026-06-15."
+        )
+
+    def test_decay_col_min_filter_uses_field_decay_col_min_median_db(
+        self, threshold_tuning_js_text
+    ):
+        """The function must read event.decay_col_min_median_db
+        (the field the detector stamps via
+        compute_high_res_decay_signature), not some other field."""
+        m = re.search(
+            r"function\s+applyPgaDecayColMinFilter\s*\([^)]*\)\s*\{(.*?)\n\}\n",
+            threshold_tuning_js_text,
+            re.DOTALL,
+        )
+        assert m is not None
+        body = m.group(1)
+        assert "decay_col_min_median_db" in body, (
+            "applyPgaDecayColMinFilter must read "
+            "event.decay_col_min_median_db (the field the detector "
+            "stamps). Using a different field would silently miss "
+            "all events."
+        )
+
+    def test_decay_col_min_filter_updates_pga_filter_config(
+        self, threshold_tuning_js_text
+    ):
+        """The function must update pga_filter_config.min_decay_col_min_db
+        so the tooltip shows the live threshold (matches the
+        prominence filter's behavior with pga_min_prominence)."""
+        m = re.search(
+            r"function\s+applyPgaDecayColMinFilter\s*\([^)]*\)\s*\{(.*?)\n\}\n",
+            threshold_tuning_js_text,
+            re.DOTALL,
+        )
+        assert m is not None
+        body = m.group(1)
+        assert "min_decay_col_min_db" in body, (
+            "applyPgaDecayColMinFilter must update "
+            "ev.pga_filter_config.min_decay_col_min_db so the tooltip "
+            "shows the live threshold (matches the prominence "
+            "filter's pga_min_prominence update)."
+        )
+
+
 # ─── 3. Node-based behavioral tests: functions actually work ────────────
 
 class TestTomsSpectrogramFilterBehavior:

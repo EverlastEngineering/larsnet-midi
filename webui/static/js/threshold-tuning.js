@@ -1528,6 +1528,68 @@ function applyPgaProminenceFilter(events, threshold, disabledIds) {
 }
 
 /**
+ * applyPgaDecayColMinFilter — 2026-06-15 bug fix.
+ *
+ * Sister function to applyPgaProminenceFilter. Same registry-
+ * driven pattern, but for the decay_col_min_median_db field
+ * (the high-res STFT ring quality check — see
+ * docs/stems_toms_prominence_and_decay_col_min.md). The
+ * threshold is in dB; events whose decay_col_min_median_db
+ * is below the threshold are tagged FILTERED. Default -80 dB
+ * (the cut between real strikes and noise pops).
+ *
+ * Without this function, moving the min_decay_col_min_db
+ * slider had no effect on the live waveform preview — the
+ * bars reflected the prominence filter only, not the
+ * full saved filter state.
+ */
+function applyPgaDecayColMinFilter(events, threshold, disabledIds) {
+    const registry = _filterRegistryCache;
+    const spec = registry
+        ? findFilter(registry, 'min_decay_col_min_db')
+        : null;
+    const disabled = disabledIds || new Set();
+    for (const ev of events) {
+        const evId = ev.id != null ? ev.id : ev.time;
+        const isDisabled = disabled.has(evId);
+
+        if (isDisabled) {
+            ev.status = 'FILTERED';
+            ev.filter_reason = 'manually disabled via WebUI';
+        } else if (spec) {
+            // Registry-driven evaluation.
+            const result = evaluateFilter(spec, ev, threshold);
+            if (result === false) {
+                ev.status = 'FILTERED';
+                ev.filter_reason = buildFilterReason(spec, ev, threshold);
+            } else {
+                ev.status = 'KEPT';
+                delete ev.filter_reason;
+            }
+        } else {
+            // Fallback: registry not loaded (e.g., API down).
+            // Mirror the hard-coded behavior so the panel
+            // still works offline.
+            const colMin = ev.decay_col_min_median_db;
+            if (colMin != null && colMin < threshold) {
+                ev.status = 'FILTERED';
+                ev.filter_reason = (
+                    `below min_decay_col_min_db `
+                    + `(${colMin.toFixed(1)}dB < ${threshold.toFixed(1)}dB)`
+                );
+            } else {
+                ev.status = 'KEPT';
+                delete ev.filter_reason;
+            }
+        }
+        // Update pga_filter_config so the tooltip shows the live threshold
+        if (ev.pga_filter_config) {
+            ev.pga_filter_config.min_decay_col_min_db = threshold;
+        }
+    }
+}
+
+/**
  * Apply the current slider values to the cached tuning events and update
  * the waveform display. This replicates the server-side filter passes
  * from analysis_core.py.
@@ -1581,6 +1643,18 @@ function applyTuningFilter() {
         const pgaThreshold = params.pga_min_prominence;
         if (pgaThreshold != null) {
             applyPgaProminenceFilter(tuningBaseEvents, pgaThreshold);
+        }
+        // Pass 0.5: decay_col_min filter (2026-06-15). Sister
+        // to prominence — applies the high-res ring quality
+        // check on the events that passed the prominence
+        // filter. Without this, the decay_col_min slider
+        // had no effect on the live preview. Mirrors the
+        // Python rebuild_core._refilter_stem_pga layering.
+        const decayColMinThreshold = params.min_decay_col_min_db;
+        if (decayColMinThreshold != null) {
+            applyPgaDecayColMinFilter(
+                tuningBaseEvents, decayColMinThreshold
+            );
         }
     }
 

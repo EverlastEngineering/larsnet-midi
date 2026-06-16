@@ -348,6 +348,19 @@ def get_project_tuning_config(project_number, stem_type):
                 if stem_cfg.get('pga_min_prominence') is not None
                 else onset_cfg.get('pga_min_prominence', 1000.0)
             ),
+            # 2026-06-15: Toms decay_col_min filter (sister to
+            # pga_min_prominence). Same per-stem > global > default
+            # resolution pattern. The WebUI slider reads this
+            # directly; the rebuild path resolves the same way
+            # (see rebuild_core._refilter_stem_pga). Default
+            # -80.0 dB matches the cut between the empirical
+            # clusters (real strikes -60 to -84 dB, noise pops
+            # -84 to -90 dB). See filter_registry.json.
+            'min_decay_col_min_db': (
+                stem_cfg.get('min_decay_col_min_db')
+                if stem_cfg.get('min_decay_col_min_db') is not None
+                else onset_cfg.get('min_decay_col_min_db', -80.0)
+            ),
 
             # Hihat open/closed classification (2026-06-13).
             'open_geomean_min': stem_cfg.get('open_geomean_min', 262.0),
