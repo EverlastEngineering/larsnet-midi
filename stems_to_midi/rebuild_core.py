@@ -770,24 +770,37 @@ def rebuild_events_from_analysis(
         stem_data = updated_stems[stem_type]
         configured_events = stem_data.get('events_configured', [])
         sensitive_events = stem_data.get('events_sensitive', [])
-        # 2026-06-15: toms no longer reads or writes a sidecar logic
-        # block. The PGA-only rebuild path resolves its threshold
-        # directly from yaml; the comparison helpers
+        # 2026-06-18: ``pga_rebuild_active`` is the trigger for
+        # the PGA-only rebuild path. It's true when the sidecar
+        # carries ``events_pga`` (i.e. ``process_percentile_gated``
+        # produced the sidecar — true for toms today, and true
+        # for any other stem that opts into PGA via
+        # ``<stem>.use_pga_detection: true`` in the project
+        # midiconfig). The flag drives all the conditional
+        # branches below; previously they were hard-coded to
+        # ``stem_type == 'toms'``.
+        raw_pga_events = list(stem_data.get('events_pga', []))
+        pga_rebuild_active = len(raw_pga_events) > 0
+        # 2026-06-15: toms (and any other PGA-only stem) no
+        # longer reads or writes a sidecar logic block. The
+        # PGA-only rebuild path resolves its threshold directly
+        # from yaml; the comparison helpers
         # (_thresholds_changed / _thresholds_lowered /
-        # _classification_thresholds_changed) below are only needed
-        # for the energy/spectral stems that still use the logic
-        # block for change detection.
-        stored_logic = {} if stem_type == 'toms' else stem_data.get('logic', {})
+        # _classification_thresholds_changed) below are only
+        # needed for the energy/spectral stems that still use
+        # the logic block for change detection.
+        stored_logic = {} if pga_rebuild_active else stem_data.get('logic', {})
         stem_overrides = overrides.get(stem_type, {})
 
         # Get current spectral config for this stem (reads thresholds from config)
         spectral_config = get_spectral_config_for_stem(stem_type, config)
 
         # Determine rebuild strategy based on threshold changes.
-        # Skipped for toms: the PGA prominence filter always re-runs
-        # and reads its threshold from yaml directly (see below), so
-        # the change-detection helpers are not needed for toms.
-        if stem_type == 'toms':
+        # Skipped for PGA-only stems: the PGA prominence filter
+        # always re-runs and reads its threshold from yaml
+        # directly (see below), so the change-detection helpers
+        # are not needed.
+        if pga_rebuild_active:
             changed = False
             lowered = False
             classification_changed = False
@@ -799,33 +812,34 @@ def rebuild_events_from_analysis(
             )
 
         # ------------------------------------------------------------------
-        # PGA prominence re-filter for toms (2026-06-15).
+        # PGA prominence re-filter for PGA-only stems (2026-06-15,
+        # generalized 2026-06-18 to any stem with ``events_pga``
+        # in the sidecar, not just toms).
         #
         # After the pga_event_builder refactor, events_pga carries ALL
         # detected events (status='KEPT', no filter applied at detect
-        # time). We ALWAYS re-apply the prominence filter for toms on
-        # every rebuild — using the stored threshold from the sidecar
-        # (which is the detect-time threshold). This produces the
-        # correct KEPT/filtered split regardless of whether the user
-        # moved the WebUI slider.
+        # time). We ALWAYS re-apply the prominence filter for any
+        # PGA-only stem on every rebuild — using the threshold from
+        # yaml. This produces the correct KEPT/filtered split
+        # regardless of whether the user moved the WebUI slider.
         #
-        # This branch runs BEFORE the geomean/sustain filter path (which
-        # exempts method='percentile_gated' at line 365) so the PGA
-        # re-filter is the primary filter for toms.
+        # This branch runs BEFORE the geomean/sustain filter path
+        # (which exempts method='percentile_gated' at line 365) so
+        # the PGA re-filter is the primary filter for these stems.
         # ------------------------------------------------------------------
-        if stem_type == 'toms':
-            raw_pga = list(stem_data.get('events_pga', []))
-            if raw_pga:
-                # 2026-06-15: yaml is the single source of truth for
-                # toms' PGA prominence. The per-event pga_filter_config
-                # threshold in the sidecar is the detect-time value
-                # (informational; not used as a fallback) and the
-                # sidecar's logic block is no longer emitted for toms.
-                # Priority: stem-specific YAML > global onset_detection
-                # YAML > hard default. The hard default (1000) is
-                # never reached in practice because the project yaml
-                # always carries a value, but we keep it as a
-                # defensive floor.
+        if pga_rebuild_active:
+            if raw_pga_events:
+                # yaml is the single source of truth for PGA
+                # prominence. The per-event pga_filter_config
+                # threshold in the sidecar is the detect-time
+                # value (informational; not used as a fallback)
+                # and the sidecar's logic block is no longer
+                # emitted for PGA-only stems. Priority:
+                # stem-specific YAML > global onset_detection
+                # YAML > hard default. The hard default (1000)
+                # is never reached in practice because the
+                # project yaml always carries a value, but we
+                # keep it as a defensive floor.
                 stem_pga = config.get(stem_type, {}).get('pga_min_prominence')
                 global_pga = config.get('onset_detection', {}).get('pga_min_prominence')
                 pga_threshold = float(
@@ -836,7 +850,7 @@ def rebuild_events_from_analysis(
             else:
                 pga_threshold = None
 
-        if stem_type == 'toms' and pga_threshold is not None:
+        if pga_rebuild_active and pga_threshold is not None:
             from .pga_event_builder import (
                 apply_pga_prominence_filter,
                 apply_pga_decay_col_min_filter,
@@ -925,46 +939,55 @@ def rebuild_events_from_analysis(
                     ev['pga_filter_config']['min_decay_col_min_db'] = col_min_threshold
                     ev['pga_filter_config']['attack_rise_max_ms'] = attack_rise_threshold
 
-                # events_configured for toms is EMPTY — events_pga is the
-                # single source of truth for toms. rebuild_core writes
-                # back the re-filtered statuses to events_pga only.
+                # events_configured for PGA-only stems is EMPTY —
+                # events_pga is the single source of truth. rebuild_core
+                # writes back the re-filtered statuses to events_pga
+                # only. Generalized 2026-06-18 from toms-only to any
+                # stem with events_pga in the sidecar.
                 events = list(pga_kept)
                 updated_stems[stem_type]['events_pga'] = raw_pga
-                # events_configured intentionally absent for toms
+                # events_configured intentionally absent for PGA-only
+                # stems.
 
-                # Build MIDI events for toms directly from PGA kept events.
-                # Toms uses ONLY events_pga — skip the energy/spectral path
-                # entirely. The PGA events already carry midi_velocity
-                # from the detector's linear envelope mapping.
-                toms_note = getattr(drum_mapping, 'toms')
-                toms_timing_offset = config.get('toms', {}).get('timing_offset', 0.0)
-                toms_max_duration = config.get('toms', {}).get('max_note_duration',
+                # Build MIDI events for PGA-only stems directly from
+                # PGA kept events. These stems use ONLY events_pga —
+                # skip the energy/spectral path entirely. The PGA
+                # events already carry midi_velocity from the
+                # detector's linear envelope mapping. The note,
+                # timing_offset, and max_note_duration are read
+                # per-stem (so snare uses drum_mapping.snare and
+                # snare.timing_offset, not the hard-coded toms
+                # equivalents).
+                stem_note = getattr(drum_mapping, stem_type)
+                stem_timing_offset = config.get(stem_type, {}).get('timing_offset', 0.0)
+                stem_max_duration = config.get(stem_type, {}).get('max_note_duration',
                                          config.get('midi', {}).get('max_note_duration', 0.5))
                 midi_events = []
                 for i, ev in enumerate(pga_kept):
-                    midi_time = float(ev['time']) + toms_timing_offset
+                    midi_time = float(ev['time']) + stem_timing_offset
                     velocity = int(ev.get('midi_velocity', 80))
                     # Duration: use stored duration_ms or time-to-next
                     if ev.get('duration_ms') is not None:
-                        duration = min(ev['duration_ms'] / 1000.0, toms_max_duration)
+                        duration = min(ev['duration_ms'] / 1000.0, stem_max_duration)
                     elif i < len(pga_kept) - 1:
-                        duration = min(pga_kept[i + 1]['time'] - ev['time'], toms_max_duration)
+                        duration = min(pga_kept[i + 1]['time'] - ev['time'], stem_max_duration)
                     else:
                         duration = config.get('audio', {}).get('default_note_duration', 0.1)
                     midi_events.append({
                         'time': float(midi_time),
-                        'note': int(toms_note),
+                        'note': int(stem_note),
                         'velocity': int(velocity),
                         'duration': float(duration),
                     })
                 midi_events_by_stem[stem_type] = midi_events
-                # Toms: the early-return `continue` below skips the
-                # non-toms branch that would have written the logic
-                # block and updated events_configured / events_sensitive.
-                # Toms uses ONLY events_pga, so we still need to strip
-                # any stale logic block from the loaded sidecar here
-                # (the non-toms cleanup at the end of the loop body
-                # doesn't run for toms). 2026-06-15.
+                # PGA-only stem: the early-return `continue` below
+                # skips the legacy branch that would have written the
+                # logic block and updated events_configured /
+                # events_sensitive. The PGA-only stems use ONLY
+                # events_pga, so we still need to strip any stale
+                # logic block from the loaded sidecar here (the
+                # non-PGA cleanup at the end of the loop body
+                # doesn't run for these stems). 2026-06-15.
                 stem_data.pop('logic', None)
                 continue
             else:
