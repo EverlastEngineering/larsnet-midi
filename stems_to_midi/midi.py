@@ -263,7 +263,7 @@ def _serialize_onset_events(
         # top of the PGA block.
         'midi_velocity', 'filter_reason',
         'duration_ms', 'attack_rise_ms', 'inter_onset_ms',
-        'pitch_confidence',
+        'pitch_hz', 'pitch_confidence',
         'decay_t60_ms', 'spectral_flatness',
         'hr_peak_offset_ms', 'decay_envelope_energy',
         'decay_col_min_median_db',

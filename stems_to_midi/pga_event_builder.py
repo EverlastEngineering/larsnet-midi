@@ -311,7 +311,7 @@ def detect_pga_events(
                 feats = {
                     'duration_ms': None,
                     'attack_rise_ms': None,
-                    'root_pitch_hz': None,
+                    'pitch_hz': None,
                     'pitch_confidence': None,
                     'decay_t60_ms': None,
                     'spectral_centroid_hz': None,

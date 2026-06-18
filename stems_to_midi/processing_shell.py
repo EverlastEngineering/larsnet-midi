@@ -1827,6 +1827,8 @@ def process_stem_to_midi(
                 'note': int(note),
                 'velocity': int(ev.get('midi_velocity', min_velocity)),
                 'duration_ms': ev.get('duration_ms'),
+                'pitch_hz': ev.get('pitch_hz'),
+                'pitch_confidence': ev.get('pitch_confidence'),
                 'method': 'percentile_gated',
                 'classification': None,
                 'pga_event': ev,
