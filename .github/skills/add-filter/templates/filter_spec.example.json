@@ -1,0 +1,22 @@
+{
+  "id": "geomean_min",
+  "label": "Toms GeoMean Min",
+  "description": "Filter PGA events with spectral geomean below the threshold. Catches low-energy artifacts that have a real attack but lack the spectral body of a real toms hit. Mirrors the kick/snare/cymbals spectral filter. (Example spec — replace with your real values.)",
+  "kind": "min_value",
+  "field": "geomean",
+  "default": 50.0,
+  "min": 0.0,
+  "max": 500.0,
+  "step": 1.0,
+  "unit": "",
+  "ui_control": "slider",
+  "applies_to_stems": ["toms"],
+  "yaml_paths": {
+    "global": ["onset_detection", "geomean_min"],
+    "per_stem": {
+      "toms": ["toms", "geomean_min"]
+    }
+  },
+  "reason_template": "below geomean_min ({value} < {threshold})",
+  "value_format": "int"
+}
