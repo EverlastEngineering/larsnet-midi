@@ -83,10 +83,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+import os
 import time
 
 import numpy as np
 from scipy.signal import find_peaks
+
+# Set LARSNET_TIMING=1 in environment to opt in to [t+Xs] timing logs.
+_TIMING_ENABLED = os.environ.get("LARSNET_TIMING", "0") == "1"
 
 # Module-level cache for compute_stft_db: keyed on (id(audio), sr, n_fft, hop).
 # Same audio object + same STFT params → reuse the full-file STFT result.
@@ -156,12 +160,13 @@ class _TimedBlock:
         stats["total_sec"] += dt
         if dt > stats["max_sec"]:
             stats["max_sec"] = dt
-        print(
-            f"[t+{_elapsed_since_start():.2f}s] {self.name} "
-            f"({dt*1000:.2f}ms) — calls={stats['calls']} "
-            f"cum={stats['total_sec']*1000:.1f}ms "
-            f"max={stats['max_sec']*1000:.2f}ms"
-        )
+        if _TIMING_ENABLED:
+            print(
+                f"[t+{_elapsed_since_start():.2f}s] {self.name} "
+                f"({dt*1000:.2f}ms) — calls={stats['calls']} "
+                f"cum={stats['total_sec']*1000:.1f}ms "
+                f"max={stats['max_sec']*1000:.2f}ms"
+            )
 
 
 def timed(name: str) -> _TimedBlock:
@@ -308,19 +313,21 @@ def compute_stft_db(
         dt = time.perf_counter() - t_entry
         _STFT_CACHE_STATS["hits"] += 1
         _STFT_CACHE_STATS["total_sec"] += dt
-        print(
-            f"[t+{_elapsed_since_start():.2f}s] STFT cache hit "
-            f"({dt*1000:.2f}ms) — cum_total="
-            f"{_STFT_CACHE_STATS['total_sec']*1000:.1f}ms "
-            f"hits={_STFT_CACHE_STATS['hits']}, "
-            f"misses={_STFT_CACHE_STATS['misses']}"
-        )
+        if _TIMING_ENABLED:
+            print(
+                f"[t+{_elapsed_since_start():.2f}s] STFT cache hit "
+                f"({dt*1000:.2f}ms) — cum_total="
+                f"{_STFT_CACHE_STATS['total_sec']*1000:.1f}ms "
+                f"hits={_STFT_CACHE_STATS['hits']}, "
+                f"misses={_STFT_CACHE_STATS['misses']}"
+            )
         return _STFT_CACHE[cache_key]
 
-    print(
-        f"[t+{_elapsed_since_start():.2f}s] STFT cache miss — computing STFT "
-        f"(audio={len(audio)} samples, sr={sr}, n_fft={n_fft}, hop={hop})"
-    )
+    if _TIMING_ENABLED:
+        print(
+            f"[t+{_elapsed_since_start():.2f}s] STFT cache miss — computing STFT "
+            f"(audio={len(audio)} samples, sr={sr}, n_fft={n_fft}, hop={hop})"
+        )
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
     audio = np.asarray(audio, dtype=np.float64)
@@ -363,13 +370,14 @@ def compute_stft_db(
     _STFT_CACHE_STATS["misses"] += 1
     _STFT_CACHE_STATS["fft_loop_sec"] += t_fft
     _STFT_CACHE_STATS["total_sec"] += t_total
-    print(
-        f"[t+{_elapsed_since_start():.2f}s] STFT done: "
-        f"total={t_total*1000:.2f}ms fft_loop={t_fft*1000:.2f}ms "
-        f"frames={n_frames} — cum_total={_STFT_CACHE_STATS['total_sec']*1000:.1f}ms "
-        f"cum_fft={_STFT_CACHE_STATS['fft_loop_sec']*1000:.1f}ms "
-        f"hits={_STFT_CACHE_STATS['hits']} misses={_STFT_CACHE_STATS['misses']}"
-    )
+    if _TIMING_ENABLED:
+        print(
+            f"[t+{_elapsed_since_start():.2f}s] STFT done: "
+            f"total={t_total*1000:.2f}ms fft_loop={t_fft*1000:.2f}ms "
+            f"frames={n_frames} — cum_total={_STFT_CACHE_STATS['total_sec']*1000:.1f}ms "
+            f"cum_fft={_STFT_CACHE_STATS['fft_loop_sec']*1000:.1f}ms "
+            f"hits={_STFT_CACHE_STATS['hits']} misses={_STFT_CACHE_STATS['misses']}"
+        )
     return freqs, times, s_db
 
 

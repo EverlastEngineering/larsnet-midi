@@ -60,8 +60,13 @@ from typing import Optional, Tuple, Dict
 from functools import wraps
 
 import numpy as np
+import os
 
 from .spectral_transient_core import timed
+
+
+# Set LARSNET_TIMING=1 in environment to opt in to [t+Xs] timing logs.
+_TIMING_ENABLED = os.environ.get("LARSNET_TIMING", "0") == "1"
 
 
 def _log_timing(name: str):
@@ -70,9 +75,12 @@ def _log_timing(name: str):
 
     Used to find WHICH functions dominate CLI runtime — every call is
     logged, so a function called 100×/sec will produce 100 log lines.
-    Quiet down by removing the decorator if the noise is too much.
+    Quiet down by unsetting LARSNET_TIMING (the default) or removing
+    the decorator if the noise is too much.
     """
     def deco(func):
+        if not _TIMING_ENABLED:
+            return func
         @wraps(func)
         def wrapper(*args, **kwargs):
             with timed(name):
