@@ -91,6 +91,20 @@ onset_detection:
   # frames as candidates). ``null`` = IQR-auto default.
   pga_abs_envelope_threshold: null
 
+  # PGA detector tuning parameters (2026-06-18). Each
+  # entry below is a per-stem-overridable parameter of
+  # ``detect_percentile_gated_broad_attacks``. The value
+  # here is the GLOBAL default; per-stem overrides go in
+  # the project's ``<stem>.<key>`` section. The same
+  # per-stem > global > module-default precedence is used
+  # for all of them. Set any of them to ``null`` (or just
+  # omit) to use the module's hard-coded default.
+  pga_broad_freq_min_hz: null   # default 600.0 (excludes saturated 0-600Hz low bands on toms)
+  pga_broad_freq_max_hz: null   # default 8000.0
+  pga_db_rise_threshold: null   # default 10.0 dB (an order of magnitude above noise)
+  pga_nms_min_frames: null      # default 20 (~116ms at hop=256; safe NMS floor for typical drumming)
+  pga_strike_offset_sec: null   # default 0.008 (8ms; Hann center-of-bin bias for toms strikes)
+
   # PGA-only pipeline toggle (2026-06-18). When ``true`` for
   # a given stem, ``process_stem_to_midi`` short-circuits to
   # ``processing_shell_percentile_gated.process_percentile_gated``

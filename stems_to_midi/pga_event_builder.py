@@ -71,12 +71,19 @@ list in the sidecar, and then re-call
 on every tuning-panel change. This refactor is the prerequisite
 for that flow.
 """
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import numpy as np
 
 from .percentile_gated_detector import detect_percentile_gated_broad_attacks
-from .percentile_gated_detector import DEFAULT_MAX_FLOOR_GATE_DB
+from .percentile_gated_detector import (
+    DEFAULT_MAX_FLOOR_GATE_DB,
+    DEFAULT_BROAD_FREQ_MIN_HZ,
+    DEFAULT_BROAD_FREQ_MAX_HZ,
+    DEFAULT_DB_RISE_THRESHOLD,
+    DEFAULT_NMS_MIN_FRAMES,
+    DEFAULT_STRIKE_OFFSET_SEC,
+)
 from .filter_kinds import (
     find_filter,
     evaluate_filter,
@@ -93,6 +100,7 @@ __all__ = [
     '_build_pga_events_with_filter',
     '_resolve_max_floor_gate_db',
     '_resolve_pga_abs_envelope_threshold',
+    '_resolve_pga_detector_param',
     'PGAEventBuildError',
 ]
 
@@ -227,6 +235,107 @@ def _resolve_pga_abs_envelope_threshold(
     return None
 
 
+def _resolve_pga_detector_param(
+    config: Dict[str, Any],
+    key: str,
+    default: Union[float, int],
+    stem_type: Optional[str] = None,
+) -> Union[float, int]:
+    """Resolve a PGA detector tuning parameter with per-stem
+    > global > default precedence.
+
+    Args:
+        config: Project config dict.
+        key: The YAML key to look up (see "Available keys"
+            below).
+        default: The value to return when neither the per-stem
+            nor the global override is set. The TYPE of
+            ``default`` is preserved — if default is ``int``,
+            the returned value is ``int``; if default is
+            ``float``, the returned value is ``float``. This
+            matches the type the detector expects.
+        stem_type: If provided, ONLY this stem's section is
+            checked. If ``None`` (the default — e.g. from a
+            test that doesn't know which stem is being
+            processed), all known stems are walked and the
+            first non-None value wins. Production callers
+            (process_stem_to_midi, process_percentile_gated)
+            should always pass ``stem_type`` to avoid one
+            stem's threshold leaking into another's
+            detection.
+
+    Returns:
+        The resolved value as the same type as ``default``.
+        Falls back to ``default`` on any error (missing
+        key, unparseable string, etc.) so the detector
+        always gets a usable value.
+
+    Available keys (2026-06-18 — wired in this commit):
+        - ``pga_broad_freq_min_hz`` (float, default
+          :data:`DEFAULT_BROAD_FREQ_MIN_HZ` = 600.0):
+          inclusive lower bound of the broadband frequency
+          range summed for the contrast envelope. Default
+          excludes the 0-600 Hz low bands that saturate on
+          toms strikes. Set lower (e.g. 200) for stems
+          whose attack energy lives in the body range
+          (snare, kick).
+        - ``pga_broad_freq_max_hz`` (float, default
+          :data:`DEFAULT_BROAD_FREQ_MAX_HZ` = 8000.0):
+          inclusive upper bound of the broadband frequency
+          range. Default 8000 captures cymbal/shaker
+          sizzle; set higher (e.g. 12000) for stems with
+          high-frequency attack content.
+        - ``pga_db_rise_threshold`` (float, default
+          :data:`DEFAULT_DB_RISE_THRESHOLD` = 10.0):
+          per-bin contrast threshold in dB. 10 dB is
+          "an order of magnitude above noise"; set lower
+          (e.g. 5) to recover quieter hits at the cost
+          of more noise FPs.
+        - ``pga_nms_min_frames`` (int, default
+          :data:`DEFAULT_NMS_MIN_FRAMES` = 20): minimum
+          STFT frames between peaks (~116ms at hop=256).
+          Default is the "safe NMS floor" — shorter would
+          merge flams, longer would split sixteenths.
+          Set to 0 to disable NMS (every peak kept).
+        - ``pga_strike_offset_sec`` (float, default
+          :data:`DEFAULT_STRIKE_OFFSET_SEC` = 0.008):
+          Hann window center-of-bin bias correction in
+          seconds. The contrast envelope peaks a few ms
+          after the true strike onset; this offset shifts
+          every event time backward by this amount.
+          Default 8ms is calibrated on toms; tune per
+          -stem if the bias is different (e.g. tighter
+          attacks may need a smaller offset).
+    """
+    onset_cfg = config.get('onset_detection', {}) or {}
+    # Pick the per-stem search strategy.
+    if stem_type is not None:
+        stem_cfgs = [config.get(stem_type, {}) or {}]
+    else:
+        # Fallback: walk all known stems. The first non-None
+        # wins. Same caveat as _resolve_pga_abs_envelope_threshold
+        # — production callers should pass stem_type to
+        # avoid one stem's threshold leaking into another's
+        # detection.
+        stem_cfgs = [config.get(s, {}) or {} for s in _PGA_STEM_NAMES]
+    # Per-stem override.
+    for stem_cfg in stem_cfgs:
+        raw = stem_cfg.get(key)
+        if raw is not None:
+            try:
+                return type(default)(raw)
+            except (TypeError, ValueError):
+                pass
+    # Global override.
+    raw = onset_cfg.get(key)
+    if raw is not None:
+        try:
+            return type(default)(raw)
+        except (TypeError, ValueError):
+            pass
+    return default
+
+
 def _empty_result(debug: Optional[Dict[str, Any]] = None) -> Tuple[List[Dict], List[Dict], Dict[str, Any]]:
     """Uniform return shape for the no-events / error paths so
     downstream code can destructure without an ``if``."""
@@ -330,12 +439,39 @@ def detect_pga_events(
     # max, suppressing every peak. Setting
     # ``<stem>.pga_abs_envelope_threshold`` in the project
     # midiconfig forces a fixed value instead.
+    # 2026-06-18: also pass the detector's other tuning
+    # parameters through the same per-stem > global >
+    # default resolution path (see
+    # _resolve_pga_detector_param). Each value falls
+    # back to the module's hard-coded default when
+    # unset, so the pipeline behavior is identical to
+    # before when no per-project overrides exist.
     max_floor_gate_db = _resolve_max_floor_gate_db(config)
     abs_envelope_threshold = _resolve_pga_abs_envelope_threshold(config, stem_type)
+    broad_freq_min_hz = _resolve_pga_detector_param(
+        config, 'pga_broad_freq_min_hz', DEFAULT_BROAD_FREQ_MIN_HZ, stem_type,
+    )
+    broad_freq_max_hz = _resolve_pga_detector_param(
+        config, 'pga_broad_freq_max_hz', DEFAULT_BROAD_FREQ_MAX_HZ, stem_type,
+    )
+    db_rise_threshold = _resolve_pga_detector_param(
+        config, 'pga_db_rise_threshold', DEFAULT_DB_RISE_THRESHOLD, stem_type,
+    )
+    nms_min_frames = _resolve_pga_detector_param(
+        config, 'pga_nms_min_frames', DEFAULT_NMS_MIN_FRAMES, stem_type,
+    )
+    strike_offset_sec = _resolve_pga_detector_param(
+        config, 'pga_strike_offset_sec', DEFAULT_STRIKE_OFFSET_SEC, stem_type,
+    )
     pga_event_times, _pga_debug = detect_percentile_gated_broad_attacks(
         audio_mono, sr,
-        max_floor_gate_db=max_floor_gate_db,
+        broad_freq_min_hz=broad_freq_min_hz,
+        broad_freq_max_hz=broad_freq_max_hz,
+        db_rise_threshold=db_rise_threshold,
         abs_envelope_threshold=abs_envelope_threshold,
+        nms_min_frames=nms_min_frames,
+        strike_offset_sec=strike_offset_sec,
+        max_floor_gate_db=max_floor_gate_db,
     )
 
     _env = _pga_debug.get('envelope') if _pga_debug else None
@@ -810,10 +946,30 @@ def build_pga_events(
     # detect_pga_events for the rationale.
     max_floor_gate_db = _resolve_max_floor_gate_db(config)
     abs_envelope_threshold = _resolve_pga_abs_envelope_threshold(config, stem_type)
+    broad_freq_min_hz = _resolve_pga_detector_param(
+        config, 'pga_broad_freq_min_hz', DEFAULT_BROAD_FREQ_MIN_HZ, stem_type,
+    )
+    broad_freq_max_hz = _resolve_pga_detector_param(
+        config, 'pga_broad_freq_max_hz', DEFAULT_BROAD_FREQ_MAX_HZ, stem_type,
+    )
+    db_rise_threshold = _resolve_pga_detector_param(
+        config, 'pga_db_rise_threshold', DEFAULT_DB_RISE_THRESHOLD, stem_type,
+    )
+    nms_min_frames = _resolve_pga_detector_param(
+        config, 'pga_nms_min_frames', DEFAULT_NMS_MIN_FRAMES, stem_type,
+    )
+    strike_offset_sec = _resolve_pga_detector_param(
+        config, 'pga_strike_offset_sec', DEFAULT_STRIKE_OFFSET_SEC, stem_type,
+    )
     _pga_event_times, pga_debug = detect_percentile_gated_broad_attacks(
         audio_mono, sr,
-        max_floor_gate_db=max_floor_gate_db,
+        broad_freq_min_hz=broad_freq_min_hz,
+        broad_freq_max_hz=broad_freq_max_hz,
+        db_rise_threshold=db_rise_threshold,
         abs_envelope_threshold=abs_envelope_threshold,
+        nms_min_frames=nms_min_frames,
+        strike_offset_sec=strike_offset_sec,
+        max_floor_gate_db=max_floor_gate_db,
     )
 
     raw = detect_pga_events(audio_mono, sr, config, stem_type=stem_type)
@@ -869,10 +1025,30 @@ def _build_pga_events_with_filter(
     # detect_pga_events for the rationale.
     max_floor_gate_db = _resolve_max_floor_gate_db(config)
     abs_envelope_threshold = _resolve_pga_abs_envelope_threshold(config, stem_type)
+    broad_freq_min_hz = _resolve_pga_detector_param(
+        config, 'pga_broad_freq_min_hz', DEFAULT_BROAD_FREQ_MIN_HZ, stem_type,
+    )
+    broad_freq_max_hz = _resolve_pga_detector_param(
+        config, 'pga_broad_freq_max_hz', DEFAULT_BROAD_FREQ_MAX_HZ, stem_type,
+    )
+    db_rise_threshold = _resolve_pga_detector_param(
+        config, 'pga_db_rise_threshold', DEFAULT_DB_RISE_THRESHOLD, stem_type,
+    )
+    nms_min_frames = _resolve_pga_detector_param(
+        config, 'pga_nms_min_frames', DEFAULT_NMS_MIN_FRAMES, stem_type,
+    )
+    strike_offset_sec = _resolve_pga_detector_param(
+        config, 'pga_strike_offset_sec', DEFAULT_STRIKE_OFFSET_SEC, stem_type,
+    )
     _pga_event_times, pga_debug = detect_percentile_gated_broad_attacks(
         audio_mono, sr,
-        max_floor_gate_db=max_floor_gate_db,
+        broad_freq_min_hz=broad_freq_min_hz,
+        broad_freq_max_hz=broad_freq_max_hz,
+        db_rise_threshold=db_rise_threshold,
         abs_envelope_threshold=abs_envelope_threshold,
+        nms_min_frames=nms_min_frames,
+        strike_offset_sec=strike_offset_sec,
+        max_floor_gate_db=max_floor_gate_db,
     )
 
     raw = detect_pga_events(audio_mono, sr, config, stem_type=stem_type)
