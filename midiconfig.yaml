@@ -53,7 +53,38 @@ onset_detection:
   # 26.199s real strike's duration. REVERT to 1000 once the
   # dec_e<60K filter is wired in (2026-06-11 calibration work).
   pga_min_prominence: 3000
+  # PGA noise-floor gate cap (2026-06-18). The percentile-gated
+  # detector lifts every bin's noise floor to a global gate
+  # value (the max 5th-percentile across bins) to kill
+  # silence-to-noise phantom events. On dense/saturated
+  # mixes the raw gate can rise very high (e.g. -45 dB on a
+  # saturated toms stem), which over-lifts the floor and
+  # suppresses real attacks. This cap clamps the gate to
+  # this dB value at most — the actual gate is
+  # min(raw_gate, pga_max_floor_gate_db). Default -60 dB
+  # sits well below real attack contrast (real toms strikes
+  # are 20-40 dB above the floor) and well above the
+  # digital-silence gap floor (which the original gate was
+  # added to handle). Set to 0 (or a very large positive
+  # value) to effectively disable the cap. Per-stem override:
+  # toms.pga_max_floor_gate_db.
+  pga_max_floor_gate_db: -60.0
   # Per-stem overrides: onset_threshold, onset_delta, onset_wait, pga_min_prominence
+
+  # PGA-only pipeline toggle (2026-06-18). When ``true`` for
+  # a given stem, ``process_stem_to_midi`` short-circuits to
+  # ``processing_shell_percentile_gated.process_percentile_gated``
+  # for that stem and skips the energy/spectral/pan detection
+  # paths entirely. The PGA detector was validated for toms
+  # on project 4; the other stems have not been ported yet, so
+  # the safe default is ``false``. A project that wants to
+  # enable PGA for, say, the toms stem sets
+  # ``toms.use_pga_detection: true`` in its per-project
+  # midiconfig.yaml. The root key here is documentation /
+  # discoverability only — ``process_stem_to_midi`` reads
+  # ``<stem_type>.use_pga_detection`` per-stem, not this
+  # global. Leave ``false`` here.
+  use_pga_detection: false
   
 # === ENERGY-BASED DETECTION (NEW METHOD - DEFAULT) ===
 energy_detection:

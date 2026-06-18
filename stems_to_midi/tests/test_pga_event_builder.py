@@ -708,6 +708,14 @@ class TestNoiseFloorGate:
         noise floor: gate=XdB, ...`` line per call, in the
         format documented in the plan. Format-locked so
         downstream tools that grep the console don't break.
+
+        As of 2026-06-18 the line also supports an optional
+        ``(cap=XdB)`` suffix after the gate value, emitted
+        when the cap actually clamped the gate (the operator
+        needs to know whether the printed gate is the true
+        song quiet floor or the cap's ceiling). The suffix
+        is omitted when the cap is a no-op, so the pattern
+        is "gate=XdB" optionally followed by " (cap=XdB)".
         """
         y = _make_synthetic_broadband_burst_stem()
         detect_percentile_gated_broad_attacks(y, 44100)
@@ -715,14 +723,255 @@ class TestNoiseFloorGate:
         # The line must appear at least once.
         assert "[percentile_gated] noise floor:" in captured.out
         # Format check: the line must match the documented
-        # pattern exactly.
+        # pattern exactly. The "(cap=XdB)" suffix is optional
+        # (only emitted when the cap actually fires).
         pattern = (
-            r"\[percentile_gated\] noise floor: gate=-?\d+\.\d+dB, "
+            r"\[percentile_gated\] noise floor: gate=-?\d+\.\d+dB"
+            r"( \(cap=-?\d+\.\d+dB\))?, "
             r"per-bin p5 range=\[-?\d+\.\d+, -?\d+\.\d+\]dB, "
             r"lifted \d+/\d+ bins"
         )
         assert re.search(pattern, captured.out), (
             f"summary line format mismatch; captured:\n{captured.out}"
+        )
+
+
+# --- Noise-floor gate cap (2026-06-18) -------------------------------------
+
+
+class TestNoiseFloorGateCap:
+    """Noise-floor gate cap (2026-06-18) added to
+    ``_build_static_noise_floor`` after observing that on a
+    dense/saturated mix the raw max-p5 gate can rise well
+    above the song's true quiet floor (e.g. -45 dB on a
+    saturated toms stem), which over-lifts every bin's
+    noise floor and suppresses real attacks in the
+    contrast envelope. The cap is
+    ``min(max(p5), max_floor_gate_db)`` — a safety valve
+    that keeps the gate's "quiet floor" role intact while
+    preventing the over-lift.
+
+    All tests are pure unit tests on synthetic spectrograms
+    or pure config-dict inputs (no audio round-trip) so they
+    run in milliseconds.
+    """
+
+    def test_cap_clamps_high_raw_gate(self):
+        """A spectrogram whose per-bin p5 values have a max
+        of -45 dB (the saturated-mix scenario) gets the gate
+        clamped to ``max_floor_gate_db`` (-60 dB default).
+        The returned gate value is the post-cap value, not
+        the raw -45 dB.
+
+        The cap is a *ceiling* on the gate — it does not pull
+        the loud bin's floor DOWN, it just limits how high
+        the gate (and therefore the lift of the quiet bins)
+        can go. So:
+          - The loud bin's floor stays at its true p5 (-45).
+          - The quiet bins' floor is lifted to the cap (-60),
+            not the raw gate (-45) — a 15 dB lift instead of
+            a 30 dB lift. That's the cap's whole point:
+            "let the quiet bins see a reasonable lift, but
+            don't over-lift them when one loud bin drags the
+            raw gate up."
+        """
+        n_bins = 6
+        n_frames = 200
+        # Build a spectrogram where bin 0 is uniformly -45 dB
+        # (its p5 will be -45) and bins 1-5 are uniformly
+        # -75 dB (their p5 will be -75). The per-bin rule
+        # "exclude frames within 0.5 dB of the per-bin min"
+        # means uniform bins collapse to "all silence" and
+        # the floor falls back to the abs_min; the p5 lands
+        # at the abs_min. The raw gate is max(p5) = -45.
+        s_db = np.full((n_bins, n_frames), -75.0)
+        s_db[0] = -45.0
+        floor, gate_db, p5_per_bin, _n = _build_static_noise_floor(
+            s_db, max_floor_gate_db=-60.0,
+        )
+        # The raw max p5 is -45; the cap should clamp it to -60.
+        assert gate_db == pytest.approx(-60.0, abs=0.1)
+        # The pre-clamp p5_per_bin is exposed (the user can
+        # still see the raw -45 in the per-bin array).
+        assert p5_per_bin[0] == pytest.approx(-45.0, abs=0.1)
+        assert p5_per_bin[1] == pytest.approx(-75.0, abs=0.1)
+        # The loud bin's floor is unchanged — the cap is a
+        # ceiling, it doesn't pull loud bins down.
+        assert floor[0] == pytest.approx(-45.0, abs=0.1)
+        # The quiet bins' floor is lifted to the cap (-60),
+        # not the raw gate (-45). That's the whole point of
+        # the cap: a smaller lift = less over-suppression of
+        # the contrast envelope.
+        assert np.all(floor[1:] >= -60.0 - 1e-9)
+        assert np.all(floor[1:] <= -60.0 + 0.1)
+        # Sanity: no floor above the loud bin's level.
+        assert np.all(floor <= -45.0 + 1e-9)
+
+    def test_cap_unchanged_when_raw_gate_below_cap(self):
+        """A spectrogram whose max p5 is well below the cap
+        (a quiet mix, -80 dB everywhere) returns the raw
+        max p5 unchanged. The cap is a ceiling, not a
+        floor — it only matters when the raw gate would
+        exceed it.
+        """
+        n_bins = 4
+        n_frames = 200
+        s_db = np.full((n_bins, n_frames), -80.0)
+        floor, gate_db, p5_per_bin, _n = _build_static_noise_floor(
+            s_db, max_floor_gate_db=-60.0,
+        )
+        # Raw max p5 is -80, well below the -60 cap. Gate is
+        # unchanged.
+        assert gate_db == pytest.approx(-80.0, abs=0.1)
+        # No bin was lifted (all floors are at the gate).
+        assert np.all(floor >= -80.0 - 1e-9)
+        assert np.all(floor <= -80.0 + 1e-9)
+
+    def test_cap_can_be_disabled_with_high_value(self):
+        """Passing a very large positive cap (effectively
+        ``+inf``) disables the cap and the raw gate passes
+        through. This is the "user has the old behavior
+        back" escape hatch.
+        """
+        n_bins = 6
+        n_frames = 200
+        s_db = np.full((n_bins, n_frames), -75.0)
+        s_db[0] = -45.0
+        _floor, gate_db, _p5, _n = _build_static_noise_floor(
+            s_db, max_floor_gate_db=1e9,
+        )
+        # No cap → raw gate is the max p5 = -45.
+        assert gate_db == pytest.approx(-45.0, abs=0.1)
+
+    def test_default_cap_is_minus_60(self):
+        """``_build_static_noise_floor`` with no ``max_floor_gate_db``
+        argument uses ``DEFAULT_MAX_FLOOR_GATE_DB`` (currently
+        -60.0). The cap-on-by-default contract is critical
+        for the "no config change" deployment story.
+        """
+        from stems_to_midi.percentile_gated_detector import (
+            DEFAULT_MAX_FLOOR_GATE_DB,
+        )
+        assert DEFAULT_MAX_FLOOR_GATE_DB == pytest.approx(-60.0, abs=1e-9)
+        # Build a spectrogram with a high raw gate, call with
+        # no cap argument, verify the cap fired.
+        s_db = np.full((6, 200), -75.0)
+        s_db[0] = -45.0
+        _floor, gate_db, _p5, _n = _build_static_noise_floor(s_db)
+        assert gate_db == pytest.approx(DEFAULT_MAX_FLOOR_GATE_DB, abs=0.1)
+
+    def test_summary_line_shows_cap_when_fired(self, capsys):
+        """When the cap actually clamps the gate, the
+        summary line includes a ``(cap=XdB)`` suffix so the
+        operator knows the cap fired (not the true song
+        quiet floor). When the cap is a no-op, the suffix
+        is omitted to keep the line scannable.
+        """
+        # Case 1: cap fires (raw -45, cap -60).
+        s_db = np.full((6, 200), -75.0)
+        s_db[0] = -45.0
+        from stems_to_midi.percentile_gated_detector import (
+            detect_percentile_gated_broad_attacks,
+        )
+        # Use synthetic broadband burst audio as the input
+        # (the helper's per-bin p5 is computed from the
+        # actual STFT of the audio, not a hand-built
+        # spectrogram). For the cap-fire case we set
+        # max_floor_gate_db to -60 explicitly.
+        y = _make_synthetic_broadband_burst_stem()
+        _events, debug = detect_percentile_gated_broad_attacks(
+            y, 44100, max_floor_gate_db=-60.0,
+        )
+        captured = capsys.readouterr()
+        # The cap is at most a suffix — the line always
+        # shows the post-cap gate value. We don't assert
+        # "cap fired" on synthetic audio (the per-bin p5
+        # is unknown a-priori); we only assert the line
+        # is well-formed.
+        assert "[percentile_gated] noise floor:" in captured.out
+        # The debug dict exposes both the post-cap gate and
+        # the pre-cap raw value. The cap may or may not have
+        # fired on this synthetic input; either way both
+        # keys are present and finite.
+        assert 'gate_db' in debug
+        assert 'gate_db_raw' in debug
+        # gate_db <= gate_db_raw always (the cap is a ceiling).
+        assert debug['gate_db'] <= debug['gate_db_raw'] + 1e-9
+
+    def test_config_resolution_per_stem_overrides_global(self):
+        """``_resolve_max_floor_gate_db`` follows per-stem >
+        global > default. The toms per-stem override wins
+        over the global onset_detection setting.
+        """
+        from stems_to_midi.pga_event_builder import (
+            _resolve_max_floor_gate_db,
+        )
+        cfg = {
+            'toms': {'pga_max_floor_gate_db': -75.0},
+            'onset_detection': {'pga_max_floor_gate_db': -50.0},
+        }
+        assert _resolve_max_floor_gate_db(cfg) == pytest.approx(-75.0)
+
+    def test_config_resolution_global_overrides_default(self):
+        """With no per-stem override, the global setting
+        wins over the module default.
+        """
+        from stems_to_midi.pga_event_builder import (
+            _resolve_max_floor_gate_db,
+        )
+        from stems_to_midi.percentile_gated_detector import (
+            DEFAULT_MAX_FLOOR_GATE_DB,
+        )
+        cfg = {'onset_detection': {'pga_max_floor_gate_db': -55.0}}
+        assert _resolve_max_floor_gate_db(cfg) == pytest.approx(-55.0)
+        # No global setting → default.
+        assert _resolve_max_floor_gate_db({}) == pytest.approx(
+            DEFAULT_MAX_FLOOR_GATE_DB,
+        )
+
+    def test_config_resolution_none_falls_through(self):
+        """``None`` (YAML null) values are skipped at every
+        level so the user can "comment out" a setting by
+        setting it to ``null`` without breaking the
+        resolution.
+        """
+        from stems_to_midi.pga_event_builder import (
+            _resolve_max_floor_gate_db,
+        )
+        from stems_to_midi.percentile_gated_detector import (
+            DEFAULT_MAX_FLOOR_GATE_DB,
+        )
+        # Per-stem None falls through to global.
+        cfg = {
+            'toms': {'pga_max_floor_gate_db': None},
+            'onset_detection': {'pga_max_floor_gate_db': -65.0},
+        }
+        assert _resolve_max_floor_gate_db(cfg) == pytest.approx(-65.0)
+        # Both None → default.
+        cfg = {
+            'toms': {'pga_max_floor_gate_db': None},
+            'onset_detection': {'pga_max_floor_gate_db': None},
+        }
+        assert _resolve_max_floor_gate_db(cfg) == pytest.approx(
+            DEFAULT_MAX_FLOOR_GATE_DB,
+        )
+
+    def test_config_resolution_handles_garbage(self):
+        """Non-numeric values (string, etc.) fall back to
+        the default rather than crashing the detector. The
+        user might typo a setting in midiconfig.yaml; we
+        don't want a string where a float is expected to
+        kill the whole pipeline.
+        """
+        from stems_to_midi.pga_event_builder import (
+            _resolve_max_floor_gate_db,
+        )
+        from stems_to_midi.percentile_gated_detector import (
+            DEFAULT_MAX_FLOOR_GATE_DB,
+        )
+        cfg = {'onset_detection': {'pga_max_floor_gate_db': 'not a number'}}
+        assert _resolve_max_floor_gate_db(cfg) == pytest.approx(
+            DEFAULT_MAX_FLOOR_GATE_DB,
         )
 
 

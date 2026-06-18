@@ -103,6 +103,21 @@ DEFAULT_ABS_ENVELOPE_THRESHOLD = None  # computed per-call by default
 # and double-triggers, anything looser would split sixteenths.
 DEFAULT_NMS_MIN_FRAMES = 20
 
+# Upper bound (dB) for the global noise-floor gate. The gate is
+# ``max(p5 across all bins)`` — the loudest of the per-bin
+# quietest 5% values. On dense mixes the gate can rise very
+# high (e.g. -45 dB on a saturated toms stem), which would
+# over-attribute real signal to "noise" and suppress the
+# contrast envelope. Capping the gate at -60 dB prevents
+# this over-lift: if a bin's true p5 is above -60 dB, that
+# bin's contrast is already saturated and the gate value
+# doesn't matter for it; the cap only matters for the bins
+# that *would* otherwise be pulled up to the over-high gate.
+# Configurable via ``onset_detection.pga_max_floor_gate_db``
+# in midiconfig.yaml (per-stem override ``toms.pga_max_floor_gate_db``
+# also accepted by ``_build_pga_events_with_filter``).
+DEFAULT_MAX_FLOOR_GATE_DB = -60.0
+
 # Hann window center bias: a transient at sample t lands in
 # the STFT frame whose CENTER is at t, not the frame whose
 # START is at t. For a 1024-sample Hann at sr=44100, the center
@@ -117,6 +132,7 @@ DEFAULT_STRIKE_OFFSET_SEC = 0.008
 
 def _build_static_noise_floor(
     s_db: np.ndarray,
+    max_floor_gate_db: float = DEFAULT_MAX_FLOOR_GATE_DB,
 ) -> Tuple[np.ndarray, float, np.ndarray, int]:
     """Per-bin static noise floor + global noise gate. 2026-06-15.
 
@@ -132,9 +148,15 @@ def _build_static_noise_floor(
 
     After the per-bin pass, a **global noise gate** is applied: every
     bin's floor is clamped to ``max(floor[b], gate_db)`` where
-    ``gate_db = max(p5 across all bins)``. This is the upper bound of
-    the quietest portions of the song — the loudest of the per-bin
-    p5 values.
+    ``gate_db = min(max(p5 across all bins), max_floor_gate_db)``.
+    The first term is the upper bound of the quietest portions of
+    the song — the loudest of the per-bin p5 values. The second
+    term is a safety cap: on dense/saturated mixes the unbounded
+    gate can rise to e.g. -45 dB, which over-lifts the floor and
+    kills real attacks in the contrast envelope. Capping at
+    ``max_floor_gate_db`` (default -60 dB) prevents that over-lift
+    while keeping the gate effective for the actual silence-gap
+    phantom scenario it was added to solve.
 
     Why a gate: stem-splitter silence frames (~-160 dB in every bin)
     can pull a per-bin floor down to digital silence. When the noise
@@ -148,19 +170,37 @@ def _build_static_noise_floor(
     pushes under-estimating bins back up to the song's true quiet
     floor.
 
+    Why a cap: a gate value above -60 dB is no longer "the quiet
+    tail" of the song — it's mid-dynamic-range content. A real
+    toms strike lives well above -60 dB during the attack, so
+    clamping the gate to -60 dB does not erase the strike's
+    contrast (the strike's contrast is still 20-40 dB above the
+    floor). The cap is the threshold below which the gate stops
+    being a "quiet floor estimator" and starts being an "attack
+    suppressor" — the call site wants the former, not the latter.
+
     Args:
         s_db: log-magnitude spectrogram of shape (n_bins, n_frames).
+        max_floor_gate_db: upper bound (dB) for the global gate.
+            The actual gate is ``min(max(p5), max_floor_gate_db)``.
+            ``None`` (or any non-numeric falsy) falls back to
+            :data:`DEFAULT_MAX_FLOOR_GATE_DB`. Setting it to
+            ``+inf`` (or a very large positive value) effectively
+            disables the cap.
 
     Returns:
-        (floor, gate_db, p5_per_bin, n_lifted):
+        (floor, gate_db_clamped, p5_per_bin, n_lifted):
           - floor: per-bin noise floor after the gate clamp,
             shape (n_bins,).
-          - gate_db: the max p5 across all bins (the gate value in
-            dB). 0.0 if the input is empty.
+          - gate_db_clamped: the final gate value actually used
+            (the post-cap value, in dB). 0.0 if the input is
+            empty. Compare against ``p5_per_bin.max()`` to see
+            when the cap fired.
           - p5_per_bin: the pre-clamp p5 per bin, shape (n_bins,).
             Exposed for the summary print and future WebUI use.
           - n_lifted: count of bins where the gate raised the floor
-            (``floor_pre[b] < gate_db``). 0 if the input is empty.
+            (``floor_pre[b] < gate_db_clamped``). 0 if the input
+            is empty.
     """
     n_bins = s_db.shape[0]
     floor = np.zeros(n_bins)
@@ -184,13 +224,29 @@ def _build_static_noise_floor(
             floor[b] = quiet.mean()
         p5_per_bin[b] = p5
     if n_bins > 0:
-        gate_db = float(np.max(p5_per_bin))
-        n_lifted = int(np.sum(floor < gate_db))
-        floor = np.maximum(floor, gate_db)
+        gate_db_raw = float(np.max(p5_per_bin))
+        # 2026-06-18: cap the gate at max_floor_gate_db. On
+        # dense/saturated mixes the raw gate can rise above the
+        # song's true quiet floor (e.g. -45 dB on a saturated
+        # toms stem where a high band has a non-silent p5), and
+        # lifting every bin's floor to that value kills real
+        # attacks in the contrast envelope. The cap keeps the
+        # gate's "quiet floor" role intact while preventing the
+        # over-lift. Setting max_floor_gate_db=None falls back
+        # to the module default; setting it to a very large
+        # positive value effectively disables the cap.
+        cap = (
+            max_floor_gate_db
+            if max_floor_gate_db is not None
+            else DEFAULT_MAX_FLOOR_GATE_DB
+        )
+        gate_db_clamped = min(gate_db_raw, float(cap))
+        n_lifted = int(np.sum(floor < gate_db_clamped))
+        floor = np.maximum(floor, gate_db_clamped)
     else:
-        gate_db = 0.0
+        gate_db_clamped = 0.0
         n_lifted = 0
-    return floor, gate_db, p5_per_bin, n_lifted
+    return floor, gate_db_clamped, p5_per_bin, n_lifted
 
 
 def _broad_attack_envelope(
@@ -278,6 +334,7 @@ def _detect_percentile_gated_broad_attacks_impl(
     abs_envelope_threshold: float = None,  # IQR-based by default
     nms_min_frames: int = DEFAULT_NMS_MIN_FRAMES,
     strike_offset_sec: float = DEFAULT_STRIKE_OFFSET_SEC,
+    max_floor_gate_db: float = DEFAULT_MAX_FLOOR_GATE_DB,
     n_fft: int = 1024,
     hop: int = 256,
 ):
@@ -308,6 +365,14 @@ def _detect_percentile_gated_broad_attacks_impl(
         strike_offset_sec: subtract from each peak time. Default
             8ms = Hann window center-of-bin bias for toms strikes.
             Tune per-stem if needed.
+        max_floor_gate_db: upper bound (dB) for the global noise
+            floor gate (2026-06-18). The gate is the max p5
+            across all bins, capped at this value to prevent
+            over-lift on dense/saturated mixes. Default -60 dB
+            (matches ``onset_detection.pga_max_floor_gate_db``
+            in midiconfig.yaml). Set to a very large positive
+            value to effectively disable the cap, or ``None``
+            to fall back to the module default.
         n_fft, hop: STFT parameters. Defaults match the rest of
             the larsnet pipeline (see ``compute_stft_db``).
 
@@ -323,13 +388,19 @@ def _detect_percentile_gated_broad_attacks_impl(
     freqs, times, s_db = compute_stft_db(audio, sr, n_fft=n_fft, hop=hop)
 
     # Step 2: per-bin static noise floor + global noise gate.
-    # The helper now returns (floor, gate_db, p5_per_bin, n_lifted)
-    # — the floor is post-clamp, gate_db is the max p5 across bins,
-    # p5_per_bin and n_lifted are exposed for the summary print
-    # and future WebUI surfacing. See _build_static_noise_floor
-    # for the rationale (kills the silence-to-noise phantom
-    # that arises from stem-splitter digital-silence gaps).
-    floor, gate_db, p5_per_bin, n_lifted = _build_static_noise_floor(s_db)
+    # The helper now returns (floor, gate_db_clamped, p5_per_bin, n_lifted)
+    # — the floor is post-clamp, gate_db_clamped is the
+    # post-cap gate value (the raw max-p5 may be higher; see
+    # gate_db_raw below for the pre-cap value), p5_per_bin and
+    # n_lifted are exposed for the summary print and future
+    # WebUI surfacing. See _build_static_noise_floor for the
+    # rationale (kills the silence-to-noise phantom that arises
+    # from stem-splitter digital-silence gaps) and the
+    # max_floor_gate_db cap (2026-06-18) which prevents the
+    # over-lift on dense/saturated mixes.
+    floor, gate_db_clamped, p5_per_bin, n_lifted = _build_static_noise_floor(
+        s_db, max_floor_gate_db=max_floor_gate_db,
+    )
 
     # Steps 3+4: foreground contrast + broad-frequency attack envelope.
     envelope = _broad_attack_envelope(
@@ -375,11 +446,16 @@ def _detect_percentile_gated_broad_attacks_impl(
         'prominences': props.get('prominences', np.array([])),
         # Noise-gate summary (2026-06-15) — exposed for the
         # end-of-detect summary print and future WebUI
-        # surfacing. gate_db is the max p5 across all bins;
-        # p5_per_bin is the pre-clamp per-bin p5; n_lifted
-        # is the count of bins the gate raised. See
-        # _build_static_noise_floor for the algorithm.
-        'gate_db': gate_db,
+        # surfacing. gate_db is the post-cap gate value
+        # (what the floor was actually clamped to);
+        # gate_db_raw is the pre-cap value (the max p5
+        # across all bins) so the caller can see when the
+        # cap fired; p5_per_bin is the pre-clamp per-bin
+        # p5; n_lifted is the count of bins the gate
+        # raised. See _build_static_noise_floor for the
+        # algorithm and max_floor_gate_db for the cap.
+        'gate_db': gate_db_clamped,
+        'gate_db_raw': float(np.max(p5_per_bin)) if len(p5_per_bin) > 0 else 0.0,
         'p5_per_bin': p5_per_bin,
         'n_lifted': n_lifted,
     }
@@ -391,8 +467,24 @@ def _detect_percentile_gated_broad_attacks_impl(
     if len(p5_per_bin) > 0:
         p5_min = float(np.min(p5_per_bin))
         p5_max = float(np.max(p5_per_bin))
+        # 2026-06-18: show the cap when it fired, so the
+        # operator knows the gate was clamped (not the true
+        # song quiet floor). The "(cap=XdB)" suffix only
+        # appears when the cap actually changed the value;
+        # otherwise the raw and clamped gates are equal and
+        # the suffix is omitted to keep the line scannable.
+        cap = (
+            max_floor_gate_db
+            if max_floor_gate_db is not None
+            else DEFAULT_MAX_FLOOR_GATE_DB
+        )
+        cap_str = (
+            f" (cap={float(cap):.1f}dB)"
+            if gate_db_clamped < p5_max - 1e-9
+            else ""
+        )
         print(
-            f"[percentile_gated] noise floor: gate={gate_db:.1f}dB, "
+            f"[percentile_gated] noise floor: gate={gate_db_clamped:.1f}dB{cap_str}, "
             f"per-bin p5 range=[{p5_min:.1f}, {p5_max:.1f}]dB, "
             f"lifted {n_lifted}/{len(p5_per_bin)} bins"
         )

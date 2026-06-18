@@ -76,6 +76,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import numpy as np
 
 from .percentile_gated_detector import detect_percentile_gated_broad_attacks
+from .percentile_gated_detector import DEFAULT_MAX_FLOOR_GATE_DB
 from .filter_kinds import (
     find_filter,
     evaluate_filter,
@@ -90,6 +91,7 @@ __all__ = [
     'apply_pga_decay_col_min_filter',
     'apply_attack_rise_max_filter',
     '_build_pga_events_with_filter',
+    '_resolve_max_floor_gate_db',
     'PGAEventBuildError',
 ]
 
@@ -97,6 +99,37 @@ __all__ = [
 class PGAEventBuildError(RuntimeError):
     """Raised when the PGA event builder cannot produce a valid
     event list (e.g. an internal invariant is violated)."""
+
+
+def _resolve_max_floor_gate_db(config: Dict[str, Any]) -> float:
+    """Resolve the global noise-floor gate cap (dB) with the
+    standard per-stem > global > default precedence.
+
+    Resolution order (2026-06-18):
+      1. ``toms.pga_max_floor_gate_db`` (per-stem override;
+         only checked under the toms stem — same shape as
+         ``pga_min_prominence`` and ``min_decay_col_min_db``).
+      2. ``onset_detection.pga_max_floor_gate_db`` (the global
+         setting in midiconfig.yaml).
+      3. :data:`percentile_gated_detector.DEFAULT_MAX_FLOOR_GATE_DB`
+         (currently -60.0 dB — see that module's docstring
+         for the rationale).
+
+    ``None`` values are skipped so YAML ``null`` keeps the
+    default (rather than the float constructor choking). The
+    returned value is always a finite float.
+    """
+    onset_cfg = config.get('onset_detection', {}) or {}
+    toms_cfg = config.get('toms', {}) or {}
+    raw = (
+        toms_cfg.get('pga_max_floor_gate_db')
+        if toms_cfg.get('pga_max_floor_gate_db') is not None
+        else onset_cfg.get('pga_max_floor_gate_db', DEFAULT_MAX_FLOOR_GATE_DB)
+    )
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_FLOOR_GATE_DB
 
 
 def _empty_result(debug: Optional[Dict[str, Any]] = None) -> Tuple[List[Dict], List[Dict], Dict[str, Any]]:
@@ -184,8 +217,17 @@ def detect_pga_events(
     # metadata. We discard the debug here — the sidecar-level
     # debug is exposed by the legacy ``build_pga_events`` wrapper
     # for back-compat.
+    # 2026-06-18: pass the max_floor_gate_db cap (per-stem >
+    # global > default, see _resolve_max_floor_gate_db) so the
+    # detector's global noise-floor gate cannot over-lift on
+    # dense/saturated mixes. See percentile_gated_detector.py
+    # for the algorithm and midiconfig.yaml's
+    # ``onset_detection.pga_max_floor_gate_db`` for the user
+    # override.
+    max_floor_gate_db = _resolve_max_floor_gate_db(config)
     pga_event_times, _pga_debug = detect_percentile_gated_broad_attacks(
         audio_mono, sr,
+        max_floor_gate_db=max_floor_gate_db,
     )
 
     _env = _pga_debug.get('envelope') if _pga_debug else None
@@ -655,8 +697,12 @@ def build_pga_events(
     # ``detect_pga_events`` discards the debug, but the legacy
     # ``build_pga_events`` callers (and the existing test
     # contract) expect it on the return value.
+    # 2026-06-18: pass the max_floor_gate_db cap. See
+    # detect_pga_events for the rationale.
+    max_floor_gate_db = _resolve_max_floor_gate_db(config)
     _pga_event_times, pga_debug = detect_percentile_gated_broad_attacks(
         audio_mono, sr,
+        max_floor_gate_db=max_floor_gate_db,
     )
 
     raw = detect_pga_events(audio_mono, sr, config)
@@ -707,8 +753,12 @@ def _build_pga_events_with_filter(
     if sr is None or sr <= 0:
         return _empty_result()
 
+    # 2026-06-18: pass the max_floor_gate_db cap. See
+    # detect_pga_events for the rationale.
+    max_floor_gate_db = _resolve_max_floor_gate_db(config)
     _pga_event_times, pga_debug = detect_percentile_gated_broad_attacks(
         audio_mono, sr,
+        max_floor_gate_db=max_floor_gate_db,
     )
 
     raw = detect_pga_events(audio_mono, sr, config)
