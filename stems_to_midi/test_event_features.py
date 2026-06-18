@@ -39,6 +39,27 @@ from stems_to_midi.event_features import (
     compute_event_features,
     compute_event_features_for_list,
 )
+from stems_to_midi import spectral_transient_core
+from stems_to_midi import event_features as _event_features_module
+
+
+@pytest.fixture(autouse=True)
+def _reset_shell_caches():
+    """Clear module-level shell caches before each test.
+
+    Both ``spectral_transient_core._STFT_CACHE`` and
+    ``event_features._ENVELOPE_CACHE`` are keyed on ``id(audio)``.
+    Across tests, a freed audio array's id may be reissued to a
+    new, unrelated array — without clearing, the new array would
+    silently inherit the prior test's cached result. The functional
+    core itself is stateless and deterministic; this fixture just
+    isolates tests from the shell's id-keyed memoization.
+    """
+    spectral_transient_core._STFT_CACHE.clear()
+    _event_features_module._ENVELOPE_CACHE.clear()
+    yield
+    spectral_transient_core._STFT_CACHE.clear()
+    _event_features_module._ENVELOPE_CACHE.clear()
 
 
 SR = 22050  # test sample rate (saves memory vs 44100)
@@ -436,6 +457,38 @@ class TestRootPitch:
             f"confidence should be >0.5, got {conf}"
         )
 
+    def test_method_validation_rejects_unknown(self):
+        """``method`` must be 'yin' or 'pyin' — anything else
+        (typos, casing, empty string) raises ValueError.
+
+        Before the validation was added (2026-06-18), any
+        method != 'pyin' silently fell through to the YIN
+        branch, so config typos like ``pitch_method: 'pYIN'``
+        were invisible — the pipeline ran fine but the user
+        didn't realize YIN was being used instead of pYIN.
+        """
+        audio = _make_tone(200.0, 0.5)
+        with pytest.raises(ValueError, match="method must be 'yin' or 'pyin'"):
+            compute_root_pitch(audio, SR, 0.1, method='pYIN')
+        with pytest.raises(ValueError, match="method must be 'yin' or 'pyin'"):
+            compute_root_pitch(audio, SR, 0.1, method='YIN')
+        with pytest.raises(ValueError, match="method must be 'yin' or 'pyin'"):
+            compute_root_pitch(audio, SR, 0.1, method='')
+
+    def test_default_method_is_yin(self):
+        """Default ``method`` is 'yin' (not 'pyin'). YIN is
+        5-10× faster and the user confirmed it gives
+        equivalent results on toms audio. pYIN remains
+        available as an explicit opt-in for callers that
+        need its confidence score.
+        """
+        import inspect
+        sig = inspect.signature(compute_root_pitch)
+        assert sig.parameters['method'].default == 'yin', (
+            f"default method should be 'yin' (faster), "
+            f"got {sig.parameters['method'].default!r}"
+        )
+
 
 class TestSpectralCentroid:
     """Tests for the spectral centroid (brightness)."""
@@ -564,6 +617,58 @@ class TestComputeEventFeatures:
                 f"filtered ring {strike1_dur_pass2}ms should be > "
                 f"unfiltered ring {strike1_dur_pass1}ms"
             )
+
+    def test_enable_pitch_detection_false_skips_pitch(self):
+        """When ``enable_pitch_detection=False``, the pitch
+        fields stay None and the YIN/pYIN call is never made.
+
+        Wire-up test for the 2026-06-18 perf work — the config
+        key ``toms.enable_pitch_detection`` must actually skip
+        the ~150ms/event YIN/pYIN call (was ~8.5s cumulative on
+        a 47-event toms run with the old default 'pyin').
+        """
+        audio = _make_tone(100.0, 0.5, decay_tau_ms=200.0)
+        feats = compute_event_features(
+            audio, SR, 0.1, enable_pitch_detection=False,
+        )
+        assert feats['pitch_hz'] is None
+        assert feats['pitch_confidence'] is None
+
+    def test_enable_pitch_detection_default_is_true(self):
+        """Default ``enable_pitch_detection`` is True so existing
+        callers that don't pass it still get pitch values.
+        """
+        import inspect
+        sig = inspect.signature(compute_event_features)
+        assert sig.parameters['enable_pitch_detection'].default is True
+
+    def test_pitch_method_fmin_fmax_defaults_match_yaml(self):
+        """Defaults for ``pitch_method``/``pitch_fmin_hz``/
+        ``pitch_fmax_hz`` match the user-facing YAML schema
+        (pitch_method: 'yin', min_pitch_hz: 60, max_pitch_hz: 250).
+
+        Guards against drift between the function signature and
+        the config docs — a mismatch here means changing the
+        YAML wouldn't actually do anything.
+        """
+        import inspect
+        sig = inspect.signature(compute_event_features)
+        assert sig.parameters['pitch_method'].default == 'yin'
+        assert sig.parameters['pitch_fmin_hz'].default == 60.0
+        assert sig.parameters['pitch_fmax_hz'].default == 250.0
+
+    def test_for_list_forwards_enable_pitch_detection(self):
+        """``compute_event_features_for_list`` must forward
+        ``enable_pitch_detection`` to each per-event call so
+        a pipeline that disables pitch doesn't accidentally
+        re-enable it via the list helper.
+        """
+        audio = _make_tone(100.0, 0.5, decay_tau_ms=200.0)
+        feats = compute_event_features_for_list(
+            audio, SR, [0.1, 0.5], enable_pitch_detection=False,
+        )
+        assert all(f['pitch_hz'] is None for f in feats)
+        assert all(f['pitch_confidence'] is None for f in feats)
 
 
 class TestRobustness:

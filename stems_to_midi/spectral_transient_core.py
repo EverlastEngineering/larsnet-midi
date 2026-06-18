@@ -83,6 +83,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+import time
+
 import numpy as np
 from scipy.signal import find_peaks
 
@@ -91,6 +93,94 @@ from scipy.signal import find_peaks
 # This turns N events × full-file STFT into 1 STFT total for the
 # _envelope_at_time callers in event_features.py.
 _STFT_CACHE: Dict[tuple, tuple] = {}
+
+# Cumulative stats for the STFT cache. Used by get_stft_cache_stats() /
+# reset_stft_cache_stats(). Populated by compute_stft_db so a CLI run can
+# see how many calls hit/missed, how much time was spent in the FFT inner
+# loop vs surrounding work (log10, band prep, corruption overlay), and the
+# total wall time.
+_STFT_CACHE_STATS: Dict[str, float] = {
+    "hits": 0,
+    "misses": 0,
+    "fft_loop_sec": 0.0,
+    "total_sec": 0.0,
+}
+
+# Wall-clock start of this Python process (set at import time). Each
+# STFT log line prepends "[t+XX.Xs]" = seconds since this stamp, so the
+# log can be correlated with overall CLI runtime — i.e. you can see
+# whether the STFT calls are clustered early/late in the run and what
+# fraction of total runtime they consume.
+_PROGRAM_START = time.perf_counter()
+
+
+def _elapsed_since_start() -> float:
+    """Seconds since module import (used to prefix STFT log lines)."""
+    return time.perf_counter() - _PROGRAM_START
+
+
+# Per-function timing stats keyed by name. Populated by timed(); read by
+# get_function_timings(). Use to see WHERE the time goes in the call
+# stack above compute_stft_db — which functions dominate the CLI runtime
+# and how many times each was called.
+_FN_STATS: Dict[str, Dict[str, float]] = {}
+
+
+class _TimedBlock:
+    """Context manager that logs elapsed wall time on exit with [t+Xs] prefix.
+
+    Tracks per-name call count, total wall time, and max wall time.
+    Usage::
+
+        with timed("compute_t60_ms"):
+            ... function body ...
+
+    Early returns and exceptions still trigger __exit__, so the log
+    reflects true function duration even on the bail-out paths.
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.t0 = 0.0
+
+    def __enter__(self) -> "_TimedBlock":
+        self.t0 = time.perf_counter()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        dt = time.perf_counter() - self.t0
+        stats = _FN_STATS.setdefault(
+            self.name, {"calls": 0, "total_sec": 0.0, "max_sec": 0.0}
+        )
+        stats["calls"] += 1
+        stats["total_sec"] += dt
+        if dt > stats["max_sec"]:
+            stats["max_sec"] = dt
+        print(
+            f"[t+{_elapsed_since_start():.2f}s] {self.name} "
+            f"({dt*1000:.2f}ms) — calls={stats['calls']} "
+            f"cum={stats['total_sec']*1000:.1f}ms "
+            f"max={stats['max_sec']*1000:.2f}ms"
+        )
+
+
+def timed(name: str) -> _TimedBlock:
+    """Open a named timing block. See _TimedBlock for the log format."""
+    return _TimedBlock(name)
+
+
+def get_function_timings() -> Dict[str, Dict[str, float]]:
+    """Return per-function timing stats accumulated by timed().
+
+    Returns a copy so callers can mutate without affecting the
+    underlying accumulator.
+    """
+    return {k: dict(v) for k, v in _FN_STATS.items()}
+
+
+def reset_function_timings() -> None:
+    """Reset all per-function timing stats to zero."""
+    _FN_STATS.clear()
 
 
 # The 5 user-chosen bands. Frozen for now (per task spec); the schema
@@ -212,12 +302,25 @@ def compute_stft_db(
         times_sec: shape (n_frames,), frame center -> seconds
         s_db:      shape (n_bins, n_frames), magnitude in dB
     """
+    t_entry = time.perf_counter()
     cache_key = (id(audio), sr, n_fft, hop, id(_SPECTRAL_CORRUPTION))
     if cache_key in _STFT_CACHE:
-        print("STFT cache hit")
+        dt = time.perf_counter() - t_entry
+        _STFT_CACHE_STATS["hits"] += 1
+        _STFT_CACHE_STATS["total_sec"] += dt
+        print(
+            f"[t+{_elapsed_since_start():.2f}s] STFT cache hit "
+            f"({dt*1000:.2f}ms) — cum_total="
+            f"{_STFT_CACHE_STATS['total_sec']*1000:.1f}ms "
+            f"hits={_STFT_CACHE_STATS['hits']}, "
+            f"misses={_STFT_CACHE_STATS['misses']}"
+        )
         return _STFT_CACHE[cache_key]
 
-    print("STFT cache miss — computing STFT")
+    print(
+        f"[t+{_elapsed_since_start():.2f}s] STFT cache miss — computing STFT "
+        f"(audio={len(audio)} samples, sr={sr}, n_fft={n_fft}, hop={hop})"
+    )
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
     audio = np.asarray(audio, dtype=np.float64)
@@ -232,11 +335,13 @@ def compute_stft_db(
 
     win = np.hanning(n_fft)
     s = np.empty((n_bins, n_frames), dtype=np.float64)
+    t_fft_start = time.perf_counter()
     for i in range(n_frames):
         start = i * hop
         frame = audio[start:start + n_fft] * win
         spec = np.fft.rfft(frame, n=n_fft)
         s[:, i] = np.abs(spec)
+    t_fft = time.perf_counter() - t_fft_start
 
     freqs = np.arange(n_bins) * sr / n_fft
     times = np.arange(n_frames) * hop / sr + (n_fft / 2) / sr
@@ -253,7 +358,56 @@ def compute_stft_db(
 
     cache_key = (id(audio), sr, n_fft, hop, id(_SPECTRAL_CORRUPTION))
     _STFT_CACHE[cache_key] = (freqs, times, s_db)
+
+    t_total = time.perf_counter() - t_entry
+    _STFT_CACHE_STATS["misses"] += 1
+    _STFT_CACHE_STATS["fft_loop_sec"] += t_fft
+    _STFT_CACHE_STATS["total_sec"] += t_total
+    print(
+        f"[t+{_elapsed_since_start():.2f}s] STFT done: "
+        f"total={t_total*1000:.2f}ms fft_loop={t_fft*1000:.2f}ms "
+        f"frames={n_frames} — cum_total={_STFT_CACHE_STATS['total_sec']*1000:.1f}ms "
+        f"cum_fft={_STFT_CACHE_STATS['fft_loop_sec']*1000:.1f}ms "
+        f"hits={_STFT_CACHE_STATS['hits']} misses={_STFT_CACHE_STATS['misses']}"
+    )
     return freqs, times, s_db
+
+
+def get_stft_cache_stats() -> Dict[str, float]:
+    """Return cumulative STFT cache statistics.
+
+    Keys:
+      - hits (int): cache hits
+      - misses (int): cache misses (full STFT computed)
+      - fft_loop_sec (float): total wall time in the FFT inner loop
+      - total_sec (float): total wall time in compute_stft_db (includes
+        audio prep, FFT, log10, corruption overlay)
+
+    Diff total_sec − fft_loop_sec = time spent on non-FFT work
+    (audio conversion, log10, corruption overlay, dict ops, prints).
+    """
+    return dict(_STFT_CACHE_STATS)
+
+
+def reset_stft_cache_stats() -> None:
+    """Reset STFT cache statistics to zero. Useful for tests
+    or for isolating measurements between CLI subcommands.
+    """
+    _STFT_CACHE_STATS["hits"] = 0
+    _STFT_CACHE_STATS["misses"] = 0
+    _STFT_CACHE_STATS["fft_loop_sec"] = 0.0
+    _STFT_CACHE_STATS["total_sec"] = 0.0
+
+
+def reset_stft_cache() -> None:
+    """Clear the STFT result cache. Useful for tests where a
+    prior test's audio array is garbage-collected and the same
+    ``id(audio)`` is reissued to a new, unrelated array — without
+    clearing, the new array would get the old STFT and tests of
+    the functional core (e.g. ``compute_spectral_centroid_hz``)
+    would see phantom data from a previous test.
+    """
+    _STFT_CACHE.clear()
 
 
 # ── Spectral corruption test hook ───────────────────────────────────────────
@@ -585,6 +739,15 @@ def _apply_wire_tail_filter(
 
 
 def detect_spectral_transients(
+    audio: np.ndarray,
+    sr: int,
+    config: Optional[SpectralTransientConfig] = None,
+) -> tuple[List[SpectralTransientEvent], dict]:
+    with timed("detect_spectral_transients"):
+        return _detect_spectral_transients_impl(audio, sr, config)
+
+
+def _detect_spectral_transients_impl(
     audio: np.ndarray,
     sr: int,
     config: Optional[SpectralTransientConfig] = None,

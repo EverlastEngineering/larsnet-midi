@@ -291,6 +291,19 @@ def detect_pga_events(
         # Lazy import: compute_event_features pulls in librosa /
         # scipy stack and is not on the cold path.
         from .event_features import compute_event_features
+        # Read pitch config once (not per-event). These keys are
+        # declared in the YAML under each stem section (e.g.
+        # ``toms.enable_pitch_detection``, ``toms.pitch_method``,
+        # ``toms.min_pitch_hz``, ``toms.max_pitch_hz``). Defaults
+        # match the user's toms config — YIN (5-10× faster than
+        # pYIN), 60-250Hz search range (toms fundamentals).
+        toms_cfg = config.get('toms', {})
+        enable_pitch_detection = bool(
+            toms_cfg.get('enable_pitch_detection', True)
+        )
+        pitch_method = toms_cfg.get('pitch_method', 'yin')
+        pitch_fmin_hz = float(toms_cfg.get('min_pitch_hz', 60.0))
+        pitch_fmax_hz = float(toms_cfg.get('max_pitch_hz', 250.0))
         for i, ev in enumerate(pga_onset_data):
             next_t: Optional[float] = None
             for j in range(i + 1, len(pga_onset_data)):
@@ -301,6 +314,10 @@ def detect_pga_events(
             try:
                 feats = compute_event_features(
                     audio_mono, sr, ev['time'],
+                    enable_pitch_detection=enable_pitch_detection,
+                    pitch_method=pitch_method,
+                    pitch_fmin_hz=pitch_fmin_hz,
+                    pitch_fmax_hz=pitch_fmax_hz,
                     next_event_time_sec=next_t,
                 )
             except Exception:

@@ -57,8 +57,28 @@ Public entry point: :func:`compute_event_features`.
 from __future__ import annotations
 
 from typing import Optional, Tuple, Dict
+from functools import wraps
 
 import numpy as np
+
+from .spectral_transient_core import timed
+
+
+def _log_timing(name: str):
+    """Decorator: wrap the function body in a ``timed(name)`` block so
+    each call is logged with [t+Xs] elapsed and cumulative stats.
+
+    Used to find WHICH functions dominate CLI runtime — every call is
+    logged, so a function called 100×/sec will produce 100 log lines.
+    Quiet down by removing the decorator if the noise is too much.
+    """
+    def deco(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            with timed(name):
+                return func(*args, **kwargs)
+        return wrapper
+    return deco
 
 try:
     import librosa
@@ -102,6 +122,7 @@ def _ensure_mono(audio: np.ndarray) -> np.ndarray:
     return np.mean(audio, axis=-1)
 
 
+@_log_timing("_envelope_at_time")
 def _envelope_at_time(
     audio: np.ndarray,
     sr: int,
@@ -128,7 +149,34 @@ def _envelope_at_time(
     The default range covers toms (200-8000Hz) but excludes
     the saturated 0-200Hz sub-bass. Override for kick-specific
     work (e.g. ``broad_min_hz=30, broad_max_hz=200``).
+
+    Note: ``t_sec`` is part of the signature for API symmetry with
+    callers that pass an event time, but the returned envelope
+    covers the full audio regardless of ``t_sec``. Callers index
+    into the returned ``env`` array at the frame(s) near
+    ``t_sec``. This means the function's output depends ONLY on
+    ``(id(audio), sr, n_fft, hop, broad_min_hz, broad_max_hz)``
+    — repeated calls with different ``t_sec`` produce identical
+    results, so the result is memoized in ``_ENVELOPE_CACHE`` to
+    avoid redoing the 7.7M-element ``10**(s_db/20)`` conversion
+    on every call. Without the cache, a 47-event run does ~140
+    envelope conversions (~15s of cum time) when only 1 is needed.
     """
+    # Cache lookup: ``id(audio)`` alone is fragile because Python
+    # reuses ids once the original object is GC'd. So we also
+    # store the audio reference in the cached entry and verify
+    # identity on lookup — if a different audio object happens
+    # to land at the same memory address (test isolation race,
+    # long-running process), we evict and recompute. Without
+    # this guard the cache can return a previous test's envelope
+    # with a different ``broad_*`` band, silently breaking
+    # duration_ms on toms audio.
+    cache_key = (id(audio), sr, n_fft, hop, broad_min_hz, broad_max_hz)
+    cached = _ENVELOPE_CACHE.get(cache_key)
+    if cached is not None:
+        cached_audio, result = cached
+        if cached_audio is audio:
+            return result
     from .spectral_transient_core import compute_stft_db
     freqs, times, s_db = compute_stft_db(audio, sr, n_fft=n_fft, hop=hop)
     # dB → linear: S = 10^(dB/20) for magnitude, but for
@@ -139,9 +187,23 @@ def _envelope_at_time(
     # total broadband energy per frame, in linear units.
     mask = (freqs >= broad_min_hz) & (freqs <= broad_max_hz)
     env = S_linear[mask].sum(axis=0)
-    return times, env
+    result = (times, env)
+    _ENVELOPE_CACHE[cache_key] = (audio, result)
+    return result
 
 
+# Memoization cache for _envelope_at_time. Keyed on the args that
+# actually affect output (NOT t_sec — see the function docstring).
+# Each entry stores ``(audio_ref, result)`` so the lookup can
+# verify the cached audio is the same object (defends against
+# ``id(audio)`` reuse across tests / long-running processes).
+# Without this cache, a 47-event run does ~140 STFT-derived
+# envelope conversions (~15s of cum time) when only 1 is needed.
+# Cleared by tests via ``_ENVELOPE_CACHE.clear()``.
+_ENVELOPE_CACHE: Dict[tuple, tuple] = {}
+
+
+@_log_timing("compute_duration_ms")
 def compute_duration_ms(
     audio: np.ndarray,
     sr: int,
@@ -303,6 +365,7 @@ def compute_duration_ms(
     return float(duration_sec_slope * 1000.0)
 
 
+@_log_timing("compute_duration_to_valley_ms")
 def compute_duration_to_valley_ms(
     audio: np.ndarray,
     sr: int,
@@ -409,6 +472,7 @@ def _find_attack_peak(
     return i_peak, float(env[i_peak])
 
 
+@_log_timing("compute_root_pitch")
 def compute_root_pitch(
     audio: np.ndarray,
     sr: int,
@@ -417,7 +481,7 @@ def compute_root_pitch(
     fmax_hz: float = 2000.0,
     skip_ms: float = DEFAULT_ATTACK_SKIP_MS,
     body_window_ms: float = DEFAULT_PITCH_BODY_WINDOW_MS,
-    method: str = 'pyin',
+    method: str = 'yin',
     voiced_prob: float = DEFAULT_PYIN_VOICED_PROB,
 ) -> Tuple[Optional[float], Optional[float]]:
     """Detect the root pitch (fundamental) of a percussive event.
@@ -430,6 +494,13 @@ def compute_root_pitch(
 
     Returns ``(None, None)`` on failure (no librosa, segment
     too short, no confident pitch detected).
+
+    ``method`` must be ``'yin'`` or ``'pyin'`` (anything else raises
+    ``ValueError``). Default is ``'yin'`` — much faster than pYIN
+    (5-10×) and produces equivalent pitch estimates for our use
+    case. The user switched from pYIN to YIN after observing ~8.5s
+    of cumulative pYIN time on a 47-event toms run; pitch
+    resolution downstream was unaffected.
 
     The skip past the attack is critical. The attack is
     broadband noise — YIN running on the attack returns a
@@ -458,6 +529,16 @@ def compute_root_pitch(
         return None, None
 
     audio = _ensure_mono(audio)
+    if method not in ('yin', 'pyin'):
+        # Previously this silently fell through to the YIN branch
+        # for any method != 'pyin' (e.g. typos like 'pYIN', 'YIN',
+        # ''), making config misconfigurations hard to spot. The
+        # config schema documents the legal values as
+        # ``pitch_method: 'yin' or 'pyin'`` — enforce that contract.
+        raise ValueError(
+            f"compute_root_pitch: method must be 'yin' or 'pyin', "
+            f"got {method!r}"
+        )
     onset_sample = int(event_time_sec * sr) + int(skip_ms * sr / 1000.0)
     window_samples = int(body_window_ms * sr / 1000.0)
     if onset_sample + window_samples > len(audio):
@@ -466,6 +547,18 @@ def compute_root_pitch(
         return None, None
 
     segment = audio[onset_sample:onset_sample + window_samples]
+
+    # Energy pre-check: YIN doesn't have a probabilistic voiced/
+    # unvoiced model like pYIN, so on a silent (or near-silent)
+    # segment it returns a spurious pitch at the search-range
+    # boundary (~max(fmin, fmax) — observed 2004Hz on silence
+    # with fmin=60, fmax=2000). pYIN would correctly return NaN
+    # and we map that to None; YIN needs an explicit RMS gate.
+    # Threshold 1e-4 chosen empirically: clearly above the
+    # numerical noise of float32 silence (~1e-7) and below a
+    # quiet toms ring's body energy (~1e-3 for a real strike).
+    if float(np.max(np.abs(segment))) < 1e-4:
+        return None, None
 
     try:
         if method == 'pyin':
@@ -521,6 +614,7 @@ def compute_root_pitch(
         return None, None
 
 
+@_log_timing("compute_decay_t60_ms")
 def compute_decay_t60_ms(
     audio: np.ndarray,
     sr: int,
@@ -595,6 +689,7 @@ def compute_decay_t60_ms(
     return float(t60_sec * 1000.0)
 
 
+@_log_timing("compute_spectral_centroid_hz")
 def compute_spectral_centroid_hz(
     audio: np.ndarray,
     sr: int,
@@ -636,6 +731,7 @@ def compute_spectral_centroid_hz(
     return centroid
 
 
+@_log_timing("compute_spectral_flatness")
 def compute_spectral_flatness(
     audio: np.ndarray,
     sr: int,
@@ -770,6 +866,7 @@ def compute_spectral_flatness(
     return flatness
 
 
+@_log_timing("compute_high_res_decay_signature")
 def compute_high_res_decay_signature(
     audio: np.ndarray,
     sr: int,
@@ -916,6 +1013,7 @@ def compute_high_res_decay_signature(
     }
 
 
+@_log_timing("compute_attack_rise_ms")
 def compute_attack_rise_ms(
     audio: np.ndarray,
     sr: int,
@@ -980,13 +1078,15 @@ def compute_attack_rise_ms(
     return float(rise_sec * 1000.0)
 
 
+@_log_timing("compute_event_features")
 def compute_event_features(
     audio: np.ndarray,
     sr: int,
     event_time_sec: float,
-    pitch_fmin_hz: float = 30.0,
-    pitch_fmax_hz: float = 4000.0,
-    pitch_method: str = 'pyin',
+    enable_pitch_detection: bool = True,
+    pitch_fmin_hz: float = 60.0,
+    pitch_fmax_hz: float = 250.0,
+    pitch_method: str = 'yin',
     broad_min_hz: float = 200.0,
     broad_max_hz: float = 8000.0,
     duration_broad_min_hz: float = 30.0,
@@ -1118,16 +1218,22 @@ def compute_event_features(
         )
     except Exception:
         pass
-    try:
-        pitch, conf = compute_root_pitch(
-            audio_mono, sr, event_time_sec,
-            fmin_hz=pitch_fmin_hz, fmax_hz=pitch_fmax_hz,
-            method=pitch_method,
-        )
-        features['pitch_hz'] = pitch
-        features['pitch_confidence'] = conf
-    except Exception:
-        pass
+    # Skip pitch detection entirely when disabled (e.g. a stem
+    # config sets enable_pitch_detection=false). This saves the
+    # ~150ms/event YIN/pYIN call when we don't need pitch —
+    # significant on a 47-event run (was ~8.5s before the default
+    # switched from pYIN to YIN).
+    if enable_pitch_detection:
+        try:
+            pitch, conf = compute_root_pitch(
+                audio_mono, sr, event_time_sec,
+                fmin_hz=pitch_fmin_hz, fmax_hz=pitch_fmax_hz,
+                method=pitch_method,
+            )
+            features['pitch_hz'] = pitch
+            features['pitch_confidence'] = conf
+        except Exception:
+            pass
     try:
         features['decay_t60_ms'] = compute_decay_t60_ms(
             audio_mono, sr, event_time_sec,
@@ -1167,13 +1273,15 @@ def compute_event_features(
     return features
 
 
+@_log_timing("compute_event_features_for_list")
 def compute_event_features_for_list(
     audio: np.ndarray,
     sr: int,
     event_times_sec: list,
-    pitch_fmin_hz: float = 30.0,
-    pitch_fmax_hz: float = 4000.0,
-    pitch_method: str = 'pyin',
+    enable_pitch_detection: bool = True,
+    pitch_fmin_hz: float = 60.0,
+    pitch_fmax_hz: float = 250.0,
+    pitch_method: str = 'yin',
     broad_min_hz: float = 200.0,
     broad_max_hz: float = 8000.0,
     duration_broad_min_hz: float = 30.0,
@@ -1202,6 +1310,7 @@ def compute_event_features_for_list(
         next_t = event_times_sec[i + 1] if i + 1 < len(event_times_sec) else None
         feats = compute_event_features(
             audio, sr, t,
+            enable_pitch_detection=enable_pitch_detection,
             pitch_fmin_hz=pitch_fmin_hz, pitch_fmax_hz=pitch_fmax_hz,
             pitch_method=pitch_method,
             broad_min_hz=broad_min_hz, broad_max_hz=broad_max_hz,

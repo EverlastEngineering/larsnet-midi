@@ -412,6 +412,97 @@ class TestPureFunction:
         assert filtered == []
 
 
+class TestPitchConfigWiring:
+    """Wire-up tests: ``_build_pga_events_with_filter`` must read
+    the toms pitch config from ``config['toms']`` and forward
+    those values to ``compute_event_features`` on each per-event
+    call.
+
+    Added 2026-06-18 alongside the perf work that identified
+    pYIN as the dominant runtime cost. Before this wiring, the
+    function passed no pitch kwargs to ``compute_event_features``
+    and the function fell back to its defaults (pYIN, 30-4000Hz)
+    — silently ignoring the user's YAML ``pitch_method: 'yin'``
+    config. This test guards against that regression.
+    """
+
+    def _capturing_compute_event_features(self, monkeypatch):
+        """Patch ``compute_event_features`` at its definition site
+        (``stems_to_midi.event_features``) so the lazy import inside
+        ``pga_event_builder._build_pga_events_with_filter`` resolves
+        to our fake. Returns a list that gets one entry per call.
+        """
+        captured = []
+
+        def fake(audio, sr, t, **kwargs):
+            captured.append(kwargs)
+            return {
+                'duration_ms': None, 'attack_rise_ms': None,
+                'pitch_hz': None, 'pitch_confidence': None,
+                'decay_t60_ms': None, 'spectral_centroid_hz': None,
+                'spectral_flatness': None, 'hr_peak_offset_ms': None,
+                'decay_envelope_energy': None, 'decay_col_min_median_db': None,
+                'inter_onset_ms': None,
+            }
+
+        monkeypatch.setattr(
+            'stems_to_midi.event_features.compute_event_features',
+            fake,
+        )
+        return captured
+
+    def test_pitch_config_forwarded_to_compute_event_features(self, monkeypatch):
+        """The four pitch keys from ``config['toms']`` —
+        ``enable_pitch_detection``, ``pitch_method``,
+        ``min_pitch_hz``, ``max_pitch_hz`` — must be read and
+        passed as kwargs to ``compute_event_features``.
+        """
+        captured = self._capturing_compute_event_features(monkeypatch)
+        y = _make_synthetic_broadband_burst_stem()
+        config = _default_config(
+            toms={
+                'enable_pitch_detection': False,
+                'pitch_method': 'yin',
+                'min_pitch_hz': 60.0,
+                'max_pitch_hz': 250.0,
+            },
+        )
+        # Force the prominence filter to be permissive so at least
+        # one event survives into the feature-extraction path.
+        config['onset_detection']['pga_min_prominence'] = 0.0
+        _build_pga_events_with_filter(y, 44100, config)
+
+        assert len(captured) >= 1, (
+            "expected at least one compute_event_features call"
+        )
+        for kwargs in captured:
+            assert kwargs.get('enable_pitch_detection') is False, (
+                "enable_pitch_detection should be False (from config)"
+            )
+            assert kwargs.get('pitch_method') == 'yin'
+            assert kwargs.get('pitch_fmin_hz') == 60.0
+            assert kwargs.get('pitch_fmax_hz') == 250.0
+
+    def test_pitch_config_defaults_match_yaml(self, monkeypatch):
+        """If the config has no ``toms`` section at all, the
+        wiring falls back to the YAML-default values
+        (enable=True, yin, 60-250Hz) so the per-event call still
+        gets a coherent set of kwargs.
+        """
+        captured = self._capturing_compute_event_features(monkeypatch)
+        y = _make_synthetic_broadband_burst_stem()
+        config = _default_config()  # no 'toms' key
+        config['onset_detection']['pga_min_prominence'] = 0.0
+        _build_pga_events_with_filter(y, 44100, config)
+
+        assert len(captured) >= 1
+        for kwargs in captured:
+            assert kwargs.get('enable_pitch_detection') is True
+            assert kwargs.get('pitch_method') == 'yin'
+            assert kwargs.get('pitch_fmin_hz') == 60.0
+            assert kwargs.get('pitch_fmax_hz') == 250.0
+
+
 @pytest.fixture(autouse=True)
 def _clear_stft_cache():
     """Autouse fixture for ``TestOnRealAudio``: clear the

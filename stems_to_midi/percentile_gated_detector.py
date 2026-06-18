@@ -54,6 +54,8 @@ import numpy as np
 from scipy.signal import find_peaks
 from typing import Tuple
 
+from .spectral_transient_core import timed
+
 # Frequency band cutoffs (Hz) — must match DEFAULT_BANDS in
 # spectral_transient_core.py.
 #
@@ -251,6 +253,23 @@ def _refine_peak_time(
 
 
 def detect_percentile_gated_broad_attacks(
+    audio: np.ndarray,
+    sr: int,
+    *args,
+    **kwargs,
+):
+    """Wrapper around ``_detect_percentile_gated_broad_attacks_impl``
+    that logs [t+Xs] timing on every call. The real implementation
+    lives in the underscore-prefixed function below; this wrapper is
+    kept thin so all public callers get timing for free.
+    """
+    with timed("detect_percentile_gated_broad_attacks"):
+        return _detect_percentile_gated_broad_attacks_impl(
+            audio, sr, *args, **kwargs
+        )
+
+
+def _detect_percentile_gated_broad_attacks_impl(
     audio: np.ndarray,
     sr: int,
     broad_freq_min_hz: float = DEFAULT_BROAD_FREQ_MIN_HZ,
