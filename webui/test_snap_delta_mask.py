@@ -431,6 +431,102 @@ class TestPgaFilterFunctions:
             "filter's pga_min_prominence update)."
         )
 
+    def test_pga_filters_return_kept_and_filtered_arrays(self, threshold_tuning_js_text):
+        """Both PGA filter functions must return [kept, filtered]
+        tuples so applyTuningFilter can chain them. Without the
+        return value, the second filter can't see the kept list
+        and the composition bug returns. Mirrors the Python
+        _apply_pga_filter signature in pga_event_builder.py."""
+        # Find the applyPgaProminenceFilter function and check it
+        # has a `return [kept, filtered]` or equivalent pattern.
+        m = re.search(
+            r"function\s+applyPgaProminenceFilter\s*\([^)]*\)\s*\{(.*?)\n\}\n",
+            threshold_tuning_js_text,
+            re.DOTALL,
+        )
+        assert m is not None
+        body = m.group(1)
+        assert re.search(r"return\s*\[", body), (
+            "applyPgaProminenceFilter must return [kept, filtered] "
+            "so the caller can chain it with applyPgaDecayColMinFilter. "
+            "Mirrors the Python _apply_pga_filter. Without this, "
+            "the composition bug (2026-06-17) recurs — the second "
+            "filter overwrites the first's FILTERED status."
+        )
+
+        # Same check for applyPgaDecayColMinFilter.
+        m = re.search(
+            r"function\s+applyPgaDecayColMinFilter\s*\([^)]*\)\s*\{(.*?)\n\}\n",
+            threshold_tuning_js_text,
+            re.DOTALL,
+        )
+        assert m is not None
+        body = m.group(1)
+        assert re.search(r"return\s*\[", body), (
+            "applyPgaDecayColMinFilter must return [kept, filtered] "
+            "for the same reason as the prominence filter."
+        )
+
+    def test_decay_col_min_filter_runs_on_kept_from_prominence(self, threshold_tuning_js_text):
+        """applyTuningFilter must pass the KEPT list from
+        applyPgaProminenceFilter to applyPgaDecayColMinFilter,
+        NOT the full tuningBaseEvents. This is the composition
+        fix for the bug the user reported on 2026-06-17 — the
+        decay_col_min slider was overwriting the prominence
+        filter's FILTERED status, lighting up events that
+        should have stayed faded.
+
+        Checks the pattern in the FULL applyTuningFilter body
+        (not just the toms sub-block — nested braces make a
+        precise regex match fragile). The contract: there must
+        be a call to applyPgaDecayColMinFilter whose first
+        argument is NOT tuningBaseEvents.
+        """
+        m = re.search(
+            r"function\s+applyTuningFilter\s*\(\s*\)\s*\{(.*?)\n\}\n",
+            threshold_tuning_js_text,
+            re.DOTALL,
+        )
+        assert m is not None, "could not locate applyTuningFilter"
+        body = m.group(1)
+
+        # Find all calls to applyPgaDecayColMinFilter and check
+        # that NONE of them pass tuningBaseEvents as the events
+        # argument. The events argument is the FIRST arg.
+        # Look across possibly-multiline calls (e.g.,
+        # `applyPgaDecayColMinFilter(\n  pgaKept,\n  threshold\n)`).
+        # Match call sites up to the closing `)` followed by a
+        # statement separator.
+        call_sites = re.findall(
+            r"applyPgaDecayColMinFilter\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)",
+            body,
+        )
+        assert len(call_sites) >= 1, (
+            "expected at least one applyPgaDecayColMinFilter call "
+            "in applyTuningFilter"
+        )
+        for arg_name in call_sites:
+            assert arg_name != "tuningBaseEvents", (
+                f"applyPgaDecayColMinFilter is being called with "
+                f"tuningBaseEvents (the full events list, arg "
+                f"name={arg_name!r}). This is the composition "
+                f"bug the user reported on 2026-06-17 — the "
+                f"second filter overwrites the first's FILTERED "
+                f"status. Pass the KEPT list from the first "
+                f"filter (e.g., pgaKept) instead."
+            )
+
+        # Also check the prominence filter is destructured into
+        # [kept, filtered] — the caller needs the kept list.
+        assert re.search(
+            r"const\s*\[\s*\w+\s*,\s*\w+\s*\]\s*=\s*applyPgaProminenceFilter",
+            body,
+        ), (
+            "applyPgaProminenceFilter must be destructured as "
+            "`const [kept, filtered] = applyPgaProminenceFilter(...)` "
+            "so the kept list can be passed to the second filter."
+        )
+
 
 # ─── 3. Node-based behavioral tests: functions actually work ────────────
 

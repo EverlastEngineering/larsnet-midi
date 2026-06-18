@@ -1481,6 +1481,17 @@ function applyPgaProminenceFilter(events, threshold, disabledIds) {
     // apply_pga_prominence_filter; both call the same
     // registry. Adding a new filter is a JSON entry.
     //
+    // 2026-06-17 bug fix: this function now returns
+    // [kept, filtered] (instead of mutating only). The caller
+    // chains the result with applyPgaDecayColMinFilter so
+    // the second filter only sees events that PASSED the
+    // first. Without this, the second filter would
+    // overwrite the first's FILTERED status with KEPT
+    // (events that were filtered by prominence but pass
+    // decay_col_min would incorrectly light up). Mirrors
+    // the Python `_apply_pga_filter` (stems_to_midi/
+    // pga_event_builder.py) which returns (kept, filtered).
+    //
     // The disabled_ids check stays in the wrapper (it's a
     // WebUI-specific concept, not a registry concept). The
     // pga_filter_config.pga_min_prominence update also
@@ -1488,6 +1499,8 @@ function applyPgaProminenceFilter(events, threshold, disabledIds) {
     const registry = _filterRegistryCache;
     const spec = registry ? findFilter(registry, 'pga_min_prominence') : null;
     const disabled = disabledIds || new Set();
+    const kept = [];
+    const filtered = [];
     for (const ev of events) {
         const evId = ev.id != null ? ev.id : ev.time;
         const isDisabled = disabled.has(evId);
@@ -1495,15 +1508,18 @@ function applyPgaProminenceFilter(events, threshold, disabledIds) {
         if (isDisabled) {
             ev.status = 'FILTERED';
             ev.filter_reason = 'manually disabled via WebUI';
+            filtered.push(ev);
         } else if (spec) {
             // Registry-driven evaluation.
             const result = evaluateFilter(spec, ev, threshold);
             if (result === false) {
                 ev.status = 'FILTERED';
                 ev.filter_reason = buildFilterReason(spec, ev, threshold);
+                filtered.push(ev);
             } else {
                 ev.status = 'KEPT';
                 delete ev.filter_reason;
+                kept.push(ev);
             }
         } else {
             // Fallback: registry not loaded (e.g., API down).
@@ -1515,9 +1531,11 @@ function applyPgaProminenceFilter(events, threshold, disabledIds) {
                 ev.filter_reason = (
                     `below pga_min_prominence (${prom.toFixed(0)} < ${threshold.toFixed(0)})`
                 );
+                filtered.push(ev);
             } else {
                 ev.status = 'KEPT';
                 delete ev.filter_reason;
+                kept.push(ev);
             }
         }
         // Update pga_filter_config so the tooltip shows the live threshold
@@ -1525,10 +1543,12 @@ function applyPgaProminenceFilter(events, threshold, disabledIds) {
             ev.pga_filter_config.pga_min_prominence = threshold;
         }
     }
+    return [kept, filtered];
 }
 
 /**
- * applyPgaDecayColMinFilter — 2026-06-15 bug fix.
+ * applyPgaDecayColMinFilter — 2026-06-15 bug fix, 2026-06-17
+ * composition fix.
  *
  * Sister function to applyPgaProminenceFilter. Same registry-
  * driven pattern, but for the decay_col_min_median_db field
@@ -1538,10 +1558,17 @@ function applyPgaProminenceFilter(events, threshold, disabledIds) {
  * is below the threshold are tagged FILTERED. Default -80 dB
  * (the cut between real strikes and noise pops).
  *
- * Without this function, moving the min_decay_col_min_db
- * slider had no effect on the live waveform preview — the
- * bars reflected the prominence filter only, not the
- * full saved filter state.
+ * Composition (2026-06-17): must be called on the events
+ * that PASSED the prominence filter, NOT on the full
+ * events list. If the full list is passed, this function
+ * overwrites the prominence FILTERED status back to KEPT
+ * for events that pass decay_col_min. The caller
+ * (applyTuningFilter) chains the two: pass the kept
+ * list from the prominence filter to this one.
+ *
+ * Returns [kept, filtered] (mirrors the Python
+ * `_apply_pga_filter`). Adding a new filter is a JSON
+ * entry.
  */
 function applyPgaDecayColMinFilter(events, threshold, disabledIds) {
     const registry = _filterRegistryCache;
@@ -1549,6 +1576,8 @@ function applyPgaDecayColMinFilter(events, threshold, disabledIds) {
         ? findFilter(registry, 'min_decay_col_min_db')
         : null;
     const disabled = disabledIds || new Set();
+    const kept = [];
+    const filtered = [];
     for (const ev of events) {
         const evId = ev.id != null ? ev.id : ev.time;
         const isDisabled = disabled.has(evId);
@@ -1556,15 +1585,18 @@ function applyPgaDecayColMinFilter(events, threshold, disabledIds) {
         if (isDisabled) {
             ev.status = 'FILTERED';
             ev.filter_reason = 'manually disabled via WebUI';
+            filtered.push(ev);
         } else if (spec) {
             // Registry-driven evaluation.
             const result = evaluateFilter(spec, ev, threshold);
             if (result === false) {
                 ev.status = 'FILTERED';
                 ev.filter_reason = buildFilterReason(spec, ev, threshold);
+                filtered.push(ev);
             } else {
                 ev.status = 'KEPT';
                 delete ev.filter_reason;
+                kept.push(ev);
             }
         } else {
             // Fallback: registry not loaded (e.g., API down).
@@ -1577,9 +1609,11 @@ function applyPgaDecayColMinFilter(events, threshold, disabledIds) {
                     `below min_decay_col_min_db `
                     + `(${colMin.toFixed(1)}dB < ${threshold.toFixed(1)}dB)`
                 );
+                filtered.push(ev);
             } else {
                 ev.status = 'KEPT';
                 delete ev.filter_reason;
+                kept.push(ev);
             }
         }
         // Update pga_filter_config so the tooltip shows the live threshold
@@ -1587,6 +1621,7 @@ function applyPgaDecayColMinFilter(events, threshold, disabledIds) {
             ev.pga_filter_config.min_decay_col_min_db = threshold;
         }
     }
+    return [kept, filtered];
 }
 
 /**
@@ -1639,22 +1674,40 @@ function applyTuningFilter() {
     // Runs before spectral filter. PGA events (method='percentile_gated')
     // are skipped by applySpectralFilter so this is the only filter
     // that touches them here.
+    //
+    // 2026-06-17 bug fix: the two PGA filters are now
+    // CHAINED, not independent. The decay_col_min filter
+    // runs on the KEPT events from the prominence filter,
+    // not on the full events list. Without this, an event
+    // that was FILTERED by prominence but passes
+    // decay_col_min would incorrectly get its status
+    // overwritten to KEPT — the user reported that the
+    // live preview lit up events that should have stayed
+    // faded. Mirrors the Python rebuild_core._refilter_stem_pga
+    // layering exactly.
     if (stemType === 'toms') {
+        let pgaKept = tuningBaseEvents;
+        let pgaFiltered = [];
         const pgaThreshold = params.pga_min_prominence;
         if (pgaThreshold != null) {
-            applyPgaProminenceFilter(tuningBaseEvents, pgaThreshold);
+            const [kept1, filtered1] = applyPgaProminenceFilter(
+                tuningBaseEvents, pgaThreshold
+            );
+            pgaKept = kept1;
+            pgaFiltered = filtered1;
         }
-        // Pass 0.5: decay_col_min filter (2026-06-15). Sister
-        // to prominence — applies the high-res ring quality
-        // check on the events that passed the prominence
-        // filter. Without this, the decay_col_min slider
-        // had no effect on the live preview. Mirrors the
-        // Python rebuild_core._refilter_stem_pga layering.
+        // Pass 0.5: decay_col_min filter on the KEPT
+        // events from Pass 0. Layered on top of the
+        // prominence filter, not independent. Matches the
+        // Python rebuild_core._refilter_stem_pga ordering
+        // exactly.
         const decayColMinThreshold = params.min_decay_col_min_db;
         if (decayColMinThreshold != null) {
-            applyPgaDecayColMinFilter(
-                tuningBaseEvents, decayColMinThreshold
+            const [kept2, filtered2] = applyPgaDecayColMinFilter(
+                pgaKept, decayColMinThreshold
             );
+            pgaKept = kept2;
+            pgaFiltered = pgaFiltered.concat(filtered2);
         }
     }
 
