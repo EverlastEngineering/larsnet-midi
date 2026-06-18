@@ -31,4 +31,9 @@ Git workflow during refactoring:
 - Include metrics in commit message (tests passing, lines changed, coverage)
 - Ensure all tests pass before committing
 
+Cross-task commit hygiene (2026-06-18):
+- Before starting what appears to be a NEW task or feature, check whether the working tree already contains uncommitted edits from a prior task. If it does, ask the user explicitly: "I see <N> files with uncommitted changes from the previous work. Want me to commit them (in one or more logical commits) before we start on this new task?" Do NOT silently bundle prior work into the new task's commit — keep logical changes in their own commits.
+- If a single request touches multiple distinct logical concerns (e.g. a detector change AND a new config flag), split into separate commits — one per concern — unless the user explicitly says to combine them.
+- When in doubt about whether the working tree's modifications are intentional (e.g. .vscode/settings.json noise from test runs, formatter artifacts), `git diff` first and drop anything that wasn't a deliberate edit before staging.
+
 Update these instructions when critical fundamentals around architecture or best practices changes.
