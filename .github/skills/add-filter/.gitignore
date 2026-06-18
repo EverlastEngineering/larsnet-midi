@@ -1,0 +1,5 @@
+# This skill bundles a Python script at scripts/. The user's
+# global gitignore excludes 'scripts/' (presumably to avoid
+# committing large generated scripts). Allow this skill's
+# scripts directory explicitly.
+!scripts/
