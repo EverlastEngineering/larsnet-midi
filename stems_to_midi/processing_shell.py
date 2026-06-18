@@ -1162,9 +1162,19 @@ def process_stem_to_midi(
             'spectral_config': Spectral config used for this stem
             'envelope_data': Energy envelope for waveform visualization
     """
-    # Percentile-gated shortcut (2026-06-15)
-    # Stems that use PGA exclusively delegate to the dedicated function.
-    if stem_type == 'toms':
+    # Percentile-gated shortcut (2026-06-15; config-driven
+    # 2026-06-18). Stems that opt into the PGA-only pipeline
+    # via ``<stem_type>.use_pga_detection: true`` delegate
+    # to the dedicated function and skip the
+    # energy/spectral/pan paths entirely. Default is
+    # ``False`` — the legacy energy-based pipeline still
+    # runs for any stem that doesn't opt in. The old
+    # hard-coded ``stem_type == 'toms'`` check was replaced
+    # when the toms stem became configurable: a project
+    # enables PGA for its toms by setting
+    # ``toms.use_pga_detection: true`` in its
+    # per-project midiconfig.yaml.
+    if config.get(stem_type, {}).get('use_pga_detection', False):
         return process_percentile_gated(audio_path, drum_mapping, config, min_velocity, max_velocity)
 
     # Step 1: Load and validate audio
