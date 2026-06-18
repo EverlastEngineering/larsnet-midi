@@ -92,6 +92,7 @@ __all__ = [
     'apply_attack_rise_max_filter',
     '_build_pga_events_with_filter',
     '_resolve_max_floor_gate_db',
+    '_resolve_pga_abs_envelope_threshold',
     'PGAEventBuildError',
 ]
 
@@ -132,6 +133,100 @@ def _resolve_max_floor_gate_db(config: Dict[str, Any]) -> float:
         return DEFAULT_MAX_FLOOR_GATE_DB
 
 
+# Stems known to the PGA pipeline. Used by
+# ``_resolve_pga_abs_envelope_threshold`` to walk per-stem
+# overrides in priority order. The list is intentionally
+# small — only the stems the PGA detector is calibrated
+# for. The function takes the FIRST non-None value it
+# finds, so the iteration order matters only when more
+# than one stem sets the override (which doesn't happen in
+# practice: each project config has at most one stem on
+# the PGA path).
+_PGA_STEM_NAMES = ('toms', 'snare', 'kick', 'hihat', 'cymbals')
+
+
+def _resolve_pga_abs_envelope_threshold(
+    config: Dict[str, Any],
+    stem_type: Optional[str] = None,
+) -> Optional[float]:
+    """Resolve the absolute envelope threshold for the PGA
+    detector's ``find_peaks`` step, with per-stem > global
+    > IQR-auto precedence.
+
+    Resolution order (2026-06-18):
+      1. ``<stem_type>.pga_abs_envelope_threshold`` — per-stem
+         override. When ``stem_type`` is provided, ONLY that
+         stem is checked. When ``stem_type`` is None (the
+         default — e.g. from a test that doesn't know which
+         stem is being processed), all known stems are
+         walked and the first non-None value wins. This
+         fallback is unsafe when MULTIPLE stems in the
+         config carry the override at the same time
+         (e.g. toms + snare both set it), so production
+         callers should always pass ``stem_type``.
+      2. ``onset_detection.pga_abs_envelope_threshold`` —
+         global override.
+      3. ``None`` — the detector falls back to its
+         IQR-based auto-threshold (``q3 + 2.5*IQR`` of the
+         envelope). This is the default behavior; it
+         works for stems with a wide dynamic range
+         (e.g. toms — quiet frames vs. loud strikes) but
+         FAILS for stems with a narrow dynamic range
+         (e.g. snare — many similar-loudness hits), where
+         the IQR ends up small and the auto-threshold
+         lands above the envelope maximum. For those
+         stems, set a fixed value.
+
+    ``None`` values are skipped at every level so YAML
+    ``null`` keeps the IQR-auto default. Non-numeric
+    values fall back to ``None`` (auto) rather than
+    crashing the pipeline. A returned float is always
+    finite and ``> 0`` (a threshold of 0 is meaningless
+    for ``find_peaks``).
+    """
+    onset_cfg = config.get('onset_detection', {}) or {}
+    # Per-stem overrides.
+    if stem_type is not None:
+        stem_cfg = config.get(stem_type, {}) or {}
+        raw = stem_cfg.get('pga_abs_envelope_threshold')
+        if raw is not None:
+            try:
+                val = float(raw)
+                if val > 0:
+                    return val
+            except (TypeError, ValueError):
+                pass
+    else:
+        # Fallback: walk all known stems. The first non-None
+        # wins. This is the legacy behavior — kept so
+        # existing tests that don't pass stem_type still
+        # work, but production callers (process_stem_to_midi,
+        # process_percentile_gated) should always pass
+        # stem_type to avoid one stem's threshold leaking
+        # into another's detection.
+        for stem_name in _PGA_STEM_NAMES:
+            stem_cfg = config.get(stem_name, {}) or {}
+            raw = stem_cfg.get('pga_abs_envelope_threshold')
+            if raw is not None:
+                try:
+                    val = float(raw)
+                    if val > 0:
+                        return val
+                except (TypeError, ValueError):
+                    pass
+    # Global override.
+    raw = onset_cfg.get('pga_abs_envelope_threshold')
+    if raw is not None:
+        try:
+            val = float(raw)
+            if val > 0:
+                return val
+        except (TypeError, ValueError):
+            pass
+    # IQR-auto fallback.
+    return None
+
+
 def _empty_result(debug: Optional[Dict[str, Any]] = None) -> Tuple[List[Dict], List[Dict], Dict[str, Any]]:
     """Uniform return shape for the no-events / error paths so
     downstream code can destructure without an ``if``."""
@@ -150,6 +245,7 @@ def detect_pga_events(
     audio_mono: np.ndarray,
     sr: int,
     config: Dict[str, Any],
+    stem_type: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Run the PGA detector and return a flat list of event dicts.
 
@@ -224,10 +320,22 @@ def detect_pga_events(
     # for the algorithm and midiconfig.yaml's
     # ``onset_detection.pga_max_floor_gate_db`` for the user
     # override.
+    # 2026-06-18: also pass an optional absolute envelope
+    # threshold override (per-stem > global > IQR-auto, see
+    # _resolve_pga_abs_envelope_threshold). The default
+    # IQR-based threshold (``q3 + 2.5*IQR``) works for
+    # stems with wide dynamic range (toms) but FAILS for
+    # narrow-range stems (snare) where the IQR is small
+    # and the auto-threshold lands above the envelope
+    # max, suppressing every peak. Setting
+    # ``<stem>.pga_abs_envelope_threshold`` in the project
+    # midiconfig forces a fixed value instead.
     max_floor_gate_db = _resolve_max_floor_gate_db(config)
+    abs_envelope_threshold = _resolve_pga_abs_envelope_threshold(config, stem_type)
     pga_event_times, _pga_debug = detect_percentile_gated_broad_attacks(
         audio_mono, sr,
         max_floor_gate_db=max_floor_gate_db,
+        abs_envelope_threshold=abs_envelope_threshold,
     )
 
     _env = _pga_debug.get('envelope') if _pga_debug else None
@@ -641,6 +749,7 @@ def build_pga_events(
     audio_mono: np.ndarray,
     sr: int,
     config: Dict[str, Any],
+    stem_type: Optional[str] = None,
 ) -> Tuple[List[Dict[str, List]], List[Dict], Dict[str, Any]]:
     """Run the full PGA event pipeline on mono audio and return
     the kept/filtered partition plus the detector debug dict.
@@ -700,12 +809,14 @@ def build_pga_events(
     # 2026-06-18: pass the max_floor_gate_db cap. See
     # detect_pga_events for the rationale.
     max_floor_gate_db = _resolve_max_floor_gate_db(config)
+    abs_envelope_threshold = _resolve_pga_abs_envelope_threshold(config, stem_type)
     _pga_event_times, pga_debug = detect_percentile_gated_broad_attacks(
         audio_mono, sr,
         max_floor_gate_db=max_floor_gate_db,
+        abs_envelope_threshold=abs_envelope_threshold,
     )
 
-    raw = detect_pga_events(audio_mono, sr, config)
+    raw = detect_pga_events(audio_mono, sr, config, stem_type=stem_type)
     # No filter applied here — all events returned as KEPT.
     # The sidecar stores the raw all-KEPT list; the WebUI and
     # rebuild path call apply_pga_prominence_filter separately
@@ -718,6 +829,7 @@ def _build_pga_events_with_filter(
     audio_mono: np.ndarray,
     sr: int,
     config: Dict[str, Any],
+    stem_type: Optional[str] = None,
 ) -> Tuple[List[Dict[str, List]], List[Dict], Dict[str, Any]]:
     """Run the full PGA event pipeline on mono audio and return
     the kept/filtered partition plus the detector debug dict.
@@ -756,12 +868,14 @@ def _build_pga_events_with_filter(
     # 2026-06-18: pass the max_floor_gate_db cap. See
     # detect_pga_events for the rationale.
     max_floor_gate_db = _resolve_max_floor_gate_db(config)
+    abs_envelope_threshold = _resolve_pga_abs_envelope_threshold(config, stem_type)
     _pga_event_times, pga_debug = detect_percentile_gated_broad_attacks(
         audio_mono, sr,
         max_floor_gate_db=max_floor_gate_db,
+        abs_envelope_threshold=abs_envelope_threshold,
     )
 
-    raw = detect_pga_events(audio_mono, sr, config)
+    raw = detect_pga_events(audio_mono, sr, config, stem_type=stem_type)
     # Apply the PGA prominence filter (existing behavior).
     # 2026-06-15: per-stem override (toms.pga_min_prominence)
     # wins over the global onset_detection.pga_min_prominence.

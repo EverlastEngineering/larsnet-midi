@@ -71,6 +71,26 @@ onset_detection:
   pga_max_floor_gate_db: -60.0
   # Per-stem overrides: onset_threshold, onset_delta, onset_wait, pga_min_prominence
 
+  # PGA absolute envelope threshold (2026-06-18). The PGA
+  # detector's ``find_peaks`` call uses an absolute
+  # minimum-envelope value to count a peak as a real strike.
+  # The default is auto (``null`` here), which uses the
+  # IQR-based rule ``q3 + 2.5*IQR`` of the envelope — a
+  # standard Tukey-outlier formula that adapts to the
+  # song's dynamic range. This works for stems with a wide
+  # dynamic range (toms — quiet frames vs. loud strikes)
+  # but FAILS for stems with a narrow dynamic range
+  # (snare — many similar-loudness hits): the IQR is
+  # small, the auto-threshold lands above the envelope
+  # maximum, and ``find_peaks`` returns zero events.
+  # For those stems, set a fixed value via
+  # ``<stem>.pga_abs_envelope_threshold`` in the project
+  # midiconfig.yaml. Calibration rule of thumb: pick a
+  # value at the ~99th percentile of the envelope
+  # distribution (a value that catches the top ~1% of
+  # frames as candidates). ``null`` = IQR-auto default.
+  pga_abs_envelope_threshold: null
+
   # PGA-only pipeline toggle (2026-06-18). When ``true`` for
   # a given stem, ``process_stem_to_midi`` short-circuits to
   # ``processing_shell_percentile_gated.process_percentile_gated``

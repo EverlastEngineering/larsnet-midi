@@ -23,8 +23,33 @@ def process_percentile_gated(
     config: Dict,
     min_velocity: int = 80,
     max_velocity: int = 110,
+    stem_type: str = 'toms',
 ) -> Dict:
     """Run the PGA-only pipeline on a stem.
+
+    Args:
+        audio_path: Path to the stem audio file.
+        drum_mapping: DrumMapping instance — the ``stem_type``
+            field on this mapping (``drum_mapping.snare``,
+            ``drum_mapping.toms``, etc.) is used as the MIDI
+            note for every detected event. Previously this
+            function was hard-coded to ``toms``; the
+            ``stem_type`` parameter (2026-06-18) generalizes
+            it to any stem that opts into
+            ``<stem_type>.use_pga_detection: true`` in the
+            project midiconfig.
+        config: Project config dict. Reads
+            ``<stem_type>.pga_min_prominence`` and
+            ``<stem_type>.pga_abs_envelope_threshold`` (and
+            their global ``onset_detection`` fallbacks) via
+            the pga_event_builder helpers. Also reads
+            ``<stem_type>.timing_offset`` and
+            ``<stem_type>.max_note_duration`` for the MIDI
+            event construction.
+        stem_type: Which stem this is. Defaults to ``'toms'``
+            for back-compat with the original (toms-only)
+            call. ``process_stem_to_midi`` passes the actual
+            stem_type in.
 
     Returns:
         Dict with:
@@ -39,7 +64,7 @@ def process_percentile_gated(
     """
     # Load audio
     from .processing_shell import _load_and_validate_audio
-    audio, sr = _load_and_validate_audio(audio_path, config, 'toms', max_duration=None)
+    audio, sr = _load_and_validate_audio(audio_path, config, stem_type, max_duration=None)
     if audio is None:
         return _empty_result()
 
@@ -51,12 +76,14 @@ def process_percentile_gated(
 
     # Run PGA detection
     # _build_pga_events_with_filter: filtered split (for MIDI output)
-    pga_raw, pga_kept, pga_filtered, _ = _build_pga_events_with_filter(audio_mono, sr, config)
+    pga_raw, pga_kept, pga_filtered, _ = _build_pga_events_with_filter(
+        audio_mono, sr, config, stem_type=stem_type,
+    )
 
     # Build MIDI events from pga_kept
-    note = int(getattr(drum_mapping, 'toms'))
-    timing_offset = config.get('toms', {}).get('timing_offset', 0.0)
-    max_duration = config.get('toms', {}).get(
+    note = int(getattr(drum_mapping, stem_type))
+    timing_offset = config.get(stem_type, {}).get('timing_offset', 0.0)
+    max_duration = config.get(stem_type, {}).get(
         'max_note_duration', config.get('midi', {}).get('max_note_duration', 0.5))
     default_duration = config.get('audio', {}).get('default_note_duration', 0.1)
 

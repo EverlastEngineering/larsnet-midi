@@ -1175,7 +1175,10 @@ def process_stem_to_midi(
     # ``toms.use_pga_detection: true`` in its
     # per-project midiconfig.yaml.
     if config.get(stem_type, {}).get('use_pga_detection', False):
-        return process_percentile_gated(audio_path, drum_mapping, config, min_velocity, max_velocity)
+        return process_percentile_gated(
+            audio_path, drum_mapping, config,
+            min_velocity, max_velocity, stem_type=stem_type,
+        )
 
     # Step 1: Load and validate audio
     audio, sr = _load_and_validate_audio(audio_path, config, stem_type, max_duration)
@@ -1787,9 +1790,9 @@ def process_stem_to_midi(
     # _build_pga_events_with_filter path is still used for the
     # KEPT/filtered split that drives MIDI output and the
     # events_configured short-circuit.
-    pga_raw, _, pga_debug = build_pga_events(audio_mono, sr, config)
+    pga_raw, _, pga_debug = build_pga_events(audio_mono, sr, config, stem_type=stem_type)
     pga_events_kept, pga_events_filtered, _ = _build_pga_events_with_filter(
-        audio_mono, sr, config,
+        audio_mono, sr, config, stem_type=stem_type,
     )
     # Sidecar stores ALL raw events (all-KEPT) — WebUI/rebuild re-filter
     pga_onset_data = list(pga_raw)
