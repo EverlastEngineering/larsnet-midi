@@ -3,3 +3,6 @@
 # committing large generated scripts). Allow this skill's
 # scripts directory explicitly.
 !scripts/
+
+# Don't commit the Python cache for the bundled script.
+__pycache__/
