@@ -88,6 +88,7 @@ __all__ = [
     'detect_pga_events',
     'apply_pga_prominence_filter',
     'apply_pga_decay_col_min_filter',
+    'apply_attack_rise_max_filter',
     '_build_pga_events_with_filter',
     'PGAEventBuildError',
 ]
@@ -542,6 +543,41 @@ def apply_pga_decay_col_min_filter(
     )
 
 
+def apply_attack_rise_max_filter(
+    events: List[Dict[str, Any]],
+    threshold: float,
+    disabled_ids: Optional[Set[Any]] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Re-tag PGA events with status='FILTERED' based on the
+    attack_rise_ms diagnostic (2026-06-17).
+
+    Third pass of the PGA filter chain (after prominence and
+    decay_col_min). Catches wire-tail / step-back FPs that
+    have real-looking attack (high prominence, good ring
+    quality) but the high-res STFT detects they 'step back'
+    to a previous attack — producing an unusually long
+    10-90% rise time. Default 20 ms (rational cut between
+    real strikes at 11-18 ms and FPs at 100-500 ms on
+    project 6 Taylor Swift toms).
+
+    Pure function: returns ``(kept, filtered)``. Mirrors
+    :func:`apply_pga_prominence_filter` and
+    :func:`apply_pga_decay_col_min_filter` — same registry-
+    driven pattern. The filter spec lives in
+    ``stems_to_midi/filter_registry.json`` under the
+    ``attack_rise_max_ms`` entry.
+
+    Layering: call this on the events that PASSED both
+    prominence and decay_col_min — passing the full events
+    list would overwrite the prior filters' FILTERED status
+    with KEPT for events that pass attack_rise_ms (the
+    composition bug 2026-06-17 was about this exact issue).
+    """
+    return _apply_pga_filter(
+        events, find_filter('attack_rise_max_ms'), threshold, disabled_ids,
+    )
+
+
 def build_pga_events(
     audio_mono: np.ndarray,
     sr: int,
@@ -689,6 +725,21 @@ def _build_pga_events_with_filter(
     # it filters were already KEPT (i.e., they had high
     # prominence) but failed the ring-quality check.
     events_filtered = events_filtered + decay_filtered
+    # 2026-06-17: attack_rise filter (third PGA pass). Catches
+    # wire-tail / step-back FPs that pass prominence +
+    # decay_col_min but have an unusually long 10-90% rise
+    # time. Layered on top of the previous filters; events
+    # passing both are KEPT, events failing this are
+    # FILTERED.
+    attack_rise_threshold = float(
+        toms_cfg.get('attack_rise_max_ms')
+        if toms_cfg.get('attack_rise_max_ms') is not None
+        else onset_cfg.get('attack_rise_max_ms', 20.0)
+    )
+    events_kept, attack_filtered = apply_attack_rise_max_filter(
+        events_kept, attack_rise_threshold,
+    )
+    events_filtered = events_filtered + attack_filtered
     # Record the active thresholds in pga_filter_config so the
     # sidecar tooltip can show what filter the event was
     # processed under.
@@ -696,5 +747,6 @@ def _build_pga_events_with_filter(
         pga_filter_config = dict(ev.get('pga_filter_config', {}))
         pga_filter_config['pga_min_prominence'] = prom_threshold
         pga_filter_config['min_decay_col_min_db'] = decay_col_min_threshold
+        pga_filter_config['attack_rise_max_ms'] = attack_rise_threshold
         ev['pga_filter_config'] = pga_filter_config
     return raw, events_kept, events_filtered, pga_debug

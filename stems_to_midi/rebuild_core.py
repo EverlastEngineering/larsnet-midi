@@ -870,6 +870,24 @@ def rebuild_events_from_analysis(
                     col_min_threshold,
                 )
                 pga_filtered = pga_filtered + col_min_filtered
+                # 2026-06-17: attack_rise filter (third PGA
+                # pass). Catches wire-tail / step-back FPs
+                # that pass prominence + decay_col_min but
+                # have an unusually long 10-90% rise time.
+                # Layered on top of the previous filters.
+                stem_attack_rise = config.get(stem_type, {}).get('attack_rise_max_ms')
+                global_attack_rise = config.get('onset_detection', {}).get('attack_rise_max_ms')
+                attack_rise_threshold = float(
+                    stem_attack_rise if stem_attack_rise is not None
+                    else global_attack_rise if global_attack_rise is not None
+                    else 20.0
+                )
+                from .pga_event_builder import apply_attack_rise_max_filter
+                pga_kept, attack_filtered = apply_attack_rise_max_filter(
+                    pga_kept,
+                    attack_rise_threshold,
+                )
+                pga_filtered = pga_filtered + attack_filtered
                 # Build time-keyed lookup for status assignment
                 kept_times = {round(e['time'], 4) for e in pga_kept}
                 filtered_times = {round(e['time'], 4) for e in pga_filtered}
@@ -884,9 +902,16 @@ def rebuild_events_from_analysis(
                         # based on its filter_reason (set by the
                         # filter that tagged it).
                         existing_reason = ev.get('filter_reason', '')
-                        if 'min_decay_col_min_db' in existing_reason:
-                            # Already has the decay_col_min reason
-                            # from apply_pga_decay_col_min_filter.
+                        if (
+                            'min_decay_col_min_db' in existing_reason
+                            or 'attack_rise_max_ms' in existing_reason
+                        ):
+                            # Already has the decay_col_min or
+                            # attack_rise reason from the
+                            # corresponding filter. The Python
+                            # wrapper sets the reason via
+                            # build_filter_reason from the
+                            # registry's reason_template.
                             pass
                         else:
                             prom = ev.get('prominence')
@@ -898,6 +923,7 @@ def rebuild_events_from_analysis(
                     ev['pga_filter_config'] = dict(ev.get('pga_filter_config', {}))
                     ev['pga_filter_config']['pga_min_prominence'] = pga_threshold
                     ev['pga_filter_config']['min_decay_col_min_db'] = col_min_threshold
+                    ev['pga_filter_config']['attack_rise_max_ms'] = attack_rise_threshold
 
                 # events_configured for toms is EMPTY — events_pga is the
                 # single source of truth for toms. rebuild_core writes

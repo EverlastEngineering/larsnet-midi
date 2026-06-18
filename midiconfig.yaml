@@ -250,6 +250,17 @@ toms:
   # stems_to_midi.pga_event_builder.apply_pga_decay_col_min_filter
   # for the filter logic.
   min_decay_col_min_db: -80.0
+
+  # 2026-06-17: attack_rise_max_ms filter. Catches wire-tail /
+  # step-back FPs that prominence + decay_col_min miss.
+  # Real toms strikes have attack_rise < 20ms (10-90% rise
+  # time on the high-res STFT envelope). FPs cluster at
+  # 100-500ms — they 'step back' to a previous attack,
+  # producing an unusually long rise. The default 20ms is
+  # a rational cut at the empirical cluster boundary.
+  # Increase the threshold to be more permissive; set to
+  # 500ms to effectively disable.
+  attack_rise_max_ms: 20.0
   
 hihat:
   # MIDI note mappings (General MIDI standard)

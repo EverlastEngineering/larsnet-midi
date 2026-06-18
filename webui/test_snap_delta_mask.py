@@ -528,6 +528,110 @@ class TestPgaFilterFunctions:
         )
 
 
+class TestAttackRiseFilter:
+    """applyAttackRiseMaxFilter (2026-06-17) — third PGA pass.
+
+    Sister to applyPgaProminenceFilter and
+    applyPgaDecayColMinFilter. Reads the attack_rise_ms
+    field (the 10-90% rise time on the high-res STFT
+    envelope) and tags events with attack_rise_ms above
+    the threshold as FILTERED. Default 20 ms is the
+    empirical cut (project 6: real strikes 11-18 ms,
+    FPs 100-500 ms).
+    """
+
+    def test_function_exists(self, threshold_tuning_js_text):
+        m = re.search(
+            r"function\s+applyAttackRiseMaxFilter\s*\(\s*events\s*,\s*threshold",
+            threshold_tuning_js_text,
+        )
+        assert m is not None, (
+            "expected `function applyAttackRiseMaxFilter(events, "
+            "threshold, disabledIds)` in threshold-tuning.js. "
+            "This is the JS mirror of the Python "
+            "apply_attack_rise_max_filter; both consume the "
+            "same filter registry. Without it, the "
+            "attack_rise_max_ms slider has no effect on the "
+            "live waveform preview."
+        )
+
+    def test_filter_uses_field_attack_rise_ms(self, threshold_tuning_js_text):
+        """The function must read event.attack_rise_ms (the
+        field the detector stamps via compute_attack_rise_ms),
+        not some other field."""
+        m = re.search(
+            r"function\s+applyAttackRiseMaxFilter\s*\([^)]*\)\s*\{(.*?)\n\}\n",
+            threshold_tuning_js_text,
+            re.DOTALL,
+        )
+        assert m is not None
+        body = m.group(1)
+        assert "attack_rise_ms" in body, (
+            "applyAttackRiseMaxFilter must read event.attack_rise_ms"
+        )
+
+    def test_filter_wired_into_apply_tuning_filter(self, threshold_tuning_js_text):
+        """applyAttackRiseMaxFilter must be called from
+        applyTuningFilter when the stem is toms. Without
+        this, the attack_rise_max_ms slider has no live-
+        preview effect."""
+        m = re.search(
+            r"function\s+applyTuningFilter\s*\(\s*\)\s*\{(.*?)\n\}\n",
+            threshold_tuning_js_text,
+            re.DOTALL,
+        )
+        assert m is not None
+        body = m.group(1)
+        assert "applyAttackRiseMaxFilter" in body, (
+            "applyTuningFilter must call applyAttackRiseMaxFilter "
+            "for the toms stem (third PGA pass)."
+        )
+
+    def test_filter_updates_pga_filter_config(self, threshold_tuning_js_text):
+        """The function must update pga_filter_config.attack_rise_max_ms
+        so the tooltip shows the live threshold."""
+        m = re.search(
+            r"function\s+applyAttackRiseMaxFilter\s*\([^)]*\)\s*\{(.*?)\n\}\n",
+            threshold_tuning_js_text,
+            re.DOTALL,
+        )
+        assert m is not None
+        body = m.group(1)
+        assert "attack_rise_max_ms" in body, (
+            "applyAttackRiseMaxFilter must update "
+            "ev.pga_filter_config.attack_rise_max_db so the "
+            "tooltip shows the live threshold."
+        )
+
+    def test_filter_runs_on_kept_from_decay_col_min(self, threshold_tuning_js_text):
+        """applyAttackRiseMaxFilter must be called on the KEPT
+        list from applyPgaDecayColMinFilter (NOT on
+        tuningBaseEvents). Same composition fix as decay_col_min.
+        """
+        m = re.search(
+            r"function\s+applyTuningFilter\s*\(\s*\)\s*\{(.*?)\n\}\n",
+            threshold_tuning_js_text,
+            re.DOTALL,
+        )
+        assert m is not None, "could not locate applyTuningFilter"
+        body = m.group(1)
+        call_sites = re.findall(
+            r"applyAttackRiseMaxFilter\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)",
+            body,
+        )
+        assert len(call_sites) >= 1, (
+            "expected at least one applyAttackRiseMaxFilter call"
+        )
+        for arg_name in call_sites:
+            assert arg_name != "tuningBaseEvents", (
+                f"applyAttackRiseMaxFilter is being called with "
+                f"tuningBaseEvents (arg name={arg_name!r}). This "
+                f"is the composition bug — pass the KEPT list "
+                f"from the previous filter (e.g., pgaKept) "
+                f"instead."
+            )
+
+
 # ─── 3. Node-based behavioral tests: functions actually work ────────────
 
 class TestTomsSpectrogramFilterBehavior:

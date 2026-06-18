@@ -361,6 +361,18 @@ def get_project_tuning_config(project_number, stem_type):
                 if stem_cfg.get('min_decay_col_min_db') is not None
                 else onset_cfg.get('min_decay_col_min_db', -80.0)
             ),
+            # 2026-06-17: Toms attack_rise_max_ms filter (third
+            # PGA pass). Catches wire-tail / step-back FPs
+            # that pass prominence + decay_col_min but have
+            # an unusually long 10-90% rise time. Default
+            # 20.0 ms is the empirical cut (project 6: real
+            # strikes 11-18 ms, FPs 100-500 ms). See
+            # filter_registry.json.
+            'attack_rise_max_ms': (
+                stem_cfg.get('attack_rise_max_ms')
+                if stem_cfg.get('attack_rise_max_ms') is not None
+                else onset_cfg.get('attack_rise_max_ms', 20.0)
+            ),
 
             # Hihat open/closed classification (2026-06-13).
             'open_geomean_min': stem_cfg.get('open_geomean_min', 262.0),

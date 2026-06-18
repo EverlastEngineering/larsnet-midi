@@ -1625,6 +1625,83 @@ function applyPgaDecayColMinFilter(events, threshold, disabledIds) {
 }
 
 /**
+ * applyAttackRiseMaxFilter — 2026-06-17.
+ *
+ * Third PGA pass. Filters events whose attack_rise_ms is
+ * above the threshold. Catches wire-tail / step-back FPs
+ * that pass prominence + decay_col_min but have an
+ * unusually long 10-90% rise time on the high-res STFT
+ * envelope (these FPs 'step back' to a previous attack
+ * before rising to their own peak). User observation on
+ * project 6 (Taylor Swift toms): all real strikes have
+ * attack_rise < 20ms; FPs cluster at 100-500ms. Default
+ * 20 ms is the empirical cut.
+ *
+ * Composition: must be called on the events that PASSED
+ * both prominence and decay_col_min. Passing the full
+ * events list would overwrite the prior filters'
+ * FILTERED status — the same bug as decay_col_min (see
+ * the 2026-06-17 fix in applyPgaDecayColMinFilter).
+ *
+ * Returns [kept, filtered] (mirrors the Python
+ * `_apply_pga_filter`).
+ */
+function applyAttackRiseMaxFilter(events, threshold, disabledIds) {
+    const registry = _filterRegistryCache;
+    const spec = registry
+        ? findFilter(registry, 'attack_rise_max_ms')
+        : null;
+    const disabled = disabledIds || new Set();
+    const kept = [];
+    const filtered = [];
+    for (const ev of events) {
+        const evId = ev.id != null ? ev.id : ev.time;
+        const isDisabled = disabled.has(evId);
+
+        if (isDisabled) {
+            ev.status = 'FILTERED';
+            ev.filter_reason = 'manually disabled via WebUI';
+            filtered.push(ev);
+        } else if (spec) {
+            // Registry-driven evaluation (max_value: KEPT if
+            // value <= threshold).
+            const result = evaluateFilter(spec, ev, threshold);
+            if (result === false) {
+                ev.status = 'FILTERED';
+                ev.filter_reason = buildFilterReason(spec, ev, threshold);
+                filtered.push(ev);
+            } else {
+                ev.status = 'KEPT';
+                delete ev.filter_reason;
+                kept.push(ev);
+            }
+        } else {
+            // Fallback: registry not loaded (e.g., API down).
+            // Mirror the hard-coded behavior so the panel
+            // still works offline.
+            const ar = ev.attack_rise_ms;
+            if (ar != null && ar > threshold) {
+                ev.status = 'FILTERED';
+                ev.filter_reason = (
+                    `above attack_rise_max_ms `
+                    + `(${ar.toFixed(1)}ms > ${threshold.toFixed(1)}ms)`
+                );
+                filtered.push(ev);
+            } else {
+                ev.status = 'KEPT';
+                delete ev.filter_reason;
+                kept.push(ev);
+            }
+        }
+        // Update pga_filter_config so the tooltip shows the live threshold
+        if (ev.pga_filter_config) {
+            ev.pga_filter_config.attack_rise_max_ms = threshold;
+        }
+    }
+    return [kept, filtered];
+}
+
+/**
  * Apply the current slider values to the cached tuning events and update
  * the waveform display. This replicates the server-side filter passes
  * from analysis_core.py.
@@ -1708,6 +1785,20 @@ function applyTuningFilter() {
             );
             pgaKept = kept2;
             pgaFiltered = pgaFiltered.concat(filtered2);
+        }
+        // Pass 0.7: attack_rise filter (2026-06-17). Third
+        // PGA pass. Catches wire-tail / step-back FPs that
+        // pass prominence + decay_col_min but have an
+        // unusually long 10-90% rise time. Layered on top
+        // of the previous filters; events passing all three
+        // are KEPT.
+        const attackRiseThreshold = params.attack_rise_max_ms;
+        if (attackRiseThreshold != null) {
+            const [kept3, filtered3] = applyAttackRiseMaxFilter(
+                pgaKept, attackRiseThreshold
+            );
+            pgaKept = kept3;
+            pgaFiltered = pgaFiltered.concat(filtered3);
         }
     }
 

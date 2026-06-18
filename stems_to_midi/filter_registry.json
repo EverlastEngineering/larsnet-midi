@@ -62,6 +62,30 @@
         "reason_template": "below min_decay_col_min_db ({value}dB < {threshold}dB)",
         "value_format": "float1"
       }
+    },
+    {
+      "id": "attack_rise_max_ms",
+      "label": "Attack Rise Max (ms)",
+      "description": "Filter PGA events with attack_rise_ms above the threshold. Catches wire-tail / step-back FPs that the prominence + decay_col_min filters miss — these have real-looking attack but the high-res STFT detects they 'step back' to a previous attack, producing an unusually long 10-90% rise time. Empirically (project 6, Taylor Swift toms): all real hits have attack_rise < 20ms; FPs cluster at 100-500ms (the longer the rise, the more the FP is 'stepping back' to the real attack).",
+      "default": 20.0,
+      "min": 0.0,
+      "max": 500.0,
+      "step": 1.0,
+      "unit": "ms",
+      "ui_control": "slider",
+      "applies_to_stems": ["toms"],
+      "yaml_paths": {
+        "global": ["onset_detection", "attack_rise_max_ms"],
+        "per_stem": {
+          "toms": ["toms", "attack_rise_max_ms"]
+        }
+      },
+      "filter": {
+        "kind": "max_value",
+        "field": "attack_rise_ms",
+        "reason_template": "above attack_rise_max_ms ({value}ms > {threshold}ms)",
+        "value_format": "float1"
+      }
     }
   ]
 }

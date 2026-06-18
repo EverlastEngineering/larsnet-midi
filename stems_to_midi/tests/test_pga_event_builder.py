@@ -50,6 +50,7 @@ from stems_to_midi.pga_event_builder import (  # noqa: E402
     build_pga_events,
     _build_pga_events_with_filter,
     apply_pga_decay_col_min_filter,
+    apply_attack_rise_max_filter,
 )
 from stems_to_midi.percentile_gated_detector import (  # noqa: E402
     detect_percentile_gated_broad_attacks,
@@ -789,3 +790,126 @@ class TestDecayColMinFilter:
         if _raw3:
             ev3 = _raw3[0]
             assert ev3['pga_filter_config']['min_decay_col_min_db'] == -80.0
+
+
+class TestAttackRiseMaxFilter:
+    """``apply_attack_rise_max_filter`` (2026-06-17) — third
+    PGA pass, after prominence and decay_col_min. Same
+    contract as the other two, but for the ``attack_rise_ms``
+    field (the 10-90% rise time on the high-res STFT
+    envelope). Uses ``kind: 'max_value'`` (drop if value >
+    threshold), unlike the other two which use ``min_value``.
+
+    Catches wire-tail / step-back FPs that pass prominence +
+    decay_col_min but have an unusually long rise time —
+    these FPs 'step back' to a previous attack before rising
+    to their own peak. User observation on project 6: real
+    strikes have attack_rise < 20ms; FPs cluster at 100-500ms.
+    """
+
+    def test_drops_long_rise_events(self):
+        """An event with attack_rise_ms above the threshold is
+        tagged FILTERED. An event at or below is KEPT."""
+        events = [
+            {'time': 0.5, 'attack_rise_ms': 11.0},
+            {'time': 1.0, 'attack_rise_ms': 150.0},
+            {'time': 1.5, 'attack_rise_ms': 18.0},
+        ]
+        kept, filtered = apply_attack_rise_max_filter(events, 20.0)
+        # 11 < 20: KEPT
+        # 150 > 20: FILTERED
+        # 18 < 20: KEPT
+        assert len(kept) == 2
+        assert len(filtered) == 1
+        kept_times = sorted(e['time'] for e in kept)
+        filtered_times = sorted(e['time'] for e in filtered)
+        assert kept_times == [0.5, 1.5]
+        assert filtered_times == [1.0]
+        ev = filtered[0]
+        assert ev['status'] == 'FILTERED'
+        assert 'attack_rise_max_ms' in ev['filter_reason']
+        assert '150.0ms' in ev['filter_reason']
+        assert '20.0ms' in ev['filter_reason']
+
+    def test_value_at_threshold_is_kept(self):
+        """At threshold: KEPT (>= threshold, not strictly >)."""
+        events = [{'time': 1.0, 'attack_rise_ms': 20.0}]
+        kept, filtered = apply_attack_rise_max_filter(events, 20.0)
+        assert len(kept) == 1
+        assert len(filtered) == 0
+
+    def test_skips_none_values(self):
+        """Missing attack_rise_ms → KEPT (can't filter what
+        you can't see). Same pattern as the other two filters."""
+        events = [
+            {'time': 0.5, 'attack_rise_ms': 11.0},
+            {'time': 1.0},  # no attack_rise_ms
+            {'time': 1.5, 'attack_rise_ms': 150.0},
+        ]
+        kept, filtered = apply_attack_rise_max_filter(events, 20.0)
+        assert len(kept) == 2  # 0.5 + 1.0
+        assert len(filtered) == 1  # 1.5
+        # The event with no field is KEPT.
+        none_event = next(e for e in kept if e['time'] == 1.0)
+        assert none_event['status'] == 'KEPT'
+        assert 'filter_reason' not in none_event
+
+    def test_filter_reason_uses_registry_template(self):
+        """The filter reason must use the registry's reason_template
+        (above attack_rise_max_ms ({value}ms > {threshold}ms))
+        with the float1 value_format — proves the function
+        reads the template from the registry, not a hard-coded
+        format string."""
+        events = [
+            {'time': 1.0, 'attack_rise_ms': 387.5},
+        ]
+        kept, filtered = apply_attack_rise_max_filter(events, 20.0)
+        assert len(filtered) == 1
+        reason = filtered[0]['filter_reason']
+        # Registry template is "above attack_rise_max_ms ({value}ms > {threshold}ms)"
+        # with value_format=float1. Expect "387.5ms > 20.0ms".
+        assert reason == 'above attack_rise_max_ms (387.5ms > 20.0ms)'
+
+    def test_disabled_ids_takes_precedence(self):
+        """A manually-disabled event is tagged FILTERED with
+        the disabled reason regardless of attack_rise value."""
+        events = [
+            {'time': 1.0, 'attack_rise_ms': 11.0},  # would pass
+        ]
+        kept, filtered = apply_attack_rise_max_filter(
+            events, 20.0, disabled_ids={1.0},
+        )
+        assert len(kept) == 0
+        assert len(filtered) == 1
+        ev = filtered[0]
+        assert ev['filter_reason'] == 'manually disabled via WebUI'
+
+    def test_threshold_resolution_in_build_pga_events_with_filter(self):
+        """_build_pga_events_with_filter must include
+        attack_rise_max_ms in pga_filter_config with per-stem
+        > global > default precedence."""
+        # Per-stem wins.
+        cfg = {
+            'toms': {'pga_min_prominence': 0.0, 'attack_rise_max_ms': 50.0},
+            'onset_detection': {'pga_min_prominence': 0.0, 'attack_rise_max_ms': 100.0},
+        }
+        y = _make_synthetic_broadband_burst_stem()
+        _raw, kept, _filtered, _debug = _build_pga_events_with_filter(y, 44100, cfg)
+        if _raw:
+            assert _raw[0]['pga_filter_config']['attack_rise_max_ms'] == 50.0
+        # Global wins when per-stem is absent.
+        cfg2 = {
+            'toms': {'pga_min_prominence': 0.0},
+            'onset_detection': {'pga_min_prominence': 0.0, 'attack_rise_max_ms': 75.0},
+        }
+        _raw2, _kept2, _filtered2, _debug2 = _build_pga_events_with_filter(y, 44100, cfg2)
+        if _raw2:
+            assert _raw2[0]['pga_filter_config']['attack_rise_max_ms'] == 75.0
+        # Default 20.0 when both are absent.
+        cfg3 = {
+            'toms': {'pga_min_prominence': 0.0},
+            'onset_detection': {'pga_min_prominence': 0.0},
+        }
+        _raw3, _kept3, _filtered3, _debug3 = _build_pga_events_with_filter(y, 44100, cfg3)
+        if _raw3:
+            assert _raw3[0]['pga_filter_config']['attack_rise_max_ms'] == 20.0
