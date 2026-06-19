@@ -30,16 +30,24 @@ async function _ensureFilterRegistryLoaded() {
     _filterRegistryLoadInFlight = (async () => {
         try {
             _filterRegistryCache = await loadFilterRegistry();
-            // If the registry has entries for the toms stem,
-            // override the hard-coded STEM_SLIDER_CONFIGS.toms
-            // entry with the registry-derived one. The other
-            // stems stay hard-coded until they're migrated in
-            // Phase 6.
-            const tomsFromRegistry = buildSliderConfigsForStem(
-                _filterRegistryCache, 'toms'
-            );
-            if (Array.isArray(tomsFromRegistry) && tomsFromRegistry.length > 0) {
-                STEM_SLIDER_CONFIGS.toms = tomsFromRegistry;
+
+            // Toms + snare (2026-06-18): REPLACE the hard-coded
+            // entry with the registry-derived one. Both stems now
+            // expose the same PGA per-event filters
+            // (pga_min_prominence, min_decay_col_min_db,
+            // attack_rise_max_ms) — all fit the registry shape,
+            // so the registry is the authoritative list and the
+            // hard-coded entry is purely an offline fallback.
+            // Snare previously had a `geomean_threshold` slider
+            // (and reverb/k-means controls); those are gone now —
+            // snare adopts the toms PGA-only slideout.
+            for (const stem of ['toms', 'snare']) {
+                const fromRegistry = buildSliderConfigsForStem(
+                    _filterRegistryCache, stem
+                );
+                if (Array.isArray(fromRegistry) && fromRegistry.length > 0) {
+                    STEM_SLIDER_CONFIGS[stem] = fromRegistry;
+                }
             }
         } catch (err) {
             // Soft failure — fall back to the hard-coded STEM_SLIDER_CONFIGS.
@@ -111,9 +119,14 @@ const STEM_SLIDER_CONFIGS = {
         { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' }
     ],
     snare: [
-        { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 500, step: 1, fallback: 40, unit: '' },
-        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' },
-        { key: 'expected_clusters', label: '🥁 Sound Types', min: 1, max: 3, step: 1, fallback: 2, unit: '', classification: true }
+        // Snare (2026-06-18): adopts the PGA-only slideout
+        // matching toms. The full set (pga_min_prominence,
+        // min_decay_col_min_db, attack_rise_max_ms) is loaded
+        // from the filter registry at runtime via
+        // _ensureFilterRegistryLoaded. This single-entry
+        // fallback only surfaces when /api/filters/schema
+        // fails to load — mirrors the toms pattern.
+        { key: 'pga_min_prominence', label: 'PGA Min Prominence', min: 0, max: 10000, step: 100, fallback: 1000, unit: '', yamlPath: ['snare', 'pga_min_prominence'] }
     ],
     // Toms (2026-06-12 → 2026-06-13): the toms pipeline is PGA-only
     // (see processing_shell._build_events_configured and

@@ -92,8 +92,43 @@ class TestFiltersForStemEndpoint:
         assert 'pga_min_prominence' in ids
         assert 'min_decay_col_min_db' in ids
 
+    def test_attack_rise_max_ms_in_registry(self, client):
+        # 2026-06-18: third PGA filter (attack_rise_max_ms) is
+        # part of the shared toms/snare set.
+        data = client.get('/api/filters/schema').get_json()
+        ids = [f['id'] for f in data['filters']]
+        assert 'attack_rise_max_ms' in ids
+
+    def test_toms_returns_attack_rise_max_ms(self, client):
+        data = client.get('/api/filters/stem/toms').get_json()
+        ids = [f['id'] for f in data]
+        assert 'attack_rise_max_ms' in ids
+
+    def test_snare_returns_all_three_pga_filters(self, client):
+        # 2026-06-18: snare adopts the toms PGA-only slideout —
+        # all three PGA filters must surface for the snare stem.
+        data = client.get('/api/filters/stem/snare').get_json()
+        ids = [f['id'] for f in data]
+        assert 'pga_min_prominence' in ids
+        assert 'min_decay_col_min_db' in ids
+        assert 'attack_rise_max_ms' in ids
+
+    def test_snare_has_no_geomean_filter(self, client):
+        # 2026-06-18: snare's previous geomean_threshold filter
+        # is gone — it adopts the toms PGA-only slideout.
+        data = client.get('/api/filters/stem/snare').get_json()
+        ids = [f['id'] for f in data]
+        assert 'geomean_threshold' not in ids
+
+    def test_geomean_threshold_not_in_registry(self, client):
+        # 2026-06-18: geomean_threshold was snare-only and is
+        # removed in the snare→toms slideout migration.
+        data = client.get('/api/filters/schema').get_json()
+        ids = [f['id'] for f in data['filters']]
+        assert 'geomean_threshold' not in ids
+
     def test_other_stem_returns_empty(self, client):
-        # The 2 PGA filters are toms-only. Other stems have
+        # The 3 PGA filters are toms+snare. Other stems have
         # no entries in this PR — that's expected; the other
         # 5 filters migrate in Phase 6.
         data = client.get('/api/filters/stem/kick').get_json()
