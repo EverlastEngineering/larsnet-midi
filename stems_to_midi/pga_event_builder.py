@@ -446,6 +446,17 @@ def detect_pga_events(
     # back to the module's hard-coded default when
     # unset, so the pipeline behavior is identical to
     # before when no per-project overrides exist.
+    # 2026-06-18: _resolve_max_floor_gate_db is still
+    # toms-only (its stem_type generalization was
+    # reverted along with pga_disable_noise_floor). The
+    # cap leak from toms to other stems is a known
+    # limitation: a snare.pga_max_floor_gate_db
+    # override is ignored if toms also sets one.
+    # Acceptable for now (no user has hit this); the
+    # per-stem filter knobs (pga_min_prominence,
+    # min_decay_col_min_db, attack_rise_max_ms) are
+    # the ones the user actually needs per-stem and
+    # ARE correctly resolved below.
     max_floor_gate_db = _resolve_max_floor_gate_db(config)
     abs_envelope_threshold = _resolve_pga_abs_envelope_threshold(config, stem_type)
     broad_freq_min_hz = _resolve_pga_detector_param(
@@ -543,17 +554,19 @@ def detect_pga_events(
     # toms.min_decay_col_min_db) win over the global
     # onset_detection equivalents. Same precedence pattern as
     # the prominence filter in _build_pga_events_with_filter.
-    onset_cfg = config.get('onset_detection', {})
-    toms_cfg = config.get('toms', {})
-    pga_min_prominence = float(
-        toms_cfg.get('pga_min_prominence')
-        if toms_cfg.get('pga_min_prominence') is not None
-        else onset_cfg.get('pga_min_prominence', 1000.0)
+    # 2026-06-18: was hardcoded to read ONLY from
+    # ``toms.<key>``, which meant a ``snare.pga_min_prominence``
+    # override in a project config was silently ignored —
+    # snare always saw the toms value (or the global). Fixed
+    # to use ``_resolve_pga_detector_param`` which honors
+    # ``stem_type`` (passed in by the call site) and walks
+    # the per-stem > global > default precedence. Same fix
+    # applies to the pitch-detection block below.
+    pga_min_prominence = _resolve_pga_detector_param(
+        config, 'pga_min_prominence', 1000.0, stem_type,
     )
-    min_decay_col_min_db = float(
-        toms_cfg.get('min_decay_col_min_db')
-        if toms_cfg.get('min_decay_col_min_db') is not None
-        else onset_cfg.get('min_decay_col_min_db', -80.0)
+    min_decay_col_min_db = _resolve_pga_detector_param(
+        config, 'min_decay_col_min_db', -80.0, stem_type,
     )
     pga_filter_config = {
         'pga_min_prominence': pga_min_prominence,
@@ -583,13 +596,25 @@ def detect_pga_events(
         # ``toms.min_pitch_hz``, ``toms.max_pitch_hz``). Defaults
         # match the user's toms config — YIN (5-10× faster than
         # pYIN), 60-250Hz search range (toms fundamentals).
-        toms_cfg = config.get('toms', {})
+        # 2026-06-18: was hardcoded to read ONLY from the
+        # ``toms`` section, so a snare stem would silently
+        # see toms pitch config. Fixed to use the call
+        # site's ``stem_type`` for per-stem overrides.
+        stem_cfg = config.get(stem_type, {}) or {}
         enable_pitch_detection = bool(
-            toms_cfg.get('enable_pitch_detection', True)
+            stem_cfg.get('enable_pitch_detection', True)
         )
-        pitch_method = toms_cfg.get('pitch_method', 'yin')
-        pitch_fmin_hz = float(toms_cfg.get('min_pitch_hz', 60.0))
-        pitch_fmax_hz = float(toms_cfg.get('max_pitch_hz', 250.0))
+        pitch_method = stem_cfg.get('pitch_method', 'yin')
+        pitch_fmin_hz = float(
+            _resolve_pga_detector_param(
+                config, 'min_pitch_hz', 60.0, stem_type,
+            )
+        )
+        pitch_fmax_hz = float(
+            _resolve_pga_detector_param(
+                config, 'max_pitch_hz', 250.0, stem_type,
+            )
+        )
         for i, ev in enumerate(pga_onset_data):
             next_t: Optional[float] = None
             for j in range(i + 1, len(pga_onset_data)):
@@ -1055,13 +1080,13 @@ def _build_pga_events_with_filter(
     # Apply the PGA prominence filter (existing behavior).
     # 2026-06-15: per-stem override (toms.pga_min_prominence)
     # wins over the global onset_detection.pga_min_prominence.
-    onset_cfg = config.get('onset_detection', {})
-    toms_cfg = config.get('toms', {})
-    prom_threshold = float(
-        toms_cfg.get('pga_min_prominence')
-        if toms_cfg.get('pga_min_prominence') is not None
-        else onset_cfg.get('pga_min_prominence', 1000.0)
+    # 2026-06-18: was hardcoded to read ONLY from the
+    # ``toms`` section. Now uses the call site's stem_type
+    # via the resolver.
+    pga_min_prominence = _resolve_pga_detector_param(
+        config, 'pga_min_prominence', 1000.0, stem_type,
     )
+    prom_threshold = float(pga_min_prominence)
     events_kept, events_filtered = apply_pga_prominence_filter(
         raw, prom_threshold,
     )
@@ -1069,10 +1094,11 @@ def _build_pga_events_with_filter(
     # prominence filter. Same per-stem > global > default
     # resolution pattern. Default -80.0 dB matches the empirical
     # split (real strikes -60 to -84 dB, noise pops -84 to -90 dB).
-    decay_col_min_threshold = float(
-        toms_cfg.get('min_decay_col_min_db')
-        if toms_cfg.get('min_decay_col_min_db') is not None
-        else onset_cfg.get('min_decay_col_min_db', -80.0)
+    # 2026-06-18: was hardcoded to read ONLY from the
+    # ``toms`` section. Now uses the call site's stem_type
+    # via the resolver.
+    decay_col_min_threshold = _resolve_pga_detector_param(
+        config, 'min_decay_col_min_db', -80.0, stem_type,
     )
     events_kept, decay_filtered = apply_pga_decay_col_min_filter(
         events_kept, decay_col_min_threshold,
@@ -1088,10 +1114,11 @@ def _build_pga_events_with_filter(
     # time. Layered on top of the previous filters; events
     # passing both are KEPT, events failing this are
     # FILTERED.
-    attack_rise_threshold = float(
-        toms_cfg.get('attack_rise_max_ms')
-        if toms_cfg.get('attack_rise_max_ms') is not None
-        else onset_cfg.get('attack_rise_max_ms', 20.0)
+    # 2026-06-18: was hardcoded to read ONLY from the
+    # ``toms`` section. Now uses the call site's stem_type
+    # via the resolver.
+    attack_rise_threshold = _resolve_pga_detector_param(
+        config, 'attack_rise_max_ms', 20.0, stem_type,
     )
     events_kept, attack_filtered = apply_attack_rise_max_filter(
         events_kept, attack_rise_threshold,

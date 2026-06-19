@@ -470,7 +470,13 @@ class TestPitchConfigWiring:
         # Force the prominence filter to be permissive so at least
         # one event survives into the feature-extraction path.
         config['onset_detection']['pga_min_prominence'] = 0.0
-        _build_pga_events_with_filter(y, 44100, config)
+        # 2026-06-18: pass stem_type='toms' so the resolver
+        # uses the per-stem pitch config. Without this the
+        # resolver falls through to the test-only "walk all
+        # stems" path and reads the toms value by luck
+        # (it's the first stem in _PGA_STEM_NAMES); passing
+        # stem_type explicitly is the new contract.
+        _build_pga_events_with_filter(y, 44100, config, stem_type='toms')
 
         assert len(captured) >= 1, (
             "expected at least one compute_event_features call"
@@ -493,7 +499,9 @@ class TestPitchConfigWiring:
         y = _make_synthetic_broadband_burst_stem()
         config = _default_config()  # no 'toms' key
         config['onset_detection']['pga_min_prominence'] = 0.0
-        _build_pga_events_with_filter(y, 44100, config)
+        # 2026-06-18: pass stem_type explicitly (see
+        # test_pitch_config_forwarded_to_compute_event_features).
+        _build_pga_events_with_filter(y, 44100, config, stem_type='toms')
 
         assert len(captured) >= 1
         for kwargs in captured:
