@@ -1894,19 +1894,21 @@ async function ensureAudioBuffer(stemType) {
     }
 
     // Find the stem filename from project files (e.g. "SongName-kick.wav" or "SongName.kick.wav")
-    // Try stems folder first, then cleaned folder
+    // Try cleaned folder first, then stems folder (matches the CLI in
+    // stems_to_midi_cli.py — both prefer the processed/cleaned audio
+    // over the raw separated output when available).
     const stemFiles = currentProject.files.stems || [];
     const cleanedFiles = currentProject.files.cleaned || [];
     console.log('Available stem files:', stemFiles);
     console.log('Available cleaned files:', cleanedFiles);
-    
+
     // Match both dash and dot patterns: "file-kick.wav" or "file.kick.wav"
-    let stemFile = stemFiles.find(f => f.includes(`-${stemType}.`) || f.includes(`.${stemType}.`));
-    let fileType = 'stems';
-    
+    let stemFile = cleanedFiles.find(f => f.includes(`-${stemType}.`) || f.includes(`.${stemType}.`));
+    let fileType = 'cleaned';
+
     if (!stemFile) {
-        stemFile = cleanedFiles.find(f => f.includes(`-${stemType}.`) || f.includes(`.${stemType}.`));
-        fileType = 'cleaned';
+        stemFile = stemFiles.find(f => f.includes(`-${stemType}.`) || f.includes(`.${stemType}.`));
+        fileType = 'stems';
     }
     
     if (!stemFile) {
