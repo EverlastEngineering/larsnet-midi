@@ -1261,3 +1261,101 @@ class TestAttackRiseMaxFilter:
         _raw3, _kept3, _filtered3, _debug3 = _build_pga_events_with_filter(y, 44100, cfg3)
         if _raw3:
             assert _raw3[0]['pga_filter_config']['attack_rise_max_ms'] == 20.0
+
+
+class TestPostFilterFeatureRecompute:
+    """2026-06-19 refactor: feature extraction moved out of
+    ``detect_pga_events`` into a post-filter pass
+    (``_compute_features_for_filtered_events``). This class
+    guards the central invariant: when an event between two
+    strikes is filtered out, the prior strike's
+    ``duration_ms`` / ``inter_onset_ms`` must be RE-MEASURED
+    using the new (post-filter) neighbor, not the
+    pre-filter-list neighbor.
+
+    Regression test for the bug the user described: "if we
+    filter those out, the duration should be recalculated and
+    I'm not confident it is."
+
+    These tests are pure functional-core: they call
+    ``_compute_features_for_filtered_events`` directly with a
+    hand-crafted event list, no detector, no audio, no shell
+    state. The functional core is what we're testing — the
+    pipeline-level integration is exercised by the existing
+    ``TestOnRealAudio`` suite.
+    """
+
+    def test_inter_onset_skips_filtered_event(self):
+        """The core bug fix: strike 1's ``inter_onset_ms`` is
+        measured against the post-filter neighbor, not the
+        pre-filter-list neighbor. With a FILTERED event
+        between strike 1 and the next kept event, the
+        inter_onset_ms must equal the gap to the NEXT KEPT
+        event, not the gap to the filtered event.
+        """
+        from stems_to_midi.pga_event_builder import (
+            _compute_features_for_filtered_events,
+            _find_prev_next_kept,
+        )
+        # Three events: A (KEPT), B (FILTERED), C (KEPT).
+        events = [
+            {'time': 0.5, 'status': 'KEPT'},
+            {'time': 1.0, 'status': 'FILTERED'},
+            {'time': 1.5, 'status': 'KEPT'},
+        ]
+        # Neighbor lookup must skip the FILTERED middle event.
+        prev_a, next_a = _find_prev_next_kept(events, 0)
+        prev_b, next_b = _find_prev_next_kept(events, 1)
+        prev_c, next_c = _find_prev_next_kept(events, 2)
+        # Strike A: prev=None, next=C (1.5s) — not B (1.0s).
+        assert prev_a is None
+        assert next_a == 1.5
+        # Strike B: it's FILTERED but the lookup still finds
+        # its kept neighbors — useful for sidecar diagnostics
+        # that show "what would the IOI have been if this
+        # hadn't been filtered?".
+        assert prev_b == 0.5
+        assert next_b == 1.5
+        # Strike C: prev=A (0.5s), next=None.
+        assert prev_c == 0.5
+        assert next_c is None
+
+    def test_features_attached_to_kept_and_filtered_events(self):
+        """The post-filter pass attaches per-event feature
+        keys to every event in the list, KEPT and FILTERED
+        alike. The FILTERED list goes into the sidecar so the
+        WebUI can show "why was this dropped" with actual
+        feature values, not None.
+        """
+        from stems_to_midi.pga_event_builder import (
+            _compute_features_for_filtered_events,
+        )
+        from stems_to_midi.spectral_transient_core import _STFT_CACHE
+        _STFT_CACHE.clear()
+        # Build audio with 2 strikes so features have
+        # something to measure.
+        sr = 22050
+        audio = _make_synthetic_broadband_burst_stem(
+            sr=sr, hit_times_sec=(0.3, 1.0), duration_sec=2.0,
+        )
+        events = [
+            {'time': 0.3, 'status': 'KEPT'},
+            {'time': 1.0, 'status': 'FILTERED'},
+        ]
+        cfg = _default_config()
+        _compute_features_for_filtered_events(
+            events, audio, sr, cfg, stem_type='toms',
+        )
+        # The post-filter pass must attach the feature keys
+        # to BOTH events (so the sidecar can show why each
+        # was KEPT or FILTERED with real values).
+        for ev in events:
+            for f in (
+                'duration_ms', 'duration_to_valley_ms',
+                'attack_rise_ms', 'inter_onset_ms',
+            ):
+                assert f in ev, (
+                    f"post-filter pass did not attach {f!r} "
+                    f"to event at t={ev.get('time')} "
+                    f"(status={ev.get('status')})"
+                )

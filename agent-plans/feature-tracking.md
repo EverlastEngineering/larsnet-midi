@@ -62,3 +62,20 @@
   - snare: `body_energy`, `wire_energy`, `geomean`, `spectral_centroid_hz`
   - toms: `fundamental_energy`, `body_energy`, `geomean`, `spectral_centroid_hz`
 - **Files**: New `stems_to_midi/note_classification_core.py` (pure functions), updates to `rebuild_core.py` and `midi.py`
+
+## Feature: Post-filter feature recompute (PGA)
+- **Status**: Complete
+- **Priority**: High
+- **Description**: Move per-event feature extraction (`duration_ms`, `duration_to_valley_ms`, `attack_rise_ms`, `inter_onset_ms`, `pitch_hz`, `decay_t60_ms`, `spectral_*`, etc.) out of `detect_pga_events` and into a post-filter pass that runs against the KEPT event set, not the pre-filter detect-time list. The WebUI tuning panel re-filter path will also need to call this pass when the user changes a threshold slider.
+- **Problem**: Neighbor-dependent features (`duration_ms`, `duration_to_valley_ms`, `attack_rise_ms`, `inter_onset_ms`) were bounded against the pre-filter list. A filtered-out FP between two kept strikes capped the prior strike's ring at the FP's time and stretched the next strike's attack across the gap. The WebUI tooltip then showed a ring that was always too short for the prior strike and an attack that was always too long for the next strike. The `event_features.py:1367-1371` docstring on `compute_event_features_for_list` already described the two-pass flow ("detect → filter → re-measure with filtered neighbors, then overwrite the `duration_to_valley_ms` field on the survivors") but `pga_event_builder.py:detect_pga_events` only implemented pass 1 — pass 2 was explicitly deferred as "out of scope here".
+- **Architecture**:
+  - **`detect_pga_events`** (pure detect, no features) returns events with `time`, `method`, `status='KEPT'`, `frame`, `envelope_value`, `prominence`, `iqr_threshold`, `midi_velocity`, `pga_filter_config`. No per-event features attached.
+  - **`_build_pga_events_with_filter`** orchestrates the three-step pipeline: detect → apply prominence + decay_col_min + attack_rise filters → call `_compute_features_for_filtered_events` on the KEPT+FILTERED list. The neighbor lookup (`_find_prev_next_kept`) skips FILTERED events on both sides, so a filtered FP between two kept strikes no longer caps the prior strike's ring.
+  - **`build_pga_events`** (legacy public wrapper) does the same: detect → filter → recompute features. The all-KEPT list IS the post-filter list, so the post-filter pass is still correct.
+  - **`_compute_features_for_filtered_events`** is the new pure functional core that attaches the per-event features. Lazy-imports `compute_event_features` (librosa/scipy stack, not on cold path). Reads pitch config once (per-stem > global > default).
+  - **Sidecar** now uses the post-filter KEPT+FILTERED list from `_build_pga_events_with_filter` instead of the all-KEPT list from `build_pga_events`. The WebUI tooltip can show "why was this dropped" with actual feature values, not None.
+  - **WebUI re-filter path** (follow-up) will call `_compute_features_for_filtered_events` itself when the user changes a threshold slider — feature values stay in sync with the user's current filter.
+- **Tests**: New `TestPostFilterFeatureRecompute` class in `tests/test_pga_event_builder.py` (functional-core, no detector, no audio I/O):
+  - `test_inter_onset_skips_filtered_event` — `_find_prev_next_kept` returns the next KEPT event's time, not the FILTERED event's time.
+  - `test_features_attached_to_kept_and_filtered_events` — the post-filter pass attaches the per-event feature keys to BOTH KEPT and FILTERED events (so the sidecar can show "why was this dropped" with actual values).
+- **Files**: `stems_to_midi/pga_event_builder.py` (extract `_find_prev_next_kept`, `_compute_features_for_filtered_events`; remove per-event feature block from `detect_pga_events`; add post-filter pass in `_build_pga_events_with_filter` and `build_pga_events`); `stems_to_midi/processing_shell.py` (sidecar source switched to post-filter list); `stems_to_midi/tests/test_pga_event_builder.py` (new `TestPostFilterFeatureRecompute` class).

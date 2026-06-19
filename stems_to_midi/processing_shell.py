@@ -1790,12 +1790,28 @@ def process_stem_to_midi(
     # _build_pga_events_with_filter path is still used for the
     # KEPT/filtered split that drives MIDI output and the
     # events_configured short-circuit.
-    pga_raw, _, pga_debug = build_pga_events(audio_mono, sr, config, stem_type=stem_type)
-    pga_events_kept, pga_events_filtered, _ = _build_pga_events_with_filter(
+    #
+    # 2026-06-19: switched the sidecar source from
+    # ``build_pga_events`` (all-KEPT raw, no features) to the
+    # ``_build_pga_events_with_filter`` output (KEPT + FILTERED
+    # with features computed against the post-filter neighbor
+    # set). This is the only way the sidecar's
+    # ``duration_ms`` / ``duration_to_valley_ms`` /
+    # ``attack_rise_ms`` reflect the kept event neighborhood —
+    # a filtered-out FP no longer caps the prior strike's ring.
+    # The WebUI/rebuild re-filter path will need to call
+    # ``_compute_features_for_filtered_events`` itself when the
+    # user changes a threshold slider (todo: a follow-up step).
+    _pga_raw_unused, pga_events_kept, pga_events_filtered, _ = _build_pga_events_with_filter(
         audio_mono, sr, config, stem_type=stem_type,
     )
-    # Sidecar stores ALL raw events (all-KEPT) — WebUI/rebuild re-filter
-    pga_onset_data = list(pga_raw)
+    # Sidecar stores KEPT + FILTERED so the WebUI tooltip can
+    # show why an event was dropped with the actual feature
+    # values, not None. The build_pga_events thin wrapper is
+    # still imported for any callers that need the legacy
+    # debug-dict return shape.
+    pga_raw, _, pga_debug = build_pga_events(audio_mono, sr, config, stem_type=stem_type)
+    pga_onset_data = list(pga_events_kept) + list(pga_events_filtered)
     if pga_onset_data:
         print(f"    Percentile-gated detection: {len(pga_onset_data)} candidate onsets "
               f"({len(pga_events_kept)} KEPT at threshold, {len(pga_events_filtered)} FILTERED)")

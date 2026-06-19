@@ -6,12 +6,15 @@ functional core. The public surface is two pure functions plus a
 thin wrapper:
 
   - ``detect_pga_events(audio_mono, sr, config)`` runs the
-    percentile-gated broad-attack detector, attaches per-event
-    diagnostic fields (frame, envelope_value, prominence,
-    iqr_threshold, midi_velocity, pga_filter_config), and runs
-    per-event feature extraction. **All** events are returned with
-    ``status='KEPT'`` — no filter is applied. The consumer can
-    re-filter the result later via a single pure function call.
+    percentile-gated broad-attack detector and attaches
+    per-event diagnostic fields (frame, envelope_value,
+    prominence, iqr_threshold, midi_velocity,
+    pga_filter_config). **All** events are returned with
+    ``status='KEPT'`` — no filter is applied, and (2026-06-19)
+    no per-event features are computed. The consumer can
+    re-filter the result later via a single pure function call
+    and re-run feature extraction against the post-filter
+    neighbor set via ``_compute_features_for_filtered_events``.
 
   - ``apply_pga_prominence_filter(events, threshold,
     disabled_ids=None)`` walks a detect-time event list and tags
@@ -24,15 +27,17 @@ thin wrapper:
     passes the threshold. Returns ``(kept, filtered)``.
 
   - ``build_pga_events(audio, sr, config)`` is a thin wrapper
-    that calls ``detect_pga_events`` and then
-    ``apply_pga_prominence_filter`` with the configured
-    ``pga_min_prominence`` threshold. Preserves the original
-    return shape ``(events_kept, events_filtered, debug_dict)``
-    so the existing call site in ``processing_shell.py`` and
-    the legacy tests keep working without modification.
+    that calls ``detect_pga_events``, runs the configured
+    ``pga_min_prominence`` filter, and (2026-06-19) re-runs
+    feature extraction on the post-filter list. Preserves the
+    original return shape ``(events_kept, events_filtered,
+    debug_dict)`` so the existing call site in
+    ``processing_shell.py`` and the legacy tests keep working
+    without modification.
 
 Pipeline (matches the original inline flow in
-``processing_shell.py:1717-1892``):
+``processing_shell.py:1717-1892``, restructured 2026-06-19 so
+feature extraction is a post-filter pass):
   1. ``detect_percentile_gated_broad_attacks`` (broadband contrast
      envelope + IQR-thresholded peak-pick).
   2. Per-event diagnostic dict: ``time``, ``method``,
@@ -40,13 +45,21 @@ Pipeline (matches the original inline flow in
      ``prominence``, ``iqr_threshold``.
   3. MIDI velocity mapping: linear envelope-value → MIDI
      ``[min_velocity, max_velocity]`` from ``config.midi``.
-  4. Per-event feature extraction via
+  4. Prominence filter (config ``onset_detection.pga_min_prominence``,
+     default 1000) — moves low-prominence events from KEPT
+     to FILTERED. (Was step 5; reordered 2026-06-19.)
+  4b. Decay-col-min filter (``onset_detection.min_decay_col_min_db``,
+     default -80.0 dB) — moves noise-pop events to FILTERED.
+  4c. Attack-rise filter (``onset_detection.attack_rise_max_ms``,
+     default 20.0 ms) — moves long-rise FPs to FILTERED.
+  5. Per-event feature extraction via
      ``event_features.compute_event_features`` — duration, pitch,
-     decay, brightness, etc. Two-pass flow: pass 1 uses the
-     full detect-time list (KEPT+FILTERED) as the "neighbors".
-  5. Prominence filter (config ``onset_detection.pga_min_prominence``,
-     default 1000) — when called via the wrapper, moves
-     low-prominence events from KEPT to FILTERED.
+     decay, brightness, etc. Now runs AGAINST the post-filter
+     neighbor set, so ``duration_ms`` /
+     ``duration_to_valley_ms`` / ``attack_rise_ms`` /
+     ``inter_onset_ms`` reflect the kept event neighborhood.
+     A filtered-out FP between two kept strikes no longer caps
+     the prior strike's ring at the FP's time.
 
 Design constraints:
   - Pure functions. No file I/O, no module-level state, no
@@ -64,12 +77,13 @@ Design constraints:
     inline implementation, so existing tests that inspect
     ``pga_debug`` continue to work.
 
-The WebUI re-filter path (planned for a future step) will call
-``detect_pga_events`` once at sidecar-write time, store the raw
-list in the sidecar, and then re-call
-``apply_pga_prominence_filter`` with a slider-driven threshold
-on every tuning-panel change. This refactor is the prerequisite
-for that flow.
+The WebUI re-filter path (planned follow-up to this refactor)
+will call ``detect_pga_events`` once at sidecar-write time,
+store the raw list in the sidecar, and then on every
+tuning-panel change re-apply the filter and re-run
+``_compute_features_for_filtered_events`` so the WebUI's
+"why was this dropped" tooltip and the per-event feature
+columns always reflect the post-filter neighbor set.
 """
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
@@ -410,12 +424,23 @@ def detect_pga_events(
         at detect time (``pga_min_prominence``, ``min_velocity``,
         ``max_velocity``). Used by the WebUI tooltip to show
         "Active filter: pga_min_prominence=X" alongside the event.
-      - Per-event feature keys (2026-06-12 fix): ``duration_ms``,
-        ``attack_rise_ms``, ``pitch_hz``, ``pitch_confidence``,
-        ``decay_t60_ms``, ``spectral_centroid_hz``,
-        ``spectral_flatness``, ``hr_peak_offset_ms``,
-        ``decay_envelope_energy``, ``decay_col_min_median_db``,
-        ``inter_onset_ms``.
+
+    Note: as of 2026-06-19, this function does NOT attach the
+    per-event feature keys (``duration_ms``, ``attack_rise_ms``,
+    ``pitch_hz``, ``pitch_confidence``, ``decay_t60_ms``,
+    ``spectral_centroid_hz``, ``spectral_flatness``,
+    ``hr_peak_offset_ms``, ``decay_envelope_energy``,
+    ``decay_col_min_median_db``, ``inter_onset_ms``). Those are
+    attached in a post-filter pass via
+    :func:`_compute_features_for_filtered_events` so the
+    neighbor-dependent fields (``duration_ms``,
+    ``duration_to_valley_ms``, ``attack_rise_ms``,
+    ``inter_onset_ms``) reflect the KEPT event set, not the
+    pre-filter list. Callers that need the back-compat
+    "events with features" contract should use
+    :func:`build_pga_events` instead, or call
+    :func:`_compute_features_for_filtered_events` themselves
+    after applying their own filter.
 
     Args:
         audio_mono: 1-D float array of mono audio samples.
@@ -599,103 +624,159 @@ def detect_pga_events(
     for ev in pga_onset_data:
         ev['pga_filter_config'] = pga_filter_config
 
-    # Step 5: Per-event feature extraction. Two-pass flow:
-    #   Pass 1: measure with the FULL detect-time list (KEPT +
-    #           FILTERED both included as candidate neighbors).
-    #   Pass 2 (WebUI re-measure, out of scope here): re-measure
-    #           with the final FILTERED list.
-    # The neighbor for each event is the next KEPT event in the
-    # list (FILTERED events are SKIPPED — using their time as
-    # the cap would truncate the current strike's ring at the
-    # FP's time).
-    if pga_onset_data:
-        # Lazy import: compute_event_features pulls in librosa /
-        # scipy stack and is not on the cold path.
-        from .event_features import compute_event_features
-        # Read pitch config once (not per-event). These keys are
-        # declared in the YAML under each stem section (e.g.
-        # ``toms.enable_pitch_detection``, ``toms.pitch_method``,
-        # ``toms.min_pitch_hz``, ``toms.max_pitch_hz``). Defaults
-        # match the user's toms config — YIN (5-10× faster than
-        # pYIN), 60-250Hz search range (toms fundamentals).
-        # 2026-06-18: was hardcoded to read ONLY from the
-        # ``toms`` section, so a snare stem would silently
-        # see toms pitch config. Fixed to use the call
-        # site's ``stem_type`` for per-stem overrides.
-        stem_cfg = config.get(stem_type, {}) or {}
-        enable_pitch_detection = bool(
-            stem_cfg.get('enable_pitch_detection', True)
-        )
-        pitch_method = stem_cfg.get('pitch_method', 'yin')
-        pitch_fmin_hz = float(
-            _resolve_pga_detector_param(
-                config, 'min_pitch_hz', 60.0, stem_type,
-            )
-        )
-        pitch_fmax_hz = float(
-            _resolve_pga_detector_param(
-                config, 'max_pitch_hz', 250.0, stem_type,
-            )
-        )
-        for i, ev in enumerate(pga_onset_data):
-            # Find the previous and next KEPT events for the
-            # attack_rise / duration boundary features.
-            # FILTERED events are SKIPPED on both sides (using
-            # their time as a cap would either truncate the
-            # current strike's rise against an FP boundary or
-            # stretch the current strike's ring at an FP's
-            # time). 2026-06-18: prev_event lookup added so
-            # ``attack_rise_ms`` is bounded by the previous
-            # event's time — without it, a ringing previous
-            # hit keeps the envelope above 10% of the new
-            # peak all the way back into the previous hit's
-            # body, producing ``attack_rise_ms`` ≈
-            # ``inter_onset_ms`` on snare / dense hihats
-            # (see bug-tracking.md "attack_rise_ms unbounded
-            # by previous event").
-            prev_t: Optional[float] = None
-            for j in range(i - 1, -1, -1):
-                candidate = pga_onset_data[j]
-                if candidate.get('status') != 'FILTERED':
-                    prev_t = candidate.get('time')
-                    break
-            next_t: Optional[float] = None
-            for j in range(i + 1, len(pga_onset_data)):
-                candidate = pga_onset_data[j]
-                if candidate.get('status') != 'FILTERED':
-                    next_t = candidate.get('time')
-                    break
-            try:
-                feats = compute_event_features(
-                    audio_mono, sr, ev['time'],
-                    enable_pitch_detection=enable_pitch_detection,
-                    pitch_method=pitch_method,
-                    pitch_fmin_hz=pitch_fmin_hz,
-                    pitch_fmax_hz=pitch_fmax_hz,
-                    next_event_time_sec=next_t,
-                    prev_event_time_sec=prev_t,
-                )
-            except Exception:
-                # Defensive: a bad event shouldn't poison the
-                # rest of the pipeline. The diagnostic surface
-                # in the WebUI will show "N/A" for features on
-                # this event.
-                feats = {
-                    'duration_ms': None,
-                    'attack_rise_ms': None,
-                    'pitch_hz': None,
-                    'pitch_confidence': None,
-                    'decay_t60_ms': None,
-                    'spectral_centroid_hz': None,
-                    'spectral_flatness': None,
-                    'hr_peak_offset_ms': None,
-                    'decay_envelope_energy': None,
-                    'decay_col_min_median_db': None,
-                    'inter_onset_ms': None,
-                }
-            ev.update(feats)
-
+    # 2026-06-19: per-event feature extraction moved out of
+    # ``detect_pga_events`` and into a post-filter pass
+    # (``_compute_features_for_filtered_events``). Reasons:
+    #   - Neighbor-dependent features (``duration_ms``,
+    #     ``duration_to_valley_ms``, ``attack_rise_ms``,
+    #     ``inter_onset_ms``) were bounded against the
+    #     pre-filter list — a filtered-out FP between two
+    #     kept strikes capped the prior strike's ring at
+    #     the FP's time. The WebUI tuning panel would then
+    #     show a ring that was always too short.
+    #   - Re-measuring features on the final KEPT set after
+    #     the filter is the only way to get post-filter
+    #     neighbors. This function now returns the raw
+    #     detect-time list (no features) and lets
+    #     ``_build_pga_events_with_filter`` / the WebUI
+    #     re-filter path own the feature pass.
     return pga_onset_data
+
+
+def _find_prev_next_kept(
+    events: List[Dict[str, Any]],
+    i: int,
+) -> Tuple[Optional[float], Optional[float]]:
+    """Find the previous and next non-FILTERED event times
+    around index ``i`` in ``events``.
+
+    Used to bound the ``duration_ms`` / ``duration_to_valley_ms``
+    / ``attack_rise_ms`` / ``inter_onset_ms`` features to the
+    actual KEPT-event neighborhood — without this skip, a
+    filtered-out FP between two strikes would truncate the prior
+    strike's ring at the FP's time and stretch the next strike's
+    attack across the gap.
+
+    Returns ``(prev_t, next_t)``; each is ``None`` for the first
+    / last event (or when no kept neighbor exists in that
+    direction).
+    """
+    prev_t: Optional[float] = None
+    for j in range(i - 1, -1, -1):
+        candidate = events[j]
+        if candidate.get('status') != 'FILTERED':
+            prev_t = candidate.get('time')
+            break
+    next_t: Optional[float] = None
+    for j in range(i + 1, len(events)):
+        candidate = events[j]
+        if candidate.get('status') != 'FILTERED':
+            next_t = candidate.get('time')
+            break
+    return prev_t, next_t
+
+
+def _compute_features_for_filtered_events(
+    events: List[Dict[str, Any]],
+    audio_mono: np.ndarray,
+    sr: int,
+    config: Dict[str, Any],
+    stem_type: Optional[str],
+) -> None:
+    """Compute per-event features for events that have already
+    been through the filter step.
+
+    Mutates each event in-place by adding the per-event feature
+    keys (``duration_ms``, ``duration_to_valley_ms``,
+    ``attack_rise_ms``, ``pitch_hz``, ...). Neighbor-dependent
+    features (``duration_*``, ``attack_rise_ms``,
+    ``inter_onset_ms``) are bounded to the *kept* event
+    neighborhood via :func:`_find_prev_next_kept` — so an FP
+    that was just dropped by the filter no longer truncates the
+    prior strike's ring at the FP's time.
+
+    This is the post-filter feature pass that fixes the
+    "duration was capped at the filtered event" bug (the
+    pre-filter list was used as neighbors before this pass
+    existed, so a filtered event between two kept strikes
+    silently capped the prior strike's ``duration_ms`` at the
+    filtered event's time).
+
+    Per-event exceptions are swallowed: a bad event shouldn't
+    poison the rest of the pipeline. The WebUI shows "N/A" for
+    the feature on that event.
+    """
+    if not events:
+        return
+    # Lazy import: compute_event_features pulls in librosa /
+    # scipy stack and is not on the cold path.
+    from .event_features import compute_event_features
+    # Read pitch config once (not per-event). These keys are
+    # declared in the YAML under each stem section (e.g.
+    # ``toms.enable_pitch_detection``, ``toms.pitch_method``,
+    # ``toms.min_pitch_hz``, ``toms.max_pitch_hz``). Defaults
+    # match the user's toms config — YIN (5-10× faster than
+    # pYIN), 60-250Hz search range (toms fundamentals).
+    # 2026-06-18: was hardcoded to read ONLY from the
+    # ``toms`` section, so a snare stem would silently
+    # see toms pitch config. Fixed to use the call
+    # site's ``stem_type`` for per-stem overrides.
+    stem_cfg = config.get(stem_type, {}) or {}
+    enable_pitch_detection = bool(
+        stem_cfg.get('enable_pitch_detection', True)
+    )
+    pitch_method = stem_cfg.get('pitch_method', 'yin')
+    pitch_fmin_hz = float(
+        _resolve_pga_detector_param(
+            config, 'min_pitch_hz', 60.0, stem_type,
+        )
+    )
+    pitch_fmax_hz = float(
+        _resolve_pga_detector_param(
+            config, 'max_pitch_hz', 250.0, stem_type,
+        )
+    )
+    for i, ev in enumerate(events):
+        # 2026-06-18: prev_event lookup added so
+        # ``attack_rise_ms`` is bounded by the previous
+        # event's time — without it, a ringing previous
+        # hit keeps the envelope above 10% of the new
+        # peak all the way back into the previous hit's
+        # body, producing ``attack_rise_ms`` ≈
+        # ``inter_onset_ms`` on snare / dense hihats
+        # (see bug-tracking.md "attack_rise_ms unbounded
+        # by previous event").
+        prev_t, next_t = _find_prev_next_kept(events, i)
+        try:
+            feats = compute_event_features(
+                audio_mono, sr, ev['time'],
+                enable_pitch_detection=enable_pitch_detection,
+                pitch_method=pitch_method,
+                pitch_fmin_hz=pitch_fmin_hz,
+                pitch_fmax_hz=pitch_fmax_hz,
+                next_event_time_sec=next_t,
+                prev_event_time_sec=prev_t,
+            )
+        except Exception:
+            # Defensive: a bad event shouldn't poison the
+            # rest of the pipeline. The diagnostic surface
+            # in the WebUI will show "N/A" for features on
+            # this event.
+            feats = {
+                'duration_ms': None,
+                'duration_to_valley_ms': None,
+                'attack_rise_ms': None,
+                'pitch_hz': None,
+                'pitch_confidence': None,
+                'decay_t60_ms': None,
+                'spectral_centroid_hz': None,
+                'spectral_flatness': None,
+                'hr_peak_offset_ms': None,
+                'decay_envelope_energy': None,
+                'decay_col_min_median_db': None,
+                'inter_onset_ms': None,
+            }
+        ev.update(feats)
 
 
 def _apply_pga_filter(
@@ -1047,6 +1128,16 @@ def build_pga_events(
     # rebuild path call apply_pga_prominence_filter separately
     # with their own threshold. Return shape is preserved
     # (events_kept=all, events_filtered=[], debug_dict).
+    #
+    # 2026-06-19: feature extraction moved to a post-filter
+    # pass; for the legacy ``build_pga_events`` wrapper there
+    # IS no filter, so the all-KEPT list IS the post-filter
+    # list — we still need to attach features so the
+    # back-compat contract (events_kept carry per-event
+    # feature keys) is preserved.
+    _compute_features_for_filtered_events(
+        raw, audio_mono, sr, config, stem_type,
+    )
     return raw, [], pga_debug
 
 
@@ -1177,4 +1268,17 @@ def _build_pga_events_with_filter(
         pga_filter_config['min_decay_col_min_db'] = decay_col_min_threshold
         pga_filter_config['attack_rise_max_ms'] = attack_rise_threshold
         ev['pga_filter_config'] = pga_filter_config
+    # 2026-06-19: post-filter feature pass. Now that the final
+    # KEPT/FILTERED partition is set, compute per-event features
+    # against the post-filter neighbor set (so ``duration_ms``,
+    # ``duration_to_valley_ms``, ``attack_rise_ms``, and
+    # ``inter_onset_ms`` reflect the KEPT event set — a
+    # filtered-out FP no longer caps the prior strike's ring).
+    # Features are attached to ALL events in ``raw`` (both KEPT
+    # and FILTERED); the FILTERED list goes into the sidecar's
+    # diagnostic surface so the WebUI can show "why this was
+    # dropped" with the actual feature values, not None.
+    _compute_features_for_filtered_events(
+        raw, audio_mono, sr, config, stem_type,
+    )
     return raw, events_kept, events_filtered, pga_debug
