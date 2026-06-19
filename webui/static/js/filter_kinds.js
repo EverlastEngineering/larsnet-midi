@@ -94,6 +94,13 @@ function listFiltersForStem(registry, stemType) {
     return registry.filters.filter(
         f => Array.isArray(f.applies_to_stems)
             && f.applies_to_stems.includes(stemType)
+            // 2026-06-19: filters can opt out of the WebUI by
+            // setting `expose_in_webui: false` in the registry.
+            // The Python pipeline still uses them (single source
+            // of truth — the registry is shared) but the WebUI
+            // doesn't render a slider. The flag defaults to true
+            // when absent so existing entries need no change.
+            && f.expose_in_webui !== false
     );
 }
 

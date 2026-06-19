@@ -18,19 +18,22 @@
     {
       "id": "pga_min_prominence",
       "label": "PGA Min Prominence",
-      "description": "Filter PGA events with prominence (scipy find_peaks prominence on the broadband contrast-summed envelope) below the threshold. Catches noise events with no real attack.",
+      "description": "Filter PGA events with prominence (scipy find_peaks prominence on the broadband contrast-summed envelope) below the threshold. Catches noise events with no real attack. As of 2026-06-19 this is the only WebUI-exposed PGA filter — the slider is rendered for all five stems (toms, snare, hihat, kick, cymbals).",
       "default": 1000,
       "min": 0,
       "max": 10000,
       "step": 100,
       "unit": "",
       "ui_control": "slider",
-      "applies_to_stems": ["toms", "snare"],
+      "applies_to_stems": ["toms", "snare", "hihat", "kick", "cymbals"],
       "yaml_paths": {
         "global": ["onset_detection", "pga_min_prominence"],
         "per_stem": {
           "toms": ["toms", "pga_min_prominence"],
-          "snare": ["snare", "pga_min_prominence"]
+          "snare": ["snare", "pga_min_prominence"],
+          "hihat": ["hihat", "pga_min_prominence"],
+          "kick": ["kick", "pga_min_prominence"],
+          "cymbals": ["cymbals", "pga_min_prominence"]
         }
       },
       "filter": {
@@ -43,7 +46,7 @@
     {
       "id": "min_decay_col_min_db",
       "label": "Min Decay Col-Min (dB)",
-      "description": "Filter PGA events with decay_col_min_median_db below the threshold. Catches single-frame noise pops with no sustained ring. Empirically: real toms strikes -60 to -84 dB, noise pops -84 to -90 dB. -80 dB is the safe cut between the two clusters.",
+      "description": "Filter PGA events with decay_col_min_median_db below the threshold. Catches single-frame noise pops with no sustained ring. Empirically: real toms strikes -60 to -84 dB, noise pops -84 to -90 dB. -80 dB is the safe cut between the two clusters. 2026-06-19: the WebUI no longer exposes a slider for this filter (did not perform well in practice) but the Python pipeline still applies it as part of the layered PGA filter chain. Set `expose_in_webui: true` to re-enable the slider.",
       "default": -80.0,
       "min": -120.0,
       "max": 0.0,
@@ -51,6 +54,7 @@
       "unit": "dB",
       "ui_control": "slider",
       "applies_to_stems": ["toms", "snare"],
+      "expose_in_webui": false,
       "yaml_paths": {
         "global": ["onset_detection", "min_decay_col_min_db"],
         "per_stem": {
@@ -68,7 +72,7 @@
     {
       "id": "attack_rise_max_ms",
       "label": "Attack Rise Max (ms)",
-      "description": "Filter PGA events with attack_rise_ms above the threshold. Catches wire-tail / step-back FPs that the prominence + decay_col_min filters miss — these have real-looking attack but the high-res STFT detects they 'step back' to a previous attack, producing an unusually long 10-90% rise time. Empirically (project 6, Taylor Swift toms): all real hits have attack_rise < 20ms; FPs cluster at 100-500ms (the longer the rise, the more the FP is 'stepping back' to the real attack).",
+      "description": "Filter PGA events with attack_rise_ms above the threshold. Catches wire-tail / step-back FPs that the prominence + decay_col_min filters miss — these have real-looking attack but the high-res STFT detects they 'step back' to a previous attack, producing an unusually long 10-90% rise time. Empirically (project 6, Taylor Swift toms): all real hits have attack_rise < 20ms; FPs cluster at 100-500ms. 2026-06-19: the WebUI no longer exposes a slider for this filter (did not perform well in practice — the previous-hit ringing made the rise walk stretch across hits; the 2026-06-18 fix bounds the walk to the previous event but the filter still has edge cases). The Python pipeline still applies it as part of the layered PGA filter chain. Set `expose_in_webui: true` to re-enable the slider.",
       "default": 20.0,
       "min": 0.0,
       "max": 500.0,
@@ -76,6 +80,7 @@
       "unit": "ms",
       "ui_control": "slider",
       "applies_to_stems": ["toms", "snare"],
+      "expose_in_webui": false,
       "yaml_paths": {
         "global": ["onset_detection", "attack_rise_max_ms"],
         "per_stem": {

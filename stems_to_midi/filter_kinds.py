@@ -110,12 +110,25 @@ def list_filters_for_stem(
     registry: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Return the filter entries whose applies_to_stems contains
-    the given stem."""
+    the given stem.
+
+    2026-06-19: filters can opt out of the WebUI by setting
+    ``expose_in_webui: false`` in the registry. The Python
+    pipeline still applies them (single source of truth — the
+    registry is shared) but they're filtered out of the
+    WebUI-facing result. The flag defaults to True (exposed)
+    when absent so existing entries need no change. Note that
+    the WebUI-facing filter at ``webui/api/filters.py`` calls
+    this function; the Python pipeline uses
+    ``find_filter(id)`` directly, which returns the entry
+    regardless of the flag.
+    """
     if registry is None:
         registry = load_filter_registry()
     return [
         f for f in registry.get('filters', [])
         if stem_type in f.get('applies_to_stems', [])
+        and f.get('expose_in_webui', True) is not False
     ]
 
 

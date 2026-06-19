@@ -31,17 +31,16 @@ async function _ensureFilterRegistryLoaded() {
         try {
             _filterRegistryCache = await loadFilterRegistry();
 
-            // Toms + snare (2026-06-18): REPLACE the hard-coded
-            // entry with the registry-derived one. Both stems now
-            // expose the same PGA per-event filters
-            // (pga_min_prominence, min_decay_col_min_db,
-            // attack_rise_max_ms) — all fit the registry shape,
-            // so the registry is the authoritative list and the
-            // hard-coded entry is purely an offline fallback.
-            // Snare previously had a `geomean_threshold` slider
-            // (and reverb/k-means controls); those are gone now —
-            // snare adopts the toms PGA-only slideout.
-            for (const stem of ['toms', 'snare']) {
+            // All stems with PGA pipeline (2026-06-19): REPLACE
+            // the hard-coded entry with the registry-derived one.
+            // As of 2026-06-19 the only WebUI-exposed filter is
+            // pga_min_prominence — min_decay_col_min_db and
+            // attack_rise_max_ms were removed from the WebUI
+            // because they did not perform well in practice.
+            // The Python pipeline still applies all three
+            // filters as a layered chain; this loop only manages
+            // the slider metadata for the WebUI panel.
+            for (const stem of ['toms', 'snare', 'hihat', 'kick', 'cymbals']) {
                 const fromRegistry = buildSliderConfigsForStem(
                     _filterRegistryCache, stem
                 );
@@ -114,50 +113,38 @@ let lastClassification = null;
  * analysis.json logic block at runtime.
  */
 const STEM_SLIDER_CONFIGS = {
+    // 2026-06-19: All five stems (toms, snare, hihat, kick, cymbals)
+    // now expose a single WebUI filter slider — pga_min_prominence
+    // — loaded from the filter registry at runtime. The previous
+    // energy-based filters (geomean_threshold, min_sustain_ms,
+    // min_strength_threshold, reverb_continuation_attack_threshold)
+    // and the other two PGA filters (min_decay_col_min_db,
+    // attack_rise_max_ms) were removed from the WebUI because they
+    // did not perform well in practice. The Python pipeline still
+    // applies all three PGA filters as a layered chain; only the
+    // WebUI exposure was simplified.
+    //
+    // Per-stem classification controls (open_geomean_min,
+    // open_sustain_ms, expected_clusters) are NOT filters — they
+    // re-label KEPT events (e.g. "open hihat" vs "closed hihat",
+    // "crash" vs "ride"). They're kept here as hard-coded entries
+    // because they don't fit the filter-registry shape and have
+    // stem-specific UI labels (🔓 emoji, 🎵 emoji).
     kick: [
-        { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 3000, step: 10, fallback: 800, unit: '' },
-        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' }
+        // No classification controls for kick. The pga_min_prominence
+        // slider is added at runtime by _ensureFilterRegistryLoaded.
     ],
     snare: [
-        // Snare (2026-06-18): adopts the PGA-only slideout
-        // matching toms. The full set (pga_min_prominence,
-        // min_decay_col_min_db, attack_rise_max_ms) is loaded
-        // from the filter registry at runtime via
-        // _ensureFilterRegistryLoaded. This single-entry
-        // fallback only surfaces when /api/filters/schema
-        // fails to load — mirrors the toms pattern.
         { key: 'pga_min_prominence', label: 'PGA Min Prominence', min: 0, max: 10000, step: 100, fallback: 1000, unit: '', yamlPath: ['snare', 'pga_min_prominence'] }
     ],
-    // Toms (2026-06-12 → 2026-06-13): the toms pipeline is PGA-only
-    // (see processing_shell._build_events_configured and
-    // percentile_gated_detector.py / pga_event_builder.py). The
-    // previous energy + spectral filters (geomean / reverb attack /
-    // sound types / snap mask / band-max-ratio ceiling / onset-events
-    // gate) operated on events that are no longer in
-    // events_configured for toms — they were removed because toms
-    // detection now uses the percentile-gated broad-attack (PGA)
-    // detector exclusively. The toms Threshold Tuning slideout now
-    // exposes a PGA-specific slider: pga_min_prominence (the scipy
-    // find_peaks prominence floor applied in
-    // pga_event_builder.build_pga_events). The slider's
-    // `yamlPath` is ['toms', 'pga_min_prominence'] to persist
-    // under the toms section of midiconfig.yaml.
     toms: [
         { key: 'pga_min_prominence', label: 'PGA Min Prominence', min: 0, max: 10000, step: 100, fallback: 1000, unit: '', yamlPath: ['toms', 'pga_min_prominence'] }
     ],
     hihat: [
-        { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 200, step: 0.5, fallback: 8, unit: '' },
-        { key: 'min_sustain_ms', label: 'Min Sustain', min: 0, max: 500, step: 5, fallback: 25, unit: 'ms' },
-        { key: 'min_strength_threshold', label: 'Min Strength', min: 0, max: 1.0, step: 0.01, fallback: 0.02, unit: '' },
-        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' },
         { key: 'open_geomean_min', label: '🔓 Open/Closed: GeoMean', min: 50, max: 1000, step: 10, fallback: 262, unit: '', classification: true },
         { key: 'open_sustain_ms', label: '🔓 Open/Closed: Sustain', min: 20, max: 500, step: 5, fallback: 150, unit: 'ms', classification: true }
     ],
     cymbals: [
-        { key: 'geomean_threshold', label: 'Geomean Threshold', min: 0, max: 1000, step: 5, fallback: 100, unit: '' },
-        { key: 'min_sustain_ms', label: 'Min Sustain', min: 0, max: 500, step: 5, fallback: 150, unit: 'ms' },
-        { key: 'min_strength_threshold', label: 'Min Strength', min: 0, max: 1.0, step: 0.01, fallback: 0.1, unit: '' },
-        { key: 'reverb_continuation_attack_threshold', label: 'Reverb Attack Threshold', min: 0, max: 1.0, step: 0.01, fallback: 0.4, unit: '' },
         { key: 'expected_clusters', label: '🎵 Sound Types', min: 1, max: 4, step: 1, fallback: 2, unit: '', classification: true }
     ]
 };
@@ -165,6 +152,11 @@ const STEM_SLIDER_CONFIGS = {
 /**
  * Filter mode per stem — determines how geomean and sustain thresholds
  * combine. Matches analysis_core.py get_spectral_config_for_stem().
+ *
+ * 2026-06-19: no longer used by the WebUI (the geomean/sustain
+ * filter sliders were removed from hihat / kick / cymbals). Kept
+ * for backward compat with any future legacy-style filter that
+ * might be re-added. The PGA-only slideout does not need it.
  */
 const STEM_FILTER_MODES = {
     kick: 'geomean_only',
@@ -1741,19 +1733,22 @@ function applyTuningFilter() {
     const params = tuningSliderValues[stemType] || {};
     const filterMode = STEM_FILTER_MODES[stemType] || 'geomean_only';
 
-    // PGA-only stems (2026-06-18): toms was the only PGA-only
-    // stem until the snare migration adopted the same slideout
-    // shape. For these stems the sidecar carries events_pga as
-    // the sole source of truth — every event has PGA fields
-    // (prominence / decay_col_min_median_db / attack_rise_ms)
-    // and NO energy-derived fields (geomean / sustain_ms /
-    // strength / attack_sharpness / band_max_ratio /
-    // snap_delta). The PGA passes (Pass 0 / 0.5 / 0.7) are the
-    // only filter passes that make sense for them; the energy
-    // passes would reset every event to KEPT and wipe out the
-    // PGA filter's FILTERED decisions (the same bug the toms
-    // branch was written to avoid in 2026-06-15).
-    const isPgaOnlyStem = (stemType === 'toms' || stemType === 'snare');
+    // PGA-only stems (2026-06-19): every stem in the WebUI
+    // slideout is now PGA-only (toms, snare, hihat, kick,
+    // cymbals). The filter registry exposes only
+    // pga_min_prominence for the WebUI; the energy-derived
+    // filters (Pass 1 / 2) are no longer in the WebUI panel.
+    // The Python pipeline still applies the energy-derived
+    // filters for stems that aren't on the PGA path yet
+    // (defensive skip here mirrors the 2026-06-15 toms
+    // branch's rationale: applying Pass 1 to PGA-only events
+    // would reset every event to KEPT and wipe out the PGA
+    // filter's FILTERED decisions).
+    const isPgaOnlyStem = (
+        stemType === 'toms' || stemType === 'snare' ||
+        stemType === 'hihat' || stemType === 'kick' ||
+        stemType === 'cymbals'
+    );
 
     // Master onset-filter gate (2026-06-10). When OFF (explicit
     // Onset events visibility gate (2026-06-10 round 2). When
