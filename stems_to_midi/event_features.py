@@ -1030,6 +1030,7 @@ def compute_attack_rise_ms(
     broad_max_hz: float = 8000.0,
     n_fft: int = 1024,
     hop: int = 256,
+    prev_event_time_sec: Optional[float] = None,
 ) -> Optional[float]:
     """Measure the rise time of the broadband attack (10%-90% of peak).
 
@@ -1049,6 +1050,29 @@ def compute_attack_rise_ms(
     dB equivalent is 20 dB below and 0.92 dB below peak
     respectively, but working in linear space keeps the
     thresholds intuitive.
+
+    Boundary (2026-06-18): ``prev_event_time_sec`` bounds the
+    backward walk. The 10%-point search walks backward from
+    the peak looking for where the envelope first drops below
+    10% of the peak. Without a previous-event boundary, a
+    ringing previous hit keeps the envelope above 10% of the
+    new peak all the way back to the previous hit's body, and
+    the 10% point gets pinned far back — producing an
+    ``attack_rise_ms`` that's effectively ``inter_onset_ms``
+    instead of the new hit's own rise. With ``prev_event_time_sec``
+    set, the walk stops at that frame (using ``np.argmin`` to
+    snap to the nearest envelope sample). If the envelope at
+    that frame is STILL above 10% of the new peak (the gap
+    between hits never dropped low enough), ``attack_rise_ms``
+    returns ``None`` — we can't bracket the rise without a
+    clear floor in the analysis window.
+
+    The first event in a stream has no predecessor; pass
+    ``prev_event_time_sec=None`` (the default) for that case.
+    The function then walks all the way back to the start of
+    the analyzed envelope. Callers that care about per-event
+    accuracy on dense streams (snare, fast hihats) should
+    always pass the previous event's time.
     """
     times, env = _envelope_at_time(
         audio, sr, event_time_sec,
@@ -1062,17 +1086,30 @@ def compute_attack_rise_ms(
     lo_thr = peak_val * 0.1   # 10% of peak
     hi_thr = peak_val * 0.9   # 90% of peak
 
+    # Resolve the backward-walk lower bound. When a previous
+    # event is given, the walk stops at the envelope sample
+    # nearest that time — the 10% point can't land inside
+    # the previous hit's body or attack.
+    if prev_event_time_sec is not None and prev_event_time_sec > 0:
+        i_prev = int(np.argmin(np.abs(times - prev_event_time_sec)))
+        i_prev = max(0, min(len(env) - 1, i_prev))
+    else:
+        i_prev = 0
+
     # Walk backward from the peak to find the 10% point.
     # The envelope is rising into the attack, so as we go
     # backward in time the envelope decreases.
     i_10 = i_peak
-    while i_10 > 0 and env[i_10] > lo_thr:
+    while i_10 > i_prev and env[i_10] > lo_thr:
         i_10 -= 1
-    if i_10 == 0 and env[0] > lo_thr:
-        # The 10% point is BEFORE the start of audio
-        # (the envelope never drops below 10% of peak in
-        # the analyzed window). Return None — we can't
-        # measure rise without a starting reference.
+    if i_10 == i_prev and env[i_prev] > lo_thr:
+        # The 10% point is BEFORE our backward-walk lower
+        # bound — either the start of audio (no prev event)
+        # or the previous event's time (previous hit is still
+        # ringing so the envelope never dropped below 10% of
+        # this hit's peak in the gap). Return None — we can't
+        # measure rise without a starting reference in the
+        # analysis window.
         return None
 
     # Walk backward to find the 90% point.
@@ -1100,6 +1137,7 @@ def compute_event_features(
     duration_broad_min_hz: float = 30.0,
     duration_broad_max_hz: float = 8000.0,
     next_event_time_sec: Optional[float] = None,
+    prev_event_time_sec: Optional[float] = None,
 ) -> Dict[str, Optional[float]]:
     """Compute the full per-event feature battery.
 
@@ -1122,7 +1160,14 @@ def compute_event_features(
         silence between the two strikes. Unaffected by how
         loud or soft the next strike is. Requires
         ``next_event_time_sec`` to be set.
-      - ``attack_rise_ms``: 10-90% rise time
+      - ``attack_rise_ms``: 10-90% rise time. When
+        ``prev_event_time_sec`` is provided, the backward
+        walk is bounded to that frame so a ringing previous
+        hit can't stretch the rise time across hits
+        (2026-06-18). Returns ``None`` when the envelope at
+        the previous event is still above 10% of the new
+        peak — the gap never dropped low enough to bracket
+        a true new-attack rise.
       - ``pitch_hz``: fundamental via YIN/pYIN on body
       - ``pitch_confidence``: 0-1 (pYIN voiced_prob mean; YIN fraction-valid)
       - ``decay_t60_ms``: time for body energy to drop 60dB
@@ -1180,6 +1225,17 @@ def compute_event_features(
             strike masks the current one before it can
             naturally decay. Also enables
             ``duration_to_valley_ms``.
+        prev_event_time_sec: if provided, the
+            ``attack_rise_ms`` backward walk stops at this
+            frame (2026-06-18). Without it, a ringing
+            previous hit can stretch the new hit's rise
+            time across the entire inter-onset gap
+            (symptom: ``attack_rise_ms`` ≈ ``inter_onset_ms``
+            on snare / dense hihats). Pass the previous
+            event's time when calling from a multi-event
+            context; pass ``None`` for the first event in
+            a stream (or any event whose predecessor is
+            unknown).
     """
     audio_mono = _ensure_mono(audio)
     features: Dict[str, Optional[float]] = {
@@ -1223,6 +1279,7 @@ def compute_event_features(
         features['attack_rise_ms'] = compute_attack_rise_ms(
             audio_mono, sr, event_time_sec,
             broad_min_hz=broad_min_hz, broad_max_hz=broad_max_hz,
+            prev_event_time_sec=prev_event_time_sec,
         )
     except Exception:
         pass

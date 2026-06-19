@@ -616,6 +616,27 @@ def detect_pga_events(
             )
         )
         for i, ev in enumerate(pga_onset_data):
+            # Find the previous and next KEPT events for the
+            # attack_rise / duration boundary features.
+            # FILTERED events are SKIPPED on both sides (using
+            # their time as a cap would either truncate the
+            # current strike's rise against an FP boundary or
+            # stretch the current strike's ring at an FP's
+            # time). 2026-06-18: prev_event lookup added so
+            # ``attack_rise_ms`` is bounded by the previous
+            # event's time — without it, a ringing previous
+            # hit keeps the envelope above 10% of the new
+            # peak all the way back into the previous hit's
+            # body, producing ``attack_rise_ms`` ≈
+            # ``inter_onset_ms`` on snare / dense hihats
+            # (see bug-tracking.md "attack_rise_ms unbounded
+            # by previous event").
+            prev_t: Optional[float] = None
+            for j in range(i - 1, -1, -1):
+                candidate = pga_onset_data[j]
+                if candidate.get('status') != 'FILTERED':
+                    prev_t = candidate.get('time')
+                    break
             next_t: Optional[float] = None
             for j in range(i + 1, len(pga_onset_data)):
                 candidate = pga_onset_data[j]
@@ -630,6 +651,7 @@ def detect_pga_events(
                     pitch_fmin_hz=pitch_fmin_hz,
                     pitch_fmax_hz=pitch_fmax_hz,
                     next_event_time_sec=next_t,
+                    prev_event_time_sec=prev_t,
                 )
             except Exception:
                 # Defensive: a bad event shouldn't poison the

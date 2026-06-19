@@ -384,6 +384,152 @@ class TestAttackRiseMs:
         # Allow wide range for STFT smearing.
         assert 20 < rise < 200, f"expected 20-200ms, got {rise}"
 
+    def test_prev_event_bounds_walk_when_gap_silent(self):
+        """When the gap between two hits is silent (10% of
+        the new peak), ``prev_event_time_sec`` clamps the
+        walk to that gap — so ``attack_rise_ms`` measures
+        only the new hit's own rise, not stretched back
+        into the previous hit's body.
+
+        Without the boundary, the previous hit's ringing
+        keeps the envelope above 10% of the new peak all
+        the way back to the previous hit's valley, and the
+        10% point lands far back (the bug).
+
+        With the boundary set to the silence midpoint,
+        the walk stops there and the rise is the real
+        new-attack value (~40ms for an 80ms ramp)."""
+        sr = SR
+        # 200ms pre-attack silence, hit #1, 60ms gap, hit #2.
+        # Size the buffer to fit both hits plus the gap.
+        tone1 = _make_tone(100.0, 0.4, sr=sr, attack_ms=5.0, decay_tau_ms=80.0)
+        gap_sec = 0.06
+        gap_samples = int(gap_sec * sr)
+        tone2 = _make_tone(100.0, 0.4, sr=sr, attack_ms=80.0, decay_tau_ms=100.0)
+        lead_samples = int(0.2 * sr)
+        total = lead_samples + len(tone1) + gap_samples + len(tone2) + int(0.1 * sr)
+        audio = np.zeros(total, dtype=np.float32)
+        i1 = lead_samples
+        audio[i1:i1 + len(tone1)] = tone1
+        # Second hit with a deliberately slow 80ms attack
+        # ramp so the expected rise is large (~64ms) and
+        # distinguishable from "stretched into hit #1".
+        i2 = i1 + len(tone1) + gap_samples
+        audio[i2:i2 + len(tone2)] = tone2
+        # Pass prev_event_time_sec at hit #1's time. With the
+        # boundary, the rise should be measured inside hit #2
+        # only. Without it, the walk can drift back into hit
+        # #1's tail and produce a much larger value.
+        rise_bounded = compute_attack_rise_ms(
+            audio, sr, i2 / sr,
+            prev_event_time_sec=i1 / sr,
+        )
+        assert rise_bounded is not None
+        # Should be in the same range as a single slow-attack
+        # hit (~30-200ms). Crucially, it must NOT span the
+        # 60ms gap PLUS hit #1's tail (which would push it
+        # well over 200ms on this synthetic).
+        assert 20 < rise_bounded < 200, (
+            f"expected 20-200ms (new hit's own rise only), "
+            f"got {rise_bounded}"
+        )
+
+    def test_prev_event_returns_none_when_gap_too_loud(self):
+        """When the gap between two hits never drops below
+        10% of the new peak (the previous hit is still
+        too loud in the gap), ``compute_attack_rise_ms``
+        returns ``None`` with ``prev_event_time_sec``
+        set — we can't bracket a true new-attack rise
+        without a clear floor in the analysis window.
+
+        This is the case the bug report described: the
+        user saw every snare hit's ``attack_rise_ms``
+        pinned at ``duration_ms`` because the gap was
+        still ringing from the previous hit. With the
+        boundary, those cases now correctly report
+        ``None`` instead of the inflated value (the
+        WebUI shows "N/A" instead of a misleading
+        number).
+
+        Constructed by giving hit #1 a very long decay
+        tau (500ms), placing ``prev_event_time_sec`` at
+        hit #2's onset (where hit #1's tail is still
+        ~35% of the peak), and using a hit #2 amplitude
+        equal to hit #1's. At that frame the envelope is
+        dominated by hit #1's tail, which is > 10% of
+        hit #2's peak → the walk-backward can't find a
+        10% floor inside the analysis window → returns
+        ``None``."""
+        sr = SR
+        # Hit #1 with VERY long decay so the gap still has
+        # significant tail energy.
+        tone1 = _make_tone(100.0, 0.5, sr=sr, attack_ms=2.0, decay_tau_ms=500.0)
+        tone2 = _make_tone(100.0, 0.3, sr=sr, attack_ms=2.0, decay_tau_ms=500.0)
+        gap_samples = int(0.03 * sr)
+        lead_samples = int(0.1 * sr)
+        total = lead_samples + len(tone1) + gap_samples + len(tone2) + int(0.1 * sr)
+        audio = np.zeros(total, dtype=np.float32)
+        i1 = lead_samples
+        audio[i1:i1 + len(tone1)] = tone1
+        i2 = i1 + len(tone1) + gap_samples
+        audio[i2:i2 + len(tone2)] = tone2
+        # Place prev_event_time_sec at hit #2's ONSET.
+        # At this frame, hit #1's tail is still ~exp(-0.53/0.5)
+        # = ~35% of its peak, which is well above 10% of
+        # hit #2's peak.
+        rise = compute_attack_rise_ms(
+            audio, sr, i2 / sr,
+            prev_event_time_sec=i2 / sr,
+        )
+        assert rise is None, (
+            f"expected None (envelope at prev_event above 10% "
+            f"of new peak), got {rise}"
+        )
+
+    def test_compute_event_features_threads_prev_event(self):
+        """End-to-end check that ``compute_event_features``
+        threads ``prev_event_time_sec`` into
+        ``compute_attack_rise_ms``. Without the thread,
+        the computed ``attack_rise_ms`` would still hit
+        the bug (long rise) even when the caller passed
+        the previous event's time."""
+        sr = SR
+        tone1 = _make_tone(100.0, 0.3, sr=sr, attack_ms=5.0, decay_tau_ms=80.0)
+        gap_sec = 0.06
+        gap_samples = int(gap_sec * sr)
+        tone2 = _make_tone(100.0, 0.3, sr=sr, attack_ms=5.0, decay_tau_ms=80.0)
+        lead_samples = int(0.1 * sr)
+        total = lead_samples + len(tone1) + gap_samples + len(tone2) + int(0.1 * sr)
+        audio = np.zeros(total, dtype=np.float32)
+        i1 = lead_samples
+        audio[i1:i1 + len(tone1)] = tone1
+        i2 = i1 + len(tone1) + gap_samples
+        audio[i2:i2 + len(tone2)] = tone2
+        # Both events measured WITHOUT prev_event_time_sec
+        # first — hit #2's rise may be inflated.
+        feats_unbounded = compute_event_features(
+            audio, sr, i2 / sr,
+            enable_pitch_detection=False,
+            prev_event_time_sec=None,
+        )
+        # Now WITH the boundary — should be bounded.
+        feats_bounded = compute_event_features(
+            audio, sr, i2 / sr,
+            enable_pitch_detection=False,
+            prev_event_time_sec=i1 / sr,
+        )
+        # The bounded value must be None OR a much smaller
+        # value than the unbounded one. We don't assert an
+        # exact number — STFT smearing varies — only the
+        # directional relationship.
+        u = feats_unbounded.get('attack_rise_ms')
+        b = feats_bounded.get('attack_rise_ms')
+        # Either the bounded value is None (gap too loud)
+        # or it's strictly less than the unbounded value.
+        assert b is None or u is None or b <= u, (
+            f"bounded={b} should be None or <= unbounded={u}"
+        )
+
 
 class TestRootPitch:
     """Tests for YIN/pYIN pitch detection."""

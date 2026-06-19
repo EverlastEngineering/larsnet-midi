@@ -880,3 +880,24 @@ Three coordinated changes address the silent fallback / missing-context problem:
   - User's real audio: confirm the very-close duplicate events the user described are correctly identified.
 - **Estimated scope**: 2-3 hours. New function (~80 lines), schema addition (10 fields), the test class (~5 tests), and integration with `onset_filtering.py:621` chain. Plus a quick UI check that the new setting shows up in the advanced modal.
 - **Files touched** (planned): `stems_to_midi/analysis_core/onset_filtering.py` (new function + integration), `webui/settings_schema.py` (new settings per stem), `stems_to_midi/test_onset_filtering.py` (new test class).
+
+---
+
+## Bug: attack_rise_ms unbounded by previous event (2026-06-18, snare)
+
+- **Status**: Open
+- **Priority**: High
+- **Description**: On snare (and any stem with sustained rings + dense hits), `compute_attack_rise_ms` walks backward from the current event's peak looking for the 10% point. When the previous hit is still ringing, the envelope stays above 10% of the new peak all the way back into the previous hit's body. The 10% point lands far back — effectively at the previous hit's valley or attack — so `attack_rise_ms` ends up ≈ `inter_onset_ms` instead of measuring the new hit's actual rise.
+- **Symptom (user-reported, project 4 funk snare, ~2.0–3.0s region)**: 6 detected hits visible on the waveform. Only the first event has a short attack_rise_ms (a real number, e.g. ~10ms). The remaining 5 events report `attack_rise_ms` values that are effectively equal to their `duration_ms` / `inter_onset_ms` — they're measuring from the start of the previous hit, not the new attack.
+- **Expected Behavior**: For each new hit, `attack_rise_ms` should measure from THAT hit's own onset to its own peak — bounded by the previous event so a ringing tail doesn't stretch the rise time across hits.
+- **Actual Behavior**: The walk-backward step in `stems_to_midi/event_features.py:compute_attack_rise_ms` has no upper bound on how far back it can go. The 10% point gets pinned to wherever the envelope first drops below 10% of the new peak — which, when the previous hit is ringing, is inside the previous hit's body or attack.
+- **Root Cause**: `compute_attack_rise_ms` takes `event_time_sec` but no `prev_event_time_sec` boundary. `compute_event_features` threads `next_event_time_sec` (for `duration_ms` / `duration_to_valley_ms` / `inter_onset_ms`) but the symmetric `prev_event_time_sec` was never wired. `pga_event_builder.py:detect_pga_events` finds the next event for each candidate but never the previous.
+- **Fix Plan**:
+  - Add `prev_event_time_sec: Optional[float] = None` parameter to `compute_attack_rise_ms`. When provided, bound the backward walk to `[prev_event_time_sec, peak]`. If envelope at `prev_event_time_sec` is already above 10% of the new peak, return `None` (can't bracket the rise — the previous hit is too loud in the gap).
+  - Add `prev_event_time_sec: Optional[float] = None` parameter to `compute_event_features`. Thread it to `compute_attack_rise_ms`. Mirror the existing `next_event_time_sec` wiring.
+  - Update `pga_event_builder.detect_pga_events` to find both prev and next KEPT events for each candidate. Use the previous-event-time for the new `prev_event_time_sec` arg, the next-event-time for the existing `next_event_time_sec` arg. FILTERED events are skipped (same as today for next_event).
+  - Add tests in `stems_to_midi/test_event_features.py`:
+    - `test_attack_rise_respects_prev_event`: synthetic two-hit sequence with no silence between; first hit's full decay stays above 10% of the second hit's peak. Without `prev_event_time_sec`, rise walks back to first hit's attack (large value). With `prev_event_time_sec` set, rise returns None (or the true new-attack rise if the gap valley is below 10%).
+    - `test_attack_rise_with_prev_boundary_clamps_walk`: explicit valley between hits — confirms rise measures only the new attack's own rise.
+- **Files**: `stems_to_midi/event_features.py` (`compute_attack_rise_ms`, `compute_event_features`), `stems_to_midi/pga_event_builder.py` (`detect_pga_events`), `stems_to_midi/test_event_features.py` (new test class)
+- **Downstream impact**: The `attack_rise_max_ms` filter (2026-06-17, third PGA pass) reads `attack_rise_ms` per event. After this fix, snare events that previously had inflated `attack_rise_ms` (and were falsely FILTERED by the attack_rise ceiling) will get correct, small values and be KEPT — the snare-tail filter will become more permissive in a good way. Conversely, events that previously got a coincidentally-small rise value by landing close to a deep valley may now correctly report a longer rise and get FILTERED — the filter becomes more accurate, not more lenient.
