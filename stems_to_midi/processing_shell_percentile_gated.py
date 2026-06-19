@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Dict, List, Union
 
 from .pga_event_builder import  _build_pga_events_with_filter
+from .energy_detection_core import calculate_energy_envelope
 
 
 def process_percentile_gated(
@@ -80,6 +81,45 @@ def process_percentile_gated(
         audio_mono, sr, config, stem_type=stem_type,
     )
 
+    # 2026-06-19: Build envelope_data for the WebUI's
+    # detection analysis waveform viewer. The legacy energy
+    # pipeline in processing_shell.py computes this from
+    # the same calculate_energy_envelope function. The PGA
+    # pipeline has its own contrast envelope internally
+    # but the WebUI's renderer is calibrated to the energy
+    # envelope's shape/scale, so we use the same function
+    # here. Minimal change: ~10 lines, no test impact
+    # (envelope saving is a side effect). User explicitly
+    # requested this over Option A (PGA contrast envelope)
+    # because the contrast envelope's shape is too different
+    # from the energy envelope for the WebUI to render
+    # correctly. (energy envelope: peak-hold, sharp
+    # transients, fast time resolution. contrast envelope:
+    # broadband sum, very different vertical scale and
+    # shape, would render as a flat-ish blob.)
+    stem_cfg = config.get(stem_type, {}) or {}
+    envelope_method = stem_cfg.get('energy_method', 'peak_hold')
+    envelope_peak_hold_ms = float(stem_cfg.get('peak_hold_ms', 3.0))
+    envelope_hop = config.get('onset_detection', {}).get('hop_length', 512)
+    env_times, env_energy = calculate_energy_envelope(
+        audio_mono, sr,
+        frame_length=2048,
+        hop_length=envelope_hop,
+        method=envelope_method,
+        peak_hold_ms=envelope_peak_hold_ms,
+    )
+    # Match the legacy shape: 'times'/'left'/'right' keys,
+    # where left/right are the same mono envelope (PGA
+    # detector runs on mono, no stereo channel separation).
+    # The WebUI renders whichever channel it has; duplicating
+    # the mono envelope into both fields is the safe choice
+    # for downstream consumers that may key on either.
+    envelope_data = {
+        'times': env_times,
+        'left': env_energy,
+        'right': env_energy,
+    }
+
     # Build MIDI events from pga_kept
     note = int(getattr(drum_mapping, stem_type))
     timing_offset = config.get(stem_type, {}).get('timing_offset', 0.0)
@@ -113,7 +153,7 @@ def process_percentile_gated(
         'sensitive_onset_data': [],
         'spectral_onset_data': [],
         'spectral_config': None,
-        'envelope_data': None,
+        'envelope_data': envelope_data,
         'pga_onset_data': list(pga_raw),
     }
 
