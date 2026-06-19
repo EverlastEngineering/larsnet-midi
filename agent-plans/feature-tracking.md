@@ -79,3 +79,12 @@
   - `test_inter_onset_skips_filtered_event` — `_find_prev_next_kept` returns the next KEPT event's time, not the FILTERED event's time.
   - `test_features_attached_to_kept_and_filtered_events` — the post-filter pass attaches the per-event feature keys to BOTH KEPT and FILTERED events (so the sidecar can show "why was this dropped" with actual values).
 - **Files**: `stems_to_midi/pga_event_builder.py` (extract `_find_prev_next_kept`, `_compute_features_for_filtered_events`; remove per-event feature block from `detect_pga_events`; add post-filter pass in `_build_pga_events_with_filter` and `build_pga_events`); `stems_to_midi/processing_shell.py` (sidecar source switched to post-filter list); `stems_to_midi/tests/test_pga_event_builder.py` (new `TestPostFilterFeatureRecompute` class).
+
+## Feature: Hihat open/closed via forward-decay slope (post-hoc walk)
+- **Status**: In Progress
+- **Priority**: High
+- **Description**: Surface the broadband contrast envelope to the post-filter pipeline (cached to `{stem}.contrast_envelope.npz`), walk each KEPT event's envelope forward from its peak frame, and record (1) per-frame avg dB-slope, (2) per-frame avg linear-slope, (3) pct_at_stop — where the envelope ended up as a fraction of peak, and (4) the "ring-start" backward walk. The user will set a single threshold slider for open vs closed in the WebUI; the default value is **2.0 dB/frame** (population p50 across all KEPT hihats in the Taylor Swift test project).
+- **Discriminator signal**: forward-decay walk hits another KEPT event before the envelope drops to 50% of peak — i.e., the ring is still loud enough that the next strike cuts in. Closed hihats reliably cross to ~49%; open hihats get blocked at 70-100%+ of peak. Slope alone separates cleanly in the dB-domain (closed 3.4-3.6, open 0.7) and is consistent in the linear-domain (closed 0.30, open 0.08) — no log quirk.
+- **Files**: `stems_to_midi/midi.py` (`save_contrast_envelope`, `load_contrast_envelope`), `stems_to_midi/pga_event_builder.py` (return debug dict with envelope; per-event walk fields added), `stems_to_midi/processing_shell_percentile_gated.py` (forward `pga_envelope_data` to CLI), `stems_to_midi_cli.py` (save npz after analysis), `scripts/walk_kept_events.py` (post-hoc walk tool, exploratory).
+- **Follow-up**: WebUI slider for the slope threshold; production `classify_hihat_by_decay_slope` rule that consumes the per-event slope fields from the sidecar.
+

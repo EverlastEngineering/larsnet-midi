@@ -15,6 +15,12 @@ from typing import Dict, List, Union, Optional
 # Import helper function for event preparation
 from .analysis_core import prepare_midi_events_for_writing
 
+# 2026-06-19: hihat open/closed classifier (used by save_analysis_sidecar
+# to stamp hihat_state on every hihat event so the sidecar and MIDI rule
+# both consume the same signal. Driven by PGA broadband-envelope decay
+# slope (decay_slope_db); falls back to geomean+sustain for older sidecars).
+from .note_classification_core import classify_hihat_notes
+
 # Import contract for validation
 try:
     pass
@@ -28,7 +34,9 @@ __all__ = [
     'save_analysis_sidecar',
     'load_analysis_sidecar',
     'save_envelope_data',
-    'load_envelope_data'
+    'load_envelope_data',
+    'save_contrast_envelope',
+    'load_contrast_envelope',
 ]
 
 
@@ -501,6 +509,34 @@ def _serialize_pga_events(pga_events: list) -> list:
             'decay_envelope_energy': _round_value(ev.get('decay_envelope_energy'), 2),
             'decay_col_min_median_db': _round_value(ev.get('decay_col_min_median_db'), 2),
             'inter_onset_ms': _round_value(ev.get('inter_onset_ms'), 2),
+            # Peak bases (2026-06-19): STFT-frame indices of the
+            # left/right valley around each peak, plus the
+            # right-base-minus-peak gap in frames and ms. The
+            # gap is the candidate open/closed hihat
+            # discriminator. Diagnostic only — not used by any
+            # classifier yet.
+            'left_base_frame': ev.get('left_base_frame'),
+            'right_base_frame': ev.get('right_base_frame'),
+            'right_base_minus_peak_frames': ev.get('right_base_minus_peak_frames'),
+            'right_base_minus_peak_ms': _round_value(
+                ev.get('right_base_minus_peak_ms'), 2
+            ),
+            # Peak widths (2026-06-19): scipy.peak_widths at
+            # rel_height=0.9. Bounded to a 10% slice around the
+            # peak. left_ips/right_ips are floating-point frame
+            # indices; attack_frames/decay_frames are the
+            # per-event split. For hihat open vs closed,
+            # decay_ms is the candidate discriminator.
+            'peak_width_left_ip_frame': _round_value(
+                ev.get('peak_width_left_ip_frame'), 4
+            ),
+            'peak_width_right_ip_frame': _round_value(
+                ev.get('peak_width_right_ip_frame'), 4
+            ),
+            'attack_frames': _round_value(ev.get('attack_frames'), 4),
+            'decay_frames': _round_value(ev.get('decay_frames'), 4),
+            'attack_ms': _round_value(ev.get('attack_ms'), 2),
+            'decay_ms': _round_value(ev.get('decay_ms'), 2),
             # Toms cleanup (2026-06-11): filter metadata.
             # FILTERED events are kept in the sidecar so the
             # WebUI can render them faded; the MIDI output
@@ -515,6 +551,28 @@ def _serialize_pga_events(pga_events: list) -> list:
             'midi_velocity': ev.get('midi_velocity'),
             'pga_filter_config': ev.get('pga_filter_config'),
             'filter_reason': ev.get('filter_reason'),
+            # 2026-06-19: per-event broadband-envelope walk
+            # (open/closed hihat discriminator). The PGA detector
+            # computed a contrast envelope for the whole stem;
+            # we walk it forward and backward from each event's
+            # peak frame and stamp these fields. The hihat
+            # classifier (note_classification_core) reads
+            # ``decay_slope_db`` against
+            # ``hihat.open_decay_slope_max`` to decide
+            # open vs closed. The other fields are diagnostic
+            # surface for the WebUI tooltip.
+            'decay_slope_db': _round_value(ev.get('decay_slope_db'), 4),
+            'decay_slope_linear': _round_value(ev.get('decay_slope_linear'), 4),
+            'decay_frames_walked': ev.get('decay_frames_walked'),
+            'decay_pct_at_stop': _round_value(ev.get('decay_pct_at_stop'), 4),
+            'decay_stop_reason': ev.get('decay_stop_reason'),
+            # 2026-06-19: hihat open/closed classification (set by
+            # classify_hihat_notes above for the hihat stem only).
+            # WebUI tooltips + MIDI rule both read this. 'open' /
+            # 'closed' / None (no rule fired for non-hihat stems).
+            'hihat_state': ev.get('hihat_state'),
+            'onset_crossed': ev.get('onset_crossed'),
+            'onset_cross_ms': _round_value(ev.get('onset_cross_ms'), 2),
         })
     return out
 
@@ -715,6 +773,20 @@ def save_analysis_sidecar(
         # midiconfig.yaml. This is the
         # "yaml = config, sidecar = output" architecture rule.
         pga_onset_data = analysis.get('pga_onset_data', [])
+
+        # 2026-06-19: Stamp hihat_state on every hihat event so the
+        # sidecar and the MIDI rule consume the same signal. The
+        # classifier runs on both lists (events_configured and
+        # pga_onset_data) because the sidecar persists them as
+        # separate arrays but they are two views of the same physical
+        # hihat hits. Mutates in place — both arrays point to the
+        # same dicts in pga_event_builder's output, so classifying
+        # one and then the other is idempotent.
+        if stem_type == 'hihat' and config is not None and pga_onset_data:
+            classify_hihat_notes(pga_onset_data, config, force_reclassify=True)
+        if stem_type == 'hihat' and config is not None and configured_events:
+            classify_hihat_notes(configured_events, config, force_reclassify=True)
+
         pga_events = _serialize_pga_events(pga_onset_data) if pga_onset_data else []
 
         # Count totals
@@ -978,5 +1050,116 @@ def load_envelope_data(
         'sr': int(data['sr']),
         'hop_length': int(data['hop_length']),
         'method': str(data['method'])
+    }
+
+
+# Contrast envelope (2026-06-19): the broadband contrast envelope
+# built by detect_percentile_gated_broad_attacks — sum of
+# bin-level (s_db - floor) over the [broad_min_hz, broad_max_hz]
+# band, where floor is the per-bin p5 noise. Different from the
+# L/R RMS envelope saved above (which is the WebUI's waveform
+# visualization). Saved so post-hoc tools can walk the
+# envelope around each KEPT event's frame without re-running
+# detection. Compressed with savez_compressed (~30-50KB per
+# stem for typical 4-minute songs).
+#
+# The contrast envelope is the basis for:
+#   - pga_event_builder's per-event decay features
+#   - the open/closed hihat walk diagnostic
+#   - any future per-event "shape of the ring" analysis
+#
+# Filename: {base}.{stem_type}.contrast_envelope.npz (distinct
+# from {base}.{stem_type}.envelope.npz so both can coexist
+# alongside the L/R RMS WebUI viz data).
+
+
+def save_contrast_envelope(
+    contrast_envelope_by_stem: Dict[str, Dict],
+    midi_path: Union[str, Path],
+) -> List[Path]:
+    """
+    Save per-stem broadband contrast envelope arrays as .npz
+    files (2026-06-19). Used by the open/closed hihat walk
+    diagnostic — see :func:`save_envelope_data` for the L/R RMS
+    WebUI viz counterpart.
+
+    Each stem gets its own file:
+    ``{base}.{stem_type}.contrast_envelope.npz`` containing:
+        - ``envelope``: 1D float32 array, broadband contrast
+          envelope at hop=256 sample stride (PGA STFT).
+        - ``sr``: int, sample rate.
+        - ``hop_length``: int, hop in samples (256 for PGA).
+        - ``n_fft``: int, FFT size used (1024 for PGA).
+
+    Args:
+        contrast_envelope_by_stem: Dict mapping stem_type to
+            a dict with keys: envelope, sr, hop_length, n_fft.
+        midi_path: Path to corresponding MIDI file (used to
+            derive output paths).
+
+    Returns:
+        List of paths to created .npz files.
+    """
+    midi_path = Path(midi_path)
+    base = midi_path.with_suffix('')
+    saved_paths: List[Path] = []
+
+    for stem_type, env_data in contrast_envelope_by_stem.items():
+        if env_data is None:
+            continue
+        envelope = env_data.get('envelope')
+        if envelope is None:
+            continue
+        npz_path = Path(f"{base}.{stem_type}.contrast_envelope.npz")
+        np.savez_compressed(
+            npz_path,
+            envelope=np.asarray(envelope, dtype=np.float32),
+            sr=np.array(env_data.get('sr', 44100)),
+            hop_length=np.array(env_data.get('hop_length', 256)),
+            n_fft=np.array(env_data.get('n_fft', 1024)),
+        )
+        saved_paths.append(npz_path)
+
+    if saved_paths:
+        # Filename is {base}.{stem_type}.contrast_envelope.npz;
+        # the stem name is the segment between the last '.' and
+        # '.contrast_envelope'. Split on the suffix to recover it.
+        stem_names = [
+            p.name.replace('.contrast_envelope.npz', '').split('.')[-1]
+            for p in saved_paths
+        ]
+        print(
+            f"  Saved contrast envelopes: "
+            f"{', '.join(stem_names)} ({len(saved_paths)} files)"
+        )
+
+    return saved_paths
+
+
+def load_contrast_envelope(
+    midi_path: Union[str, Path],
+    stem_type: str,
+) -> Optional[Dict]:
+    """
+    Load the broadband contrast envelope for a single stem
+    (2026-06-19). See :func:`save_contrast_envelope`.
+
+    Returns:
+        Dict with keys: envelope, sr, hop_length, n_fft.
+        Returns None if file not found.
+    """
+    midi_path = Path(midi_path)
+    base = midi_path.with_suffix('')
+    npz_path = Path(f"{base}.{stem_type}.contrast_envelope.npz")
+
+    if not npz_path.exists():
+        return None
+
+    data = np.load(npz_path, allow_pickle=False)
+    return {
+        'envelope': data['envelope'],
+        'sr': int(data['sr']),
+        'hop_length': int(data['hop_length']),
+        'n_fft': int(data['n_fft']),
     }
 

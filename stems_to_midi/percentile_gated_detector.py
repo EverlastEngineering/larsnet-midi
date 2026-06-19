@@ -51,7 +51,7 @@ sustained-ringing FP has only the first.
 Public entry point: :func:`detect_percentile_gated_broad_attacks`.
 """
 import numpy as np
-from scipy.signal import find_peaks
+from scipy.signal import find_peaks, peak_widths
 from typing import Tuple
 
 from .spectral_transient_core import timed
@@ -430,6 +430,29 @@ def _detect_percentile_gated_broad_attacks_impl(
         prominence=0,  # require any prominence > 0 — kills pure plateau/flat-top FPs
     )
 
+    # Peak widths (2026-06-19): scipy.peak_widths measures the
+    # horizontal extent of each peak at a configurable relative
+    # height. rel_height=0.9 means "the width at 10% below the
+    # peak's top" — this is bounded to a tight slice around the
+    # peak, unlike left_bases/right_bases (which can travel to a
+    # distant baseline if no real valley exists nearby). The
+    # resulting left_ips/right_ips are floating-point frame
+    # indices, so the per-event attack/decay split is sub-frame
+    # accurate. For hihat open vs closed, decay_frames is the
+    # candidate discriminator: closed hits have a tight
+    # right_ips, open hits have a long ring pushing the
+    # right_ips further out. Safe to call with an empty peaks
+    # array — scipy returns empty arrays in that case.
+    if len(peaks) > 0:
+        widths, width_heights, left_ips, right_ips = peak_widths(
+            envelope, peaks, rel_height=0.9,
+        )
+    else:
+        widths = np.array([])
+        width_heights = np.array([])
+        left_ips = np.array([])
+        right_ips = np.array([])
+
     # Step 6: sub-frame refinement + Hann-bias correction.
     event_times = [
         _refine_peak_time(p, envelope, times, strike_offset_sec)
@@ -444,6 +467,29 @@ def _detect_percentile_gated_broad_attacks_impl(
         'envelope': envelope,
         'peaks': peaks,
         'prominences': props.get('prominences', np.array([])),
+        # Peak bases (2026-06-19): indices into the envelope
+        # array marking the left/right "valley" of each peak —
+        # the lowest envelope point on each side before the
+        # peak's prominence cone closes. Populated by scipy
+        # even when prominence=0 is passed; the prominence
+        # values themselves are 0, but the base indices are
+        # still real and reflect the natural valley around
+        # the peak. Diagnostic only — used to compute
+        # right_base_minus_peak_ms in the sidecar.
+        'left_bases': props.get('left_bases', np.array([])),
+        'right_bases': props.get('right_bases', np.array([])),
+        # Peak widths (2026-06-19): scipy.peak_widths at
+        # rel_height=0.9. Bounded to a tight 10% slice around
+        # each peak, so unlike left_bases/right_bases the
+        # measurements can't run off to a distant baseline.
+        # left_ips / right_ips are floating-point frame
+        # indices. Downstream pga_event_builder turns them
+        # into per-event attack/decay frame splits for the
+        # hihat open/closed discrimination test.
+        'peak_widths': widths,
+        'peak_width_heights': width_heights,
+        'peak_left_ips': left_ips,
+        'peak_right_ips': right_ips,
         # Noise-gate summary (2026-06-15) — exposed for the
         # end-of-detect summary print and future WebUI
         # surfacing. gate_db is the post-cap gate value

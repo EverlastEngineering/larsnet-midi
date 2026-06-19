@@ -998,6 +998,33 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         cli_flag='--hihat-open-sustain-ms',
     ),
 
+    # 2026-06-19: broadband-envelope decay-slope classifier for
+    # open/closed hihat. ``decay_slope_db`` is the mean per-frame
+    # dB drop over the forward walk (positive = env dropped, larger
+    # = sharper decay → closed hihat). An event with
+    # ``decay_slope_db < threshold`` is open — its ring-out held
+    # loud enough that the next strike cut in before the envelope
+    # dropped to 50% of peak. Default 2.0 dB/frame is the
+    # population p50 across all KEPT hihats in the Taylor Swift
+    # project (p10=2.02, p90=3.41, closed hits 3.4-3.6, open
+    # hits 0.7). The fallback 2.0 is intentionally conservative
+    # — raise it to favor "open" calls, lower it to favor "closed".
+    SettingDefinition(
+        key='hihat_open_decay_slope_max',
+        type=SettingType.FLOAT,
+        default=2.0,
+        label='Open Hi-Hat Decay Slope Max',
+        description='Maximum broadband-envelope decay slope (dB/frame) for an open hihat hit. Closed hihats decay fast (slope 3.4-3.6) — open hihats ring out so the next strike cuts in before the envelope drops, giving a shallow slope (0.7-1.4). Events with decay_slope_db < threshold are classified open. Default 2.0 is the population p50 across all KEPT hihats in the Taylor Swift project.',
+        category=SettingCategory.HIHAT,
+        ui_control=UIControl.SLIDER,
+        min_value=0.0,
+        max_value=10.0,
+        step=0.1,
+        unit='dB/frame',
+        yaml_path=['hihat', 'open_decay_slope_max'],
+        cli_flag='--hihat-open-decay-slope-max',
+    ),
+
     SettingDefinition(
         key='hihat_geomean_threshold',
         type=SettingType.FLOAT,

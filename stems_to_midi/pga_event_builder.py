@@ -87,6 +87,8 @@ columns always reflect the post-filter neighbor set.
 """
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
+import math
+
 import numpy as np
 
 from .percentile_gated_detector import detect_percentile_gated_broad_attacks
@@ -112,6 +114,7 @@ __all__ = [
     'apply_pga_decay_col_min_filter',
     'apply_attack_rise_max_filter',
     '_build_pga_events_with_filter',
+    '_compute_walk_features_for_filtered_events',
     '_resolve_max_floor_gate_db',
     '_resolve_pga_abs_envelope_threshold',
     '_resolve_pga_detector_param',
@@ -119,9 +122,45 @@ __all__ = [
 ]
 
 
-class PGAEventBuildError(RuntimeError):
-    """Raised when the PGA event builder cannot produce a valid
-    event list (e.g. an internal invariant is violated)."""
+# ---------------------------------------------------------------------------
+# Envelope walk — open/closed hihat discriminator (2026-06-19)
+# ---------------------------------------------------------------------------
+# The PGA detector computes a broadband contrast envelope over the
+# whole stem (see percentile_gated_detector._broad_attack_envelope).
+# At detect time we cache that envelope on the debug dict. For every
+# detected event, we walk the envelope in two directions from the
+# peak frame and record the dB-domain and linear-domain slopes, the
+# pct_at_stop (where the forward walk ended as a fraction of peak),
+# and the onset cross status (whether the envelope drops below the
+# back-stop threshold within a tight backward window).
+#
+# These fields are baked into events_pga in the sidecar so the
+# hihat_state classifier (note_classification_core.classify_hihat_notes)
+# can consume them at rebuild time without re-running the detector.
+# The WebUI's slope_threshold slider (settings_schema.hihat_slope_threshold)
+# controls the cut between closed (steep slope, clean decay) and open
+# (shallow slope, ring-out before next hit).
+
+# Forward (decay) walk stops at one of:
+#   * envelope drops to DECAY_PCT_THRESHOLD of peak (clean ring-out), or
+#   * another KEPT event's peak frame is hit (next hit cuts in), or
+#   * DECAY_MAX_FRAMES reached (~1.16s — long-ringing open hihat).
+DECAY_PCT_THRESHOLD = 0.50
+DECAY_MAX_FRAMES = 200
+
+# Backward (onset) walk stops at one of:
+#   * envelope drops to ONSET_PCT_THRESHOLD of peak (clean pre-strike silence), or
+#   * another KEPT event's peak frame is hit, or
+#   * ONSET_MAX_FRAMES reached (~35ms — hihat attacks are short).
+# Onset is walked on the RAW envelope (not rolling-mean-smoothed) so
+# the silence floor before a strike is correctly captured — smoothing
+# pads 1-2 frames out and stops us crossing.
+ONSET_PCT_THRESHOLD = 0.20
+ONSET_MAX_FRAMES = 6
+
+# dB-domain floor for log(0) — same as midi.py. We use this when
+# averaging per-frame dB deltas so a true zero doesn't poison the mean.
+_DB_FLOOR = 1e-9
 
 
 def _resolve_max_floor_gate_db(
@@ -535,6 +574,21 @@ def detect_pga_events(
     _env = _pga_debug.get('envelope') if _pga_debug else None
     _peaks = _pga_debug.get('peaks') if _pga_debug else None
     _proms = _pga_debug.get('prominences') if _pga_debug else None
+    # Peak bases (2026-06-19): frame indices of the left/right
+    # valley around each peak. Populated even when prominence=0
+    # is passed to find_peaks. We add the per-event gap
+    # (right_base - peak) in STFT frames + ms for downstream
+    # hihat open/closed exploration.
+    _lbases = _pga_debug.get('left_bases') if _pga_debug else None
+    _rbases = _pga_debug.get('right_bases') if _pga_debug else None
+    # Peak widths (2026-06-19): scipy.peak_widths at
+    # rel_height=0.9. Bounded to a 10% slice around the peak,
+    # so unlike left_bases/right_bases the measurements don't
+    # run off to a distant baseline. left_ips / right_ips are
+    # floating-point frame indices; we round to int and
+    # compute the per-event attack/decay frame split.
+    _lips = _pga_debug.get('peak_left_ips') if _pga_debug else None
+    _rips = _pga_debug.get('peak_right_ips') if _pga_debug else None
 
     # Step 2: Build per-event diagnostic dicts. The IQR threshold
     # is recomputed here for symmetry with the algorithm — see
@@ -545,6 +599,13 @@ def detect_pga_events(
         _abs_thr = _q3 + 2.5 * _iqr
     else:
         _abs_thr = None
+
+    # PGA STFT hop (samples) — must match the standard PGA
+    # detector call (n_fft=1024, hop=256). Used to convert
+    # frame-index gaps into ms. See spectral_transient_core
+    # DEFAULT_STFT_PARAMS.
+    _pga_hop_samples = 256
+    _pga_hop_ms = _pga_hop_samples / 44100.0 * 1000.0  # ≈5.804ms
 
     pga_onset_data: List[Dict[str, Any]] = []
     for i, t in enumerate(pga_event_times):
@@ -560,6 +621,38 @@ def detect_pga_events(
                 ev['envelope_value'] = float(_env[p])
             if _proms is not None and i < len(_proms):
                 ev['prominence'] = float(_proms[i])
+            if _lbases is not None and i < len(_lbases):
+                ev['left_base_frame'] = int(_lbases[i])
+            if _rbases is not None and i < len(_rbases):
+                ev['right_base_frame'] = int(_rbases[i])
+                # The gap from the peak to the right valley is
+                # a candidate open/closed hihat discriminator:
+                # closed hits have a tight valley close to the
+                # peak; open hits have the right valley pushed
+                # out by the long ring. See 2026-06-19
+                # open-hihat-detection-2026-06.md.
+                ev['right_base_minus_peak_frames'] = int(_rbases[i]) - p
+                ev['right_base_minus_peak_ms'] = (
+                    ev['right_base_minus_peak_frames'] * _pga_hop_ms
+                )
+            # Peak widths (2026-06-19): peak_widths(rel_height=0.9)
+            # gives a tight, bounded measurement of how wide the
+            # peak is. left_ips/right_ips are floating-point
+            # frame indices — attack_frames is "frames from left
+            # intercept to peak", decay_frames is "frames from
+            # peak to right intercept". For hihat open vs
+            # closed, decay_frames is the candidate
+            # discriminator (open rings longer → right_ips
+            # pushes further out).
+            if _lips is not None and _rips is not None and i < len(_lips) and i < len(_rips):
+                li = float(_lips[i])
+                ri = float(_rips[i])
+                ev['peak_width_left_ip_frame'] = li
+                ev['peak_width_right_ip_frame'] = ri
+                ev['attack_frames'] = float(p) - li
+                ev['decay_frames'] = ri - float(p)
+                ev['attack_ms'] = (float(p) - li) * _pga_hop_ms
+                ev['decay_ms'] = (ri - float(p)) * _pga_hop_ms
         if _abs_thr is not None:
             ev['iqr_threshold'] = float(_abs_thr)
         pga_onset_data.append(ev)
@@ -641,6 +734,237 @@ def detect_pga_events(
     #     ``_build_pga_events_with_filter`` / the WebUI
     #     re-filter path own the feature pass.
     return pga_onset_data
+
+
+def _walk_event_envelope(
+    envelope: np.ndarray,
+    peak_frame: int,
+    direction: int,
+    pct_threshold: float,
+    stop_frames: set,
+    max_frames: int,
+) -> tuple[int, str, float, float, float | None]:
+    """Walk a PGA contrast envelope from ``peak_frame`` in ``direction``
+    (+1 forward / -1 backward) and return per-step statistics that
+    discriminate open vs closed hihats.
+
+    The walk stops at the first of:
+      - envelope drops to ``pct_threshold * peak_value`` (clean ring-out
+        forward, clean pre-strike silence backward),
+      - a frame in ``stop_frames`` is hit (another KEPT event's peak
+        frame — the next strike cuts in forward, or a prior strike is
+        still ringing backward),
+      - ``max_frames`` is reached (cap — typically open hihat's long
+        ring forward, or short hihat attack backward).
+
+    Returns
+    -------
+    frames_walked : int
+        Number of frames advanced. ``0`` means we never moved.
+    stop_reason : str
+        ``'normal'`` (crossed the threshold), ``'hit_other_event'``
+        (blocked by a neighbor KEPT event), ``'max_walk'`` (capped),
+        ``'no_peak'`` (peak_value <= 0).
+    avg_db_per_frame : float
+        Mean per-frame dB delta across the walked window.
+        Forward decay: positive number = env dropped below peak.
+        Backward attack: positive number = env rose up to peak.
+        Computed in log space, so high-amplitude steps near the peak
+        dominate (the slope "looks steep" early, "shallow" near the
+        floor). See ``avg_linear_per_frame`` for the log-free version.
+    avg_linear_per_frame : float
+        Mean per-frame LINEAR delta across the walked window,
+        normalized to peak_value so the result is in (0, 1] for forward
+        decay and [-1, 0) for backward attack. No log quirk; for
+        comparison and population statistics.
+    pct_at_stop : float | None
+        Where we ended up, as a fraction of peak_value
+        (``env[final] / peak_value``). For ``'normal'`` ≈
+        ``pct_threshold``. For ``'hit_other_event'`` / ``'max_walk'``
+        this is the residual — how far down (or up, backward) we got
+        before being cut off. ``None`` if peak_value is zero.
+    """
+    n = len(envelope)
+    peak_val = float(envelope[peak_frame]) if 0 <= peak_frame < n else 0.0
+    if peak_val <= 0:
+        return 0, "no_peak", 0.0, 0.0, None
+    peak_db = 20.0 * math.log10(max(peak_val, _DB_FLOOR))
+
+    threshold = pct_threshold * peak_val
+    last_step = max_frames
+    last_reason = "max_walk"
+    for step in range(1, max_frames + 1):
+        f_next = peak_frame + direction * step
+        if f_next < 0 or f_next >= n:
+            last_step = step
+            last_reason = "edge"
+            break
+        if f_next in stop_frames:
+            last_step = step
+            last_reason = "hit_other_event"
+            break
+        v = float(envelope[f_next])
+        if v <= threshold:
+            last_step = step
+            last_reason = "normal"
+            break
+
+    # pct_at_stop — sample at the final walked frame (clamped into
+    # bounds; if last_reason == 'edge' the raw frame may be off the
+    # end of the envelope).
+    f_final = peak_frame + direction * last_step
+    if 0 <= f_final < n:
+        pct_at_stop = float(envelope[f_final] / peak_val)
+    else:
+        pct_at_stop = None
+
+    # Walked window: peak_frame+direction .. peak_frame+direction*last_step.
+    # Forward: delta = peak_db - v_db (positive if env dropped).
+    # Backward: delta = v_db - peak_db (positive if env rose up to peak).
+    # Sign-convention matches the dB-domain interpretation of
+    # "how loud is the ring" / "how loud was the silence".
+    deltas_db: List[float] = []
+    deltas_lin: List[float] = []
+    for step in range(1, last_step + 1):
+        f_next = peak_frame + direction * step
+        if f_next < 0 or f_next >= n:
+            break
+        v = float(envelope[f_next])
+        v_db = 20.0 * math.log10(max(v, _DB_FLOOR))
+        if direction > 0:
+            deltas_db.append(peak_db - v_db)
+            deltas_lin.append((peak_val - v) / peak_val)
+        else:
+            deltas_db.append(v_db - peak_db)
+            deltas_lin.append((v - peak_val) / peak_val)
+    if not deltas_db:
+        return last_step, last_reason, 0.0, 0.0, pct_at_stop
+    avg_db = float(sum(deltas_db) / len(deltas_db))
+    avg_lin = float(sum(deltas_lin) / len(deltas_lin))
+    return last_step, last_reason, avg_db, avg_lin, pct_at_stop
+
+
+def _compute_walk_features_for_filtered_events(
+    events: List[Dict[str, Any]],
+    envelope: Optional[np.ndarray],
+    sr: int,
+    hop_samples: int = 256,
+) -> None:
+    """Attach the per-event broadband-envelope walk features to every
+    event in ``events``. Mutates each event in place.
+
+    The walk fields are the open/closed hihat discriminator:
+
+      - ``decay_slope_db``        : mean per-frame dB drop over the
+        forward walk window (positive = env dropped, larger = sharper
+        decay → closed hihat). Forward walk: 50% threshold, ≤200
+        frames (~1.16s) cap, stops at next KEPT event.
+      - ``decay_slope_linear``    : same as above but in linear units
+        (peak-fraction lost per frame, in (0, 1]). No log quirk.
+      - ``decay_frames_walked``   : frames advanced before stopping.
+        Always populated; the longest walks (200 frames) are open hihats
+        that get blocked by a neighbor KEPT event or hit the cap.
+      - ``decay_pct_at_stop``     : envelope value at the stop frame
+        as a fraction of peak. Open hihats typically sit at 0.7-1.0+
+        (next hit cut in); closed hihats reliably cross to ~0.49.
+      - ``decay_stop_reason``     : ``'normal'``, ``'hit_other_event'``,
+        ``'max_walk'``, ``'edge'``, ``'no_peak'``.
+      - ``onset_crossed``         : True iff the backward walk reached
+        ``ONSET_PCT_THRESHOLD`` of peak within ``ONSET_MAX_FRAMES``
+        (~35ms). True → clean pre-strike silence (typical of a closed
+        hihat). False → sitting on top of a prior hit's ring or the
+        strike itself is loud enough that the envelope doesn't dip.
+      - ``onset_cross_ms``        : ms-from-peak to the 20% crossing
+        point (negative direction, reported as magnitude). ``None``
+        if the walk did not cross.
+
+    The walk is run against the post-filter KEPT event set so that
+    ``decay_stop_reason`` and ``decay_pct_at_stop`` reflect what the
+    user sees after filtering, not the pre-filter list. FILTERED
+    events also get the fields attached (the diagnostic surface in
+    the WebUI shows them too) but their ``decay_stop_reason`` walks
+    against the same set — the FILTERED status doesn't change which
+    frames are valid stopping points, only which events get emitted.
+
+    ``envelope`` may be None if the detector was run without
+    producing a debug dict (defensive — the detector always populates
+    it in practice). When None, every event gets ``None`` fields
+    and the classifier falls back to the existing geomean+sustain rule.
+
+    Pure function. No file I/O. No mutation of input audio.
+    """
+    if not events or envelope is None or len(envelope) == 0:
+        for ev in events:
+            ev['decay_slope_db'] = None
+            ev['decay_slope_linear'] = None
+            ev['decay_frames_walked'] = None
+            ev['decay_pct_at_stop'] = None
+            ev['decay_stop_reason'] = None
+            ev['onset_crossed'] = False
+            ev['onset_cross_ms'] = None
+        return
+
+    # Build the set of KEPT peak frames once. Used by both walks as
+    # the neighbor-event stop set (every other KEPT peak frame is
+    # a valid cut-off point). We exclude the event's own frame so
+    # the walk doesn't immediately stop on itself.
+    kept_frames: Set[int] = set()
+    for ev in events:
+        if ev.get('status') != 'FILTERED':
+            f = ev.get('frame')
+            if isinstance(f, (int, np.integer)):
+                kept_frames.add(int(f))
+
+    hop_ms = hop_samples / float(sr) * 1000.0
+
+    for ev in events:
+        peak_frame = ev.get('frame')
+        if not isinstance(peak_frame, (int, np.integer)):
+            # No frame — this event came from a detector that
+            # doesn't expose STFT frames. Skip the walk; the
+            # classifier will fall back to geomean+sustain.
+            ev['decay_slope_db'] = None
+            ev['decay_slope_linear'] = None
+            ev['decay_frames_walked'] = None
+            ev['decay_pct_at_stop'] = None
+            ev['decay_stop_reason'] = None
+            ev['onset_crossed'] = False
+            ev['onset_cross_ms'] = None
+            continue
+        peak_frame = int(peak_frame)
+
+        # Forward (decay) walk: stop at any OTHER KEPT event.
+        stop = kept_frames - {peak_frame}
+        dec_n, dec_reason, dec_db, dec_lin, dec_pct = _walk_event_envelope(
+            envelope, peak_frame, +1,
+            DECAY_PCT_THRESHOLD, stop, DECAY_MAX_FRAMES,
+        )
+
+        # Backward (onset) walk: same neighbor set. Onset uses
+        # min_frames=1 semantically (we allow crossing at step 1)
+        # because the 20% threshold with a 6-frame cap is already
+        # the discriminator — min_frames should not suppress
+        # crossings at step=1. The walk helper itself doesn't
+        # enforce min_frames (the threshold does the gating).
+        onset_n, onset_reason, _onset_db, _onset_lin, onset_pct = (
+            _walk_event_envelope(
+                envelope, peak_frame, -1,
+                ONSET_PCT_THRESHOLD, stop, ONSET_MAX_FRAMES,
+            )
+        )
+
+        ev['decay_slope_db'] = round(dec_db, 4) if dec_reason != 'no_peak' else None
+        ev['decay_slope_linear'] = round(dec_lin, 4) if dec_reason != 'no_peak' else None
+        ev['decay_frames_walked'] = dec_n
+        ev['decay_pct_at_stop'] = round(dec_pct, 4) if dec_pct is not None else None
+        ev['decay_stop_reason'] = dec_reason
+        ev['onset_crossed'] = (onset_reason == 'normal')
+        ev['onset_cross_ms'] = (
+            round(onset_n * hop_ms, 2) if onset_reason == 'normal' else None
+        )
+        ev['onset_cross_ms'] = (
+            round(onset_n * hop_ms, 2) if onset_reason == 'normal' else None
+        )
 
 
 def _find_prev_next_kept(
@@ -1138,6 +1462,17 @@ def build_pga_events(
     _compute_features_for_filtered_events(
         raw, audio_mono, sr, config, stem_type,
     )
+    # 2026-06-19: per-event broadband-envelope walk (open/closed
+    # hihat discriminator). The PGA detector stashed the contrast
+    # envelope on the debug dict; we walk it forward and backward
+    # from each event's peak frame and stamp the slope + pct_at_stop
+    # + onset_cross fields onto every event. The hihat_state
+    # classifier (note_classification_core.classify_hihat_notes)
+    # consumes these at rebuild time — no re-detection needed.
+    _envelope = pga_debug.get('envelope') if pga_debug else None
+    _compute_walk_features_for_filtered_events(
+        raw, _envelope, sr, hop_samples=256,
+    )
     return raw, [], pga_debug
 
 
@@ -1280,5 +1615,11 @@ def _build_pga_events_with_filter(
     # dropped" with the actual feature values, not None.
     _compute_features_for_filtered_events(
         raw, audio_mono, sr, config, stem_type,
+    )
+    # 2026-06-19: per-event broadband-envelope walk. See
+    # build_pga_events above for rationale.
+    _envelope = pga_debug.get('envelope') if pga_debug else None
+    _compute_walk_features_for_filtered_events(
+        raw, _envelope, sr, hop_samples=256,
     )
     return raw, events_kept, events_filtered, pga_debug

@@ -959,6 +959,17 @@ def rebuild_events_from_analysis(
                 # snare.timing_offset, not the hard-coded toms
                 # equivalents).
                 stem_note = getattr(drum_mapping, stem_type)
+                # 2026-06-19: hihat open/closed -> MIDI note flip.
+                # The PGA detector stamps hihat_state on every event
+                # (slope rule primary, geomean+sustain fallback). For
+                # hihat specifically, route open hihats to
+                # drum_mapping.hihat_open (46) instead of the default
+                # closed-hihat note (42). Other stems keep the
+                # default stem note. Mirrors the live-detect path in
+                # processing_shell_percentile_gated.process_percentile_gated.
+                stem_note_open = getattr(
+                    drum_mapping, 'hihat_open', stem_note
+                ) if stem_type == 'hihat' else stem_note
                 stem_timing_offset = config.get(stem_type, {}).get('timing_offset', 0.0)
                 stem_max_duration = config.get(stem_type, {}).get('max_note_duration',
                                          config.get('midi', {}).get('max_note_duration', 0.5))
@@ -973,11 +984,18 @@ def rebuild_events_from_analysis(
                         duration = min(pga_kept[i + 1]['time'] - ev['time'], stem_max_duration)
                     else:
                         duration = config.get('audio', {}).get('default_note_duration', 0.1)
+                    # 2026-06-19: open hihats use the open note (46).
+                    ev_note = (
+                        stem_note_open
+                        if ev.get('hihat_state') == 'open'
+                        else stem_note
+                    )
                     midi_events.append({
                         'time': float(midi_time),
-                        'note': int(stem_note),
+                        'note': int(ev_note),
                         'velocity': int(velocity),
                         'duration': float(duration),
+                        'hihat_state': ev.get('hihat_state'),
                     })
                 midi_events_by_stem[stem_type] = midi_events
                 # PGA-only stem: the early-return `continue` below

@@ -1812,6 +1812,23 @@ def process_stem_to_midi(
     # debug-dict return shape.
     pga_raw, _, pga_debug = build_pga_events(audio_mono, sr, config, stem_type=stem_type)
     pga_onset_data = list(pga_events_kept) + list(pga_events_filtered)
+
+    # 2026-06-19: stash the broadband contrast envelope so the
+    # CLI can write it to {stem}.contrast_envelope.npz for
+    # post-hoc analysis (open/closed hihat walk diagnostic
+    # and similar per-event envelope walks). The envelope is
+    # the data the PGA detector's per-event features (and
+    # any future per-event walk) are computed against. Caching
+    # it avoids re-running detection for any analysis pass
+    # that only changes the filter or analysis logic.
+    pga_envelope_data: Optional[Dict[str, Any]] = None
+    if pga_debug is not None and pga_debug.get('envelope') is not None:
+        pga_envelope_data = {
+            'envelope': np.asarray(pga_debug['envelope'], dtype=np.float32),
+            'sr': int(sr),
+            'hop_length': 256,
+            'n_fft': 1024,
+        }
     if pga_onset_data:
         print(f"    Percentile-gated detection: {len(pga_onset_data)} candidate onsets "
               f"({len(pga_events_kept)} KEPT at threshold, {len(pga_events_filtered)} FILTERED)")
@@ -1887,5 +1904,10 @@ def process_stem_to_midi(
         'spectral_onset_data': spectral_onset_data,
         'spectral_config': spectral_config,
         'pga_onset_data': pga_onset_data,
-        'envelope_data': envelope_data
+        'envelope_data': envelope_data,
+        # 2026-06-19: cached broadband contrast envelope
+        # (PGA STFT, hop=256). See pga_envelope_data block
+        # above. Consumed by the CLI to write
+        # {stem}.contrast_envelope.npz.
+        'pga_envelope_data': pga_envelope_data,
     }

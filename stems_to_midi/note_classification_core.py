@@ -63,6 +63,25 @@ def classify_hihat_notes(
         if not force_reclassify and event.get('hihat_state') in ('open', 'closed'):
             continue
 
+        # 2026-06-19: broadband-envelope decay-slope rule wins when
+        # the field is present. The PGA detector walks the broadband
+        # contrast envelope forward from the event's peak frame and
+        # stamps ``decay_slope_db`` (mean per-frame dB drop). Closed
+        # hihats decay fast (3.4-3.6 dB/frame); open hihats ring out
+        # so the next strike cuts in before the envelope drops, giving
+        # a shallow slope (0.7-1.4). If decay_slope_db is below
+        # ``hihat.open_decay_slope_max`` (default 2.0 dB/frame), the
+        # event is open — no need to consult geomean/sustain.
+        #
+        # Falls back to the geomean+sustain rule when decay_slope_db
+        # is missing (older sidecars from before 2026-06-19, or stems
+        # where the detector didn't produce a per-event walk).
+        slope = event.get('decay_slope_db')
+        slope_max = hihat_config.get('open_decay_slope_max', 2.0)
+        if slope is not None:
+            event['hihat_state'] = 'open' if slope < slope_max else 'closed'
+            continue
+
         # Use stored geomean if available, otherwise compute from energies
         geomean = event.get('geomean')
         if geomean is None:

@@ -12,10 +12,18 @@ in the rebuild path.
 """
 
 from pathlib import Path
-from typing import Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
+
+import numpy as np
 
 from .pga_event_builder import  _build_pga_events_with_filter
 from .energy_detection_core import calculate_energy_envelope
+# 2026-06-19: hihat open/closed classifier. Stamps hihat_state
+# on every PGA event using the broadband-envelope decay-slope
+# rule (falls back to geomean+sustain when decay_slope_db is
+# absent). The MIDI note loop below reads hihat_state to flip
+# drum_mapping.hihat (42) -> drum_mapping.hihat_open (46).
+from .note_classification_core import classify_hihat_notes
 
 
 def process_percentile_gated(
@@ -77,9 +85,22 @@ def process_percentile_gated(
 
     # Run PGA detection
     # _build_pga_events_with_filter: filtered split (for MIDI output)
-    pga_raw, pga_kept, pga_filtered, _ = _build_pga_events_with_filter(
+    # 2026-06-19: capture the 4th return value (debug dict) so
+    # we can extract the broadband contrast envelope for the
+    # CLI to cache to {stem}.contrast_envelope.npz. Post-hoc
+    # walk diagnostics (open/closed hihat) read from that npz
+    # — no need to re-run detection.
+    pga_raw, pga_kept, pga_filtered, pga_debug = _build_pga_events_with_filter(
         audio_mono, sr, config, stem_type=stem_type,
     )
+    pga_envelope_data: Optional[Dict[str, Any]] = None
+    if pga_debug is not None and pga_debug.get('envelope') is not None:
+        pga_envelope_data = {
+            'envelope': np.asarray(pga_debug['envelope'], dtype=np.float32),
+            'sr': int(sr),
+            'hop_length': 256,
+            'n_fft': 1024,
+        }
 
     # 2026-06-19: Build envelope_data for the WebUI's
     # detection analysis waveform viewer. The legacy energy
@@ -122,10 +143,21 @@ def process_percentile_gated(
 
     # Build MIDI events from pga_kept
     note = int(getattr(drum_mapping, stem_type))
+    note_open = int(getattr(drum_mapping, 'hihat_open', note))
     timing_offset = config.get(stem_type, {}).get('timing_offset', 0.0)
     max_duration = config.get(stem_type, {}).get(
         'max_note_duration', config.get('midi', {}).get('max_note_duration', 0.5))
     default_duration = config.get('audio', {}).get('default_note_duration', 0.1)
+
+    # 2026-06-19: hihat open/closed via broadband-envelope decay
+    # slope. Stamp hihat_state on every PGA event in place so
+    # the MIDI note loop below can pick the right note. Also
+    # covers the sidecar's events_pga list (built from pga_raw
+    # in the return dict — pga_raw is the same list object as
+    # pga_kept + pga_filtered before any classification runs,
+    # so classifying it stamps the sidecar's hihat_state too).
+    if stem_type == 'hihat' and pga_kept:
+        classify_hihat_notes(pga_kept, config, force_reclassify=True)
 
     midi_events = []
     for i, ev in enumerate(pga_kept):
@@ -137,11 +169,16 @@ def process_percentile_gated(
             duration = min(pga_kept[i + 1]['time'] - ev['time'], max_duration)
         else:
             duration = default_duration
+        # 2026-06-19: open hihats use the open note (46), the
+        # rest use the default hihat note (42 = closed). The
+        # classifier above stamped hihat_state on this event.
+        ev_note = note_open if ev.get('hihat_state') == 'open' else note
         midi_events.append({
             'time': float(midi_time),
-            'note': note,
+            'note': ev_note,
             'velocity': int(velocity),
             'duration': float(duration),
+            'hihat_state': ev.get('hihat_state'),
         })
 
     print(f"    [percentile_gated] Built {len(midi_events)} MIDI events from PGA")
@@ -155,6 +192,14 @@ def process_percentile_gated(
         'spectral_config': None,
         'envelope_data': envelope_data,
         'pga_onset_data': list(pga_raw),
+        # 2026-06-19: cached broadband contrast envelope from
+        # the PGA detector. CLI writes this to
+        # {stem}.contrast_envelope.npz so post-hoc walk
+        # diagnostics (open/closed hihat) can run without
+        # re-detecting. May be None if pga_debug wasn't
+        # populated (defensive; the detector always populates
+        # it in practice).
+        'pga_envelope_data': pga_envelope_data,
     }
 
 
@@ -168,4 +213,5 @@ def _empty_result() -> Dict:
         'spectral_config': None,
         'envelope_data': None,
         'pga_onset_data': [],
+        'pga_envelope_data': None,
     }

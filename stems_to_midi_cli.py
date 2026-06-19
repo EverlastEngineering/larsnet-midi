@@ -28,7 +28,7 @@ import sys
 
 # Import modules (thin orchestration layer)
 from stems_to_midi.config import DrumMapping
-from stems_to_midi.midi import create_midi_file, save_analysis_sidecar, save_envelope_data, load_analysis_sidecar
+from stems_to_midi.midi import create_midi_file, save_analysis_sidecar, save_envelope_data, save_contrast_envelope, load_analysis_sidecar
 from stems_to_midi.processing_shell import process_stem_to_midi
 from stems_to_midi.rebuild_core import rebuild_events_from_analysis
 
@@ -216,6 +216,10 @@ def _process_stems_to_midi(
         events_by_stem = {}
         analysis_by_stem = {}
         envelope_by_stem = {}
+        # 2026-06-19: per-stem broadband contrast envelope cache
+        # (PGA STFT, hop=256). Saved to
+        # {stem}.contrast_envelope.npz for post-hoc walks.
+        contrast_envelope_by_stem = {}
 
         # Process each stem type
         total_stems = len(stems_to_process)
@@ -275,6 +279,12 @@ def _process_stems_to_midi(
                 # Store envelope data for waveform visualization
                 if result.get('envelope_data'):
                     envelope_by_stem[stem_type] = result['envelope_data']
+                # 2026-06-19: store broadband contrast envelope
+                # (PGA STFT) for post-hoc walk diagnostics.
+                if result.get('pga_envelope_data'):
+                    contrast_envelope_by_stem[stem_type] = (
+                        result['pga_envelope_data']
+                    )
 
             # Progress: after each stem (0-90% of total)
             processed_stems += 1
@@ -321,6 +331,12 @@ def _process_stems_to_midi(
             # Save energy envelope data for waveform visualization
             if envelope_by_stem:
                 save_envelope_data(envelope_by_stem, midi_path)
+
+            # 2026-06-19: save broadband contrast envelopes
+            # (PGA STFT) for post-hoc per-event walk
+            # diagnostics. ~30-50KB per stem compressed.
+            if contrast_envelope_by_stem:
+                save_contrast_envelope(contrast_envelope_by_stem, midi_path)
 
             # Progress: after MIDI creation (90-100% of total)
             midi_progress = int(90 + (song_idx / total_songs) * 10)

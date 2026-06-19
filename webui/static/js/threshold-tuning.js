@@ -142,7 +142,14 @@ const STEM_SLIDER_CONFIGS = {
     ],
     hihat: [
         { key: 'open_geomean_min', label: '🔓 Open/Closed: GeoMean', min: 50, max: 1000, step: 10, fallback: 262, unit: '', classification: true },
-        { key: 'open_sustain_ms', label: '🔓 Open/Closed: Sustain', min: 20, max: 500, step: 5, fallback: 150, unit: 'ms', classification: true }
+        { key: 'open_sustain_ms', label: '🔓 Open/Closed: Sustain', min: 20, max: 500, step: 5, fallback: 150, unit: 'ms', classification: true },
+        // 2026-06-19: broadband-envelope decay-slope classifier.
+        // ``decay_slope_db`` is the per-frame dB drop from the
+        // event's peak forward — closed hihats decay fast
+        // (3.4-3.6 dB/frame); open hihats ring out and the next
+        // strike cuts in before the envelope drops (0.7-1.4).
+        // Events with slope < threshold are classified open.
+        { key: 'open_decay_slope_max', label: '🔓 Open/Closed: Decay Slope', min: 0, max: 10, step: 0.1, fallback: 2.0, unit: 'dB/f', classification: true }
     ],
     cymbals: [
         { key: 'expected_clusters', label: '🎵 Sound Types', min: 1, max: 4, step: 1, fallback: 2, unit: '', classification: true }
@@ -551,7 +558,7 @@ function buildSlidersForStem(stemType) {
         document.getElementById('tuning-hihat-classify')?.addEventListener('change', onHihatClassificationToggle);
         
         // Initialize slider visibility based on toggle state
-        const sliderKeys = ['open_geomean_min', 'open_sustain_ms'];
+        const sliderKeys = ['open_geomean_min', 'open_sustain_ms', 'open_decay_slope_max'];
         const isEnabled = hihatClassificationEnabled[stemType] !== false;
         sliderKeys.forEach(key => {
             const sliderRow = document.querySelector(`[data-slider-key="${key}"]`);
@@ -852,7 +859,7 @@ function onHihatClassificationToggle(e) {
     hihatClassificationEnabled[stemType] = enabled;
     
     // Show/hide the open/closed classification sliders
-    const sliderKeys = ['open_geomean_min', 'open_sustain_ms'];
+    const sliderKeys = ['open_geomean_min', 'open_sustain_ms', 'open_decay_slope_max'];
     sliderKeys.forEach(key => {
         const sliderRow = document.querySelector(`[data-slider-key="${key}"]`);
         if (sliderRow) {
@@ -867,7 +874,7 @@ function onHihatClassificationToggle(e) {
 /**
  * Keys that are classification parameters (sent as config_overrides to reclassify).
  */
-const CLASSIFICATION_KEYS = new Set(['open_geomean_min', 'open_sustain_ms', 'expected_clusters', 'cluster_feature']);
+const CLASSIFICATION_KEYS = new Set(['open_geomean_min', 'open_sustain_ms', 'open_decay_slope_max', 'expected_clusters', 'cluster_feature']);
 
 /**
  * Per-stem note assignment overrides from cluster dropdowns.
