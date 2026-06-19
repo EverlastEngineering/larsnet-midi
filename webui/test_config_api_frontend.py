@@ -162,25 +162,39 @@ class TestConfigAPIUpdate:
     
     @pytest.fixture
     def client(self, mock_project_dir, monkeypatch):
-        """Create test client with mocked project directory"""
-        # Mock the project directory lookup - only intercept user_files patterns
-        import glob
-        original_glob = glob.glob
-        
-        def mock_glob(pattern):
-            # Only mock patterns looking for user_files
-            if 'user_files' in str(pattern):
-                return [str(mock_project_dir)]
-            # Use real glob for everything else (e.g., ruamel.yaml plugin loading)
-            return original_glob(pattern)
-        
-        monkeypatch.setattr(glob, 'glob', mock_glob)
-        
+        """Create test client with mocked project directory.
+
+        2026-06-19: replaced the ``glob.glob`` mock with a
+        ``USER_FILES_DIR`` monkeypatch. The previous mock
+        intercepted glob calls that look for ``user_files``,
+        but ``project_manager.get_project_by_number`` uses
+        ``Path(user_files_dir).iterdir()`` (not glob) to
+        discover projects, so the old mock had no effect and
+        every request came back 404 (project 1 not found in
+        the real ``user_files/``). Now we point
+        ``project_manager.USER_FILES_DIR`` at the test's
+        ``tmp_path / "user_files"`` parent so iterdir sees
+        the test project."""
+        # Point project_manager at the test user_files dir
+        # (the parent of the project folder, so iterdir
+        # returns the test project on its own).
+        test_user_files = mock_project_dir.parent
+        import project_manager
+        monkeypatch.setattr(project_manager, 'USER_FILES_DIR', test_user_files)
+        # Also re-bind in the modules that imported the
+        # constant, so they pick up the new value. The
+        # route handler reaches the constant through
+        # ``get_config_engine`` which re-imports it.
+        import webui.yaml_config_core
+        monkeypatch.setattr(webui.yaml_config_core, 'USER_FILES_DIR', test_user_files, raising=False)
+        # And the config blueprint that re-exports
+        # ``get_config_engine`` reads it the same way.
+
         test_app = create_app()
         test_app.config['TESTING'] = True
         with test_app.test_client() as client:
             yield client
-    
+
     def test_update_nested_midi_value(self, client):
         """Test updating a nested midi value like min_velocity"""
         updates = {
@@ -300,25 +314,22 @@ class TestConfigAPIGet:
     
     @pytest.fixture
     def client(self, mock_project_dir, monkeypatch):
-        """Create test client with mocked project directory"""
-        # Mock the project directory lookup - only intercept user_files patterns
-        import glob
-        original_glob = glob.glob
-        
-        def mock_glob(pattern):
-            # Only mock patterns looking for user_files
-            if 'user_files' in str(pattern):
-                return [str(mock_project_dir)]
-            # Use real glob for everything else (e.g., ruamel.yaml plugin loading)
-            return original_glob(pattern)
-        
-        monkeypatch.setattr(glob, 'glob', mock_glob)
-        
+        """Create test client with mocked project directory.
+
+        2026-06-19: same fix as TestConfigAPIUpdate — mock
+        ``USER_FILES_DIR`` instead of ``glob.glob`` so
+        ``iterdir()`` sees the test project."""
+        test_user_files = mock_project_dir.parent
+        import project_manager
+        monkeypatch.setattr(project_manager, 'USER_FILES_DIR', test_user_files)
+        import webui.yaml_config_core
+        monkeypatch.setattr(webui.yaml_config_core, 'USER_FILES_DIR', test_user_files, raising=False)
+
         test_app = create_app()
         test_app.config['TESTING'] = True
         with test_app.test_client() as client:
             yield client
-    
+
     def test_get_config_returns_full_paths(self, client):
         """Test that GET API returns fields with complete dotted paths"""
         response = client.get('/api/config/1/midiconfig')

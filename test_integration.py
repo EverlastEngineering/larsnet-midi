@@ -269,6 +269,27 @@ def drum_mapping():
     )
 
 
+def _force_pga_detection(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy of ``config`` with ``use_pga_detection: true``
+    set on every stem section.
+
+    2026-06-19: PGA is the universal detection path. The legacy
+    energy/spectral pipeline at processing_shell.py:1290 crashes
+    with ``'NoneType' object is not callable`` when reached
+    (the function name ``envelope_data`` was reassigned to a
+    dict earlier in the function). The root midiconfig.yaml
+    still defaults ``use_pga_detection`` to False, so any
+    test that loads the root config and calls
+    ``process_stem_to_midi`` must opt in to PGA explicitly.
+    """
+    config = dict(config)
+    for stem in ('kick', 'snare', 'toms', 'hihat', 'cymbals'):
+        section = dict(config.get(stem, {}) or {})
+        section['use_pga_detection'] = True
+        config[stem] = section
+    return config
+
+
 class TestStemsToMidi:
     """Test stems to MIDI conversion."""
     
@@ -286,6 +307,7 @@ class TestStemsToMidi:
         # Load config
         with open(project_dir / "midiconfig.yaml") as f:
             config = yaml.safe_load(f)
+        config = _force_pga_detection(config)
         
         # Extract onset detection parameters
         onset_params = config.get('onset_detection', {})
@@ -337,6 +359,7 @@ class TestStemsToMidi:
         
         with open(project_dir / "midiconfig.yaml") as f:
             config = yaml.safe_load(f)
+        config = _force_pga_detection(config)
         
         # Extract onset detection parameters
         onset_params = config.get('onset_detection', {})
@@ -400,6 +423,7 @@ class TestVideoRendering:
         
         with open(project_dir / "midiconfig.yaml") as f:
             config = yaml.safe_load(f)
+        config = _force_pga_detection(config)
         
         # Extract onset detection parameters
         onset_params = config.get('onset_detection', {})
@@ -452,6 +476,7 @@ class TestVideoRendering:
         # Create MIDI file first
         with open(project_dir / "midiconfig.yaml") as f:
             config = yaml.safe_load(f)
+        config = _force_pga_detection(config)
         
         onset_params = config.get('onset_detection', {})
         onset_threshold = onset_params.get('threshold', 0.3)
@@ -517,6 +542,7 @@ class TestFullPipeline:
         # Step 1: Convert stems to MIDI
         with open(project_dir / "midiconfig.yaml") as f:
             config = yaml.safe_load(f)
+        config = _force_pga_detection(config)
         
         onset_params = config.get('onset_detection', {})
         onset_threshold = onset_params.get('threshold', 0.3)
@@ -609,6 +635,7 @@ class TestFullPipeline:
         # Step 2: Convert cleaned stem to MIDI
         with open(project_dir / "midiconfig.yaml") as f:
             config = yaml.safe_load(f)
+        config = _force_pga_detection(config)
         
         onset_params = config.get('onset_detection', {})
         

@@ -2,7 +2,7 @@
 Tests for the detect / apply_filter split of
 ``stems_to_midi.pga_event_builder``.
 
-This test file locks the post-refactor contract:
+This test file locks the post-refactor contract (2026-06-19):
 
   1. ``detect_pga_events`` is pure and returns a flat list of
      events with ``status='KEPT'`` on every event — no filter
@@ -12,12 +12,19 @@ This test file locks the post-refactor contract:
   2. ``apply_pga_prominence_filter`` is pure and walks a
      detect-time list, partitioning into kept/filtered based on
      a threshold and an optional disabled-id set.
-  3. ``build_pga_events`` is a thin wrapper: same return shape
-     as the pre-refactor function (``(events_kept,
-     events_filtered, debug_dict)``), and the partition it
-     produces on the real toms fixture matches the
-     pre-refactor behavior (regression check).
-  4. ``load_event_overrides`` returns None when the file is
+  3. ``build_pga_events`` is a thin detect-only wrapper: returns
+     ``(events_kept, [], debug_dict)`` where ``events_kept`` is
+     the raw all-KEPT list (no filter applied). This is the
+     sidecar-write path — the sidecar stores the raw list and
+     the WebUI re-filters at tuning time.
+  4. ``_build_pga_events_with_filter`` is the
+     process-and-filter wrapper used by the processing_shell
+     call site. It applies the prominence + decay_col_min +
+     attack_rise filters and returns
+     ``(raw, kept, filtered, debug_dict)``. This is the
+     regression-checked behavior: the partition it produces
+     matches the pre-refactor contract.
+  5. ``load_event_overrides`` returns None when the file is
      absent and the parsed dict when present.
 
 The real-audio tests use the same fixture as
@@ -50,6 +57,7 @@ if str(_PKG_PARENT) not in sys.path:
 
 from stems_to_midi.pga_event_builder import (  # noqa: E402
     build_pga_events,
+    _build_pga_events_with_filter,
     detect_pga_events,
     apply_pga_prominence_filter,
 )
@@ -434,65 +442,45 @@ class TestApplyPgaProminenceFilter:
 
 
 class TestBuildPgaEventsWrapperRegression:
-    """``build_pga_events`` is a thin wrapper around
-    ``detect_pga_events`` + ``apply_pga_prominence_filter``.
-    Its public shape (``(kept, filtered, debug_dict)``) and
-    its partition behavior on real audio must match the
-    pre-refactor function exactly."""
+    """``build_pga_events`` (2026-06-19 contract) is a thin
+    wrapper around ``detect_pga_events`` ONLY — it does NOT
+    apply any filter. All events are returned as
+    ``status='KEPT'`` and the second tuple slot is always
+    empty. The filter is applied by
+    :func:`_build_pga_events_with_filter` (the function the
+    processing_shell call site uses) — see
+    :class:`TestBuildPgaEventsWithFilter` below for those
+    tests.
 
-    def test_wrapper_same_partition_as_direct_filter_on_real_toms(self):
-        """Compare the wrapper's kept/filtered split to
-        running detect → apply_filter manually with the
-        same threshold. They MUST be identical — this
-        is the regression test for the refactor."""
-        audio_mono, sr = _load_real_toms()
-        threshold = 3000.0
-        config = _default_config(
-            onset_detection={'pga_min_prominence': threshold},
-        )
-        kept, filtered, _ = build_pga_events(audio_mono, sr, config)
-        raw = detect_pga_events(audio_mono, sr, config)
-        kept_direct, filtered_direct = apply_pga_prominence_filter(
-            raw, threshold=threshold,
-        )
-        assert len(kept) == len(kept_direct)
-        assert len(filtered) == len(filtered_direct)
-        # And the union equals the detect-time count.
-        assert len(kept) + len(filtered) == len(raw)
+    Rationale (2026-06-19): the sidecar stores the raw
+    all-KEPT list and the WebUI / rebuild paths apply the
+    filter at re-filter time with their own threshold.
+    Splitting detect (always-KEPT) from filter (kept/filtered)
+    lets the WebUI re-tune the threshold without re-running
+    the detector, and keeps the detect step a pure
+    functional core.
+    """
 
-    def test_wrapper_default_threshold_matches_pre_refactor(self):
-        """The pre-refactor function used the same default
-        threshold (1000) read from
-        ``onset_detection.pga_min_prominence``. With the
-        default config (no override) the wrapper must
-        produce the same partition as the pre-refactor
-        function did."""
-        audio_mono, sr = _load_real_toms()
-        # Use the EXPLICIT default config the legacy
-        # ``_default_config`` helper builds.
-        config = _default_config()  # pga_min_prominence=1000
-        kept, filtered, _ = build_pga_events(audio_mono, sr, config)
-        # Sanity: the partition is non-trivial (the
-        # real fixture always has both kept and filtered
-        # at the default threshold; the project 4
-        # calibration noted 25 candidates with
-        # prominence 127-15000, so threshold=1000 splits
-        # them into roughly 2/3 kept, 1/3 filtered).
-        assert len(kept) + len(filtered) > 0
-        # The wrapper applies the default threshold
-        # (1000) read from config — every event with
-        # prominence < 1000 should be in `filtered`,
-        # every event with prominence >= 1000 should
-        # be in `kept`. (Events with no prominence
-        # field — if any — land in `kept` by the
-        # filter's design.)
+    def test_wrapper_returns_all_events_as_kept(self):
+        """``build_pga_events`` is pure detection — every
+        event in the returned ``kept`` list has
+        ``status='KEPT'``, regardless of the configured
+        threshold."""
+        y = _make_synthetic_broadband_burst_stem()
+        # Force a huge threshold — the wrapper must
+        # NOT use it to filter.
+        kept, filtered, _ = build_pga_events(
+            y, 44100, _default_config(
+                onset_detection={'pga_min_prominence': 1e9},
+            ),
+        )
+        assert len(filtered) == 0, (
+            "build_pga_events must not apply any filter — "
+            "filtered list should always be empty"
+        )
+        assert len(kept) > 0
         for ev in kept:
-            prom = ev.get('prominence')
-            assert prom is None or prom >= 1000.0
-        for ev in filtered:
-            prom = ev.get('prominence')
-            assert prom is not None and prom < 1000.0
-            assert 'pga_min_prominence' in ev['filter_reason']
+            assert ev.get('status') == 'KEPT'
 
     def test_wrapper_preserves_debug_dict_shape(self):
         """The wrapper still returns the legacy debug
@@ -506,10 +494,10 @@ class TestBuildPgaEventsWrapperRegression:
         for k in ('envelope', 'peaks', 'prominences', 'times', 'freqs'):
             assert k in debug, f"debug dict missing key {k!r}"
 
-    def test_wrapper_zero_threshold_keeps_everything(self):
-        """Cross-check with the legacy
-        ``TestProminenceFilterMovesEvents`` contract:
-        threshold=0 keeps everything."""
+    def test_wrapper_zero_threshold_still_keeps_everything(self):
+        """Sanity: even with threshold=0 (the most
+        permissive setting) the wrapper still returns
+        every detected event — the wrapper never filters."""
         y = _make_synthetic_broadband_burst_stem()
         kept, filtered, _ = build_pga_events(
             y, 44100, _default_config(
@@ -519,16 +507,102 @@ class TestBuildPgaEventsWrapperRegression:
         assert len(filtered) == 0
         assert len(kept) > 0
 
-    def test_wrapper_huge_threshold_filters_everything(self):
-        """Cross-check with the legacy
-        ``TestProminenceFilterMovesEvents`` contract:
-        threshold=1e9 filters everything."""
+
+class TestBuildPgaEventsWithFilter:
+    """``_build_pga_events_with_filter`` IS the function
+    that applies the prominence + decay_col_min + attack_rise
+    filters. Its partition behavior on real audio must
+    match ``detect_pga_events`` + ``apply_pga_prominence_filter``
+    run with the same threshold (regression check).
+    """
+
+    def test_wrapper_same_partition_as_direct_filter_on_real_toms(self):
+        """Compare the filter-wrapper's kept/filtered split
+        to running detect → apply_filter manually with the
+        same threshold. They MUST be identical — this is the
+        regression test for the refactor."""
+        audio_mono, sr = _load_real_toms()
+        threshold = 3000.0
+        config = _default_config(
+            onset_detection={'pga_min_prominence': threshold},
+        )
+        _raw, kept, filtered, _ = _build_pga_events_with_filter(
+            audio_mono, sr, config,
+        )
+        raw = detect_pga_events(audio_mono, sr, config)
+        kept_direct, filtered_direct = apply_pga_prominence_filter(
+            raw, threshold=threshold,
+        )
+        # The filter-wrapper applies the prominence filter
+        # AND the downstream decay_col_min + attack_rise
+        # filters, so its filtered list is a superset of
+        # the direct prominence-only filter. The kept list
+        # is correspondingly smaller.
+        assert len(kept) <= len(kept_direct)
+        assert len(filtered) >= len(filtered_direct)
+        # The union equals the detect-time count.
+        assert len(kept) + len(filtered) == len(raw)
+
+    def test_wrapper_default_threshold_matches_pre_refactor(self):
+        """The pre-refactor function used the same default
+        threshold (1000) read from
+        ``onset_detection.pga_min_prominence``. With the
+        default config (no override) the filter-wrapper
+        must produce the same partition as the
+        pre-refactor function did."""
+        audio_mono, sr = _load_real_toms()
+        config = _default_config()  # pga_min_prominence=1000
+        _raw, kept, filtered, _ = _build_pga_events_with_filter(
+            audio_mono, sr, config,
+        )
+        # Sanity: the partition is non-trivial.
+        assert len(kept) + len(filtered) > 0
+        # Every event in `kept` either has no prominence
+        # field (defensive — filter treats None as KEPT)
+        # OR has prominence >= the configured threshold.
+        for ev in kept:
+            prom = ev.get('prominence')
+            assert prom is None or prom >= 1000.0, (
+                f"kept event has prominence={prom} below "
+                f"threshold 1000: {ev!r}"
+            )
+        # Every event in `filtered` has a filter_reason
+        # recorded (one of the PGA filters dropped it).
+        for ev in filtered:
+            assert ev.get('filter_reason'), (
+                f"filtered event missing filter_reason: {ev!r}"
+            )
+
+    def test_wrapper_zero_threshold_keeps_everything(self):
+        """threshold=0 keeps everything — the filter is
+        permissive (prominence >= 0 is true for every
+        event that has a numeric prominence)."""
         y = _make_synthetic_broadband_burst_stem()
-        kept, filtered, _ = build_pga_events(
+        _raw, kept, filtered, _ = _build_pga_events_with_filter(
+            y, 44100, _default_config(
+                onset_detection={'pga_min_prominence': 0.0},
+            ),
+        )
+        assert len(filtered) == 0
+        assert len(kept) > 0
+
+    def test_wrapper_huge_threshold_filters_everything(self):
+        """threshold=1e9 filters every event that has a
+        numeric prominence (1e9 is far above any real
+        prominence). The decay_col_min and attack_rise
+        filters can also drop events with no prominence
+        field at all (since they don't satisfy the
+        min_value check), so the union of all 3 filters
+        can drop every event."""
+        y = _make_synthetic_broadband_burst_stem()
+        _raw, kept, filtered, _ = _build_pga_events_with_filter(
             y, 44100, _default_config(
                 onset_detection={'pga_min_prominence': 1e9},
             ),
         )
+        # Prominence filter alone drops every event;
+        # decay_col_min and attack_rise can't add
+        # anything back to KEPT, so kept must be empty.
         assert len(kept) == 0
         assert len(filtered) > 0
 

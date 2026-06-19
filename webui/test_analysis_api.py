@@ -85,7 +85,13 @@ def project_with_analysis(tmp_path):
 
     return {
         'number': 1,
-        'name': 'Test Song',
+        'name': 'Test_Song',  # 2026-06-19: must match the
+                              # ``Test_Song.analysis.json`` filename
+                              # the fixture wrote above. The route
+                              # at projects.py:402 derives the
+                              # analysis file path as
+                              # ``midi_dir / f"{project['name']}.analysis.json"``
+                              # so the two have to match.
         'path': project_path,
         'created': datetime.now(),
         'metadata': {},

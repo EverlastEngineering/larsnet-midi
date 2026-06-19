@@ -178,8 +178,17 @@ class TestOperationsAPI:
         
         assert response.status_code == 404
     
-    def test_separate_invalid_device(self, client):
-        """Test POST /api/separate with invalid device"""
+    @patch('webui.api.operations.get_project_by_number')
+    def test_separate_invalid_device(self, mock_get_project, client, mock_project):
+        """Test POST /api/separate with invalid device.
+
+        2026-06-19: added the missing ``get_project_by_number``
+        mock. The route validates the project exists BEFORE
+        checking the device, so without the mock the project
+        lookup fails (returns None) and the route returns 404
+        instead of the expected 400.
+        """
+        mock_get_project.return_value = mock_project
         response = client.post(
             '/api/separate',
             data=json.dumps({
@@ -188,7 +197,7 @@ class TestOperationsAPI:
             }),
             content_type='application/json'
         )
-        
+
         assert response.status_code == 400
         data = json.loads(response.data)
         assert 'Invalid device' in data['error']

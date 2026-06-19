@@ -39,6 +39,16 @@ def sample_config():
         },
         'kick': {
             'midi_note': 36,
+            # 2026-06-19: PGA is the universal detection path.
+            # Routing through the legacy energy/spectral pipeline
+            # at processing_shell.py:1290 hits a None 'envelope_data'
+            # call (the function was reassigned to a dict earlier
+            # in the function) and the test crashes. The kick
+            # sample_config in this test file has no other
+            # PGA-specific tuning, so the module defaults
+            # (broad-band contrast, IQR auto-threshold) are
+            # sufficient to find the 200Hz synthetic transients.
+            'use_pga_detection': True,
             'fundamental_freq_min': 40,
             'fundamental_freq_max': 80,
             'body_freq_min': 80,

@@ -94,18 +94,24 @@ class TestFilterLookup:
         spec = find_filter('does_not_exist')
         assert spec is None
 
-    def test_list_filters_for_toms(self):
-        filters = list_filters_for_stem('toms')
-        ids = [f['id'] for f in filters]
-        assert 'pga_min_prominence' in ids
-        assert 'min_decay_col_min_db' in ids
-
-    def test_list_filters_for_other_stem_empty(self):
-        # The 2 PGA filters apply to toms only. Other stems
-        # (e.g., kick) have no entries yet — that's expected
-        # for this PR; the other 5 filters migrate in Phase 6.
-        filters = list_filters_for_stem('kick')
-        assert filters == []
+    def test_list_filters_for_stem_returns_a_list(self):
+        # 2026-06-19: per user feedback, "we shouldn't test for
+        # which stems have which filters, that's meant to be
+        # dynamic." The registry drives the per-stem mapping,
+        # and the mapping can change as filters are added or
+        # scoped. The contract is just "returns a list" — the
+        # contents are registry-driven.
+        for stem in ('toms', 'kick', 'snare', 'hihat', 'cymbals'):
+            filters = list_filters_for_stem(stem)
+            assert isinstance(filters, list), (
+                f"list_filters_for_stem({stem!r}) must return a list"
+            )
+            # Every entry must be a dict with the expected shape.
+            for f in filters:
+                assert isinstance(f, dict)
+                assert 'id' in f
+                assert 'applies_to_stems' in f
+                assert stem in f['applies_to_stems']
 
 
 # ---------------------------------------------------------------------------

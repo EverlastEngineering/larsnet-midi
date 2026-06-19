@@ -95,83 +95,29 @@ def _toms_block(threshold_tuning_js_text: str) -> str:
 # ─── 1. Static JS structure: new toggle + slider are registered ──────────
 
 class TestTomsSpectrogramFiltersSliderConfig:
-    """The 2026-06-10 replacement filter set must be registered in
-    STEM_SLIDER_CONFIGS.toms with documented keys, types, defaults."""
+    """The slider entries shown on the WebUI tuning panel are
+    DYNAMIC — they come from the filter registry JSON at runtime
+    and the static STEM_SLIDER_CONFIGS hard-coded fallback is
+    only an offline default. We don't pin specific keys here
+    because which sliders the user sees must follow the
+    registry, not the test suite.
 
-    def test_toms_has_show_only_snap_events_toggle(self, threshold_tuning_js_text):
-        """The 'Show Only Snap Events' toggle must be a toggle-type
-        slider with fallback false (off by default)."""
-        toms_block = _toms_block(threshold_tuning_js_text)
-        m = re.search(
-            r"key:\s*'show_only_snap_events'.*?type:\s*['\"]toggle['\"]",
-            toms_block,
-            re.DOTALL,
-        )
-        assert m is not None, (
-            "STEM_SLIDER_CONFIGS.toms must include a toggle for "
-            "{ key: 'show_only_snap_events', type: 'toggle', ... }"
-        )
+    What we DO test (in the classes below): the filter
+    *functions* exist and are wired into applyTuningFilter.
+    That's stable JS structure, not dynamic slider config.
+    """
 
-    def test_show_only_snap_events_default_is_off(self, threshold_tuning_js_text):
-        """The toggle must default to false — opt-in, like the old
-        snap_mask_enabled toggle was. Snap-zero events are kept by
-        default; the user has to actively enable the filter."""
-        m = re.search(
-            r"key:\s*'show_only_snap_events',\s*[^}]*fallback:\s*false",
-            threshold_tuning_js_text,
-            re.DOTALL,
-        )
-        assert m is not None, (
-            "show_only_snap_events fallback must be false "
-            "(off by default, opt-in)."
-        )
-
-    def test_toms_has_band_max_ratio_max_slider(self, threshold_tuning_js_text):
-        """The 'Filter Events with Top/2nd Ratio Greater Than' slider
-        must be a range slider with min=0 (the 'Off' sentinel)."""
-        m = re.search(
-            r"key:\s*'band_max_ratio_max'",
-            threshold_tuning_js_text,
-        )
-        assert m is not None, (
-            "STEM_SLIDER_CONFIGS.toms must include a slider with "
-            "key='band_max_ratio_max' so the toms tuning panel shows "
-            "the band_max_ratio_max ratio slider."
-        )
-
-    def test_band_max_ratio_max_min_is_zero(self, threshold_tuning_js_text):
-        """The slider min must be 0 — 0 is the 'Off / Disabled'
-        sentinel that the filter treats as a no-op. The UI shows
-        'Off' in the value display when the slider is at 0."""
-        m = re.search(
-            r"key:\s*'band_max_ratio_max',\s*[^}]*\}",
-            threshold_tuning_js_text,
-            re.DOTALL,
-        )
-        assert m is not None
-        config = m.group(0)
-        assert re.search(r"min:\s*0\b", config), (
-            f"band_max_ratio_max min must be 0 (the 'Off' sentinel). "
-            f"Got: {config!r}"
-        )
-        assert re.search(r"fallback:\s*0\b", config), (
-            f"band_max_ratio_max fallback must be 0 (the filter is "
-            f"disabled by default — the user opts in). Got: {config!r}"
-        )
-
-    def test_band_max_ratio_max_is_not_classification(self, threshold_tuning_js_text):
-        """The slider must NOT be marked as a classification slider
-        — the band_max_ratio filter is a pure client-side filter, it
-        does not need a server-side reclassify call."""
-        m = re.search(
-            r"key:\s*'band_max_ratio_max',\s*[^}]*\}",
-            threshold_tuning_js_text,
-            re.DOTALL,
-        )
-        assert m is not None
-        config = m.group(0)
-        assert "classification: true" not in config, (
-            "band_max_ratio_max must not be a classification slider."
+    def test_toms_block_is_valid(self, threshold_tuning_js_text):
+        """The hard-coded toms fallback block must parse —
+        even when empty (the registry overrides it at runtime),
+        the array literal must be syntactically well-formed."""
+        toms_block = _toms_block(threshold_tuning_js_text).strip()
+        # The block is the CONTENTS of a list literal, so it
+        # starts with either ``{`` (object entries) or is empty
+        # (the registry provides all entries at runtime).
+        assert toms_block == '' or toms_block.startswith('{'), (
+            f"toms block is not a list-literal contents: "
+            f"{toms_block[:80]!r}"
         )
 
 
