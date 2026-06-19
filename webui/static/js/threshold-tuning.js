@@ -1741,6 +1741,20 @@ function applyTuningFilter() {
     const params = tuningSliderValues[stemType] || {};
     const filterMode = STEM_FILTER_MODES[stemType] || 'geomean_only';
 
+    // PGA-only stems (2026-06-18): toms was the only PGA-only
+    // stem until the snare migration adopted the same slideout
+    // shape. For these stems the sidecar carries events_pga as
+    // the sole source of truth — every event has PGA fields
+    // (prominence / decay_col_min_median_db / attack_rise_ms)
+    // and NO energy-derived fields (geomean / sustain_ms /
+    // strength / attack_sharpness / band_max_ratio /
+    // snap_delta). The PGA passes (Pass 0 / 0.5 / 0.7) are the
+    // only filter passes that make sense for them; the energy
+    // passes would reset every event to KEPT and wipe out the
+    // PGA filter's FILTERED decisions (the same bug the toms
+    // branch was written to avoid in 2026-06-15).
+    const isPgaOnlyStem = (stemType === 'toms' || stemType === 'snare');
+
     // Master onset-filter gate (2026-06-10). When OFF (explicit
     // Onset events visibility gate (2026-06-10 round 2). When
     // the user has turned the toms onset_events toggle OFF, the
@@ -1760,8 +1774,9 @@ function applyTuningFilter() {
     // drop to the saved MIDI.
     const onsetEventsEnabled = params.onset_events_enabled !== false;
 
-    // Pass 0: PGA prominence filter for toms (2026-06-15).
-    // Runs before spectral filter. PGA events (method='percentile_gated')
+    // Pass 0: PGA prominence filter for PGA-only stems
+    // (toms 2026-06-15; snare 2026-06-18). Runs before any
+    // spectral-style filter. PGA events (method='percentile_gated')
     // are skipped by applySpectralFilter so this is the only filter
     // that touches them here.
     //
@@ -1775,7 +1790,7 @@ function applyTuningFilter() {
     // live preview lit up events that should have stayed
     // faded. Mirrors the Python rebuild_core._refilter_stem_pga
     // layering exactly.
-    if (stemType === 'toms') {
+    if (isPgaOnlyStem) {
         let pgaKept = tuningBaseEvents;
         let pgaFiltered = [];
         const pgaThreshold = params.pga_min_prominence;
@@ -1817,13 +1832,15 @@ function applyTuningFilter() {
 
     // Run the energy-derived filters (Pass 1 and Pass 2) so
     // their statuses are consistent with the saved sidecar.
-    // For toms, events are all method='percentile_gated' and have
-    // no geomean / sustain / strength / attack_sharpness fields —
+    // For PGA-only stems (toms + snare as of 2026-06-18),
+    // events are all method='percentile_gated' and have no
+    // geomean / sustain / strength / attack_sharpness fields —
     // applySpectralFilter would reset them all to KEPT and the
     // geomean/sustain/strength checks would silently no-op on
     // null values, wiping out the PGA filter's KEPT/FILTERED
-    // decisions above. Skip both passes for toms. 2026-06-15.
-    if (stemType !== 'toms') {
+    // decisions above. Skip both passes for PGA-only stems.
+    // 2026-06-15 (toms), 2026-06-18 (snare).
+    if (!isPgaOnlyStem) {
         // Pass 1: Spectral filter (geomean + sustain + strength)
         applySpectralFilter(tuningBaseEvents, params, filterMode);
 
@@ -1883,6 +1900,11 @@ function applyTuningFilter() {
     // threshold. When 0 (the default), the filter is a no-op —
     // the slider in the sidecar shows "Off" at this position
     // so the user can confirm it's inactive.
+    //
+    // 2026-06-18: still toms-only. Snare PGA events don't
+    // carry band_max_ratio (it's a spectral-detector field),
+    // so the pass would no-op on snare — keeping the gate to
+    // toms avoids exposing a slider that can't affect anything.
     if (stemType === 'toms') {
         const ratioMax = params.band_max_ratio_max;
         if (ratioMax != null && ratioMax > 0) {
