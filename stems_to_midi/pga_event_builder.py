@@ -110,31 +110,59 @@ class PGAEventBuildError(RuntimeError):
     event list (e.g. an internal invariant is violated)."""
 
 
-def _resolve_max_floor_gate_db(config: Dict[str, Any]) -> float:
+def _resolve_max_floor_gate_db(
+    config: Dict[str, Any],
+    stem_type: Optional[str] = None,
+) -> float:
     """Resolve the global noise-floor gate cap (dB) with the
     standard per-stem > global > default precedence.
 
-    Resolution order (2026-06-18):
-      1. ``toms.pga_max_floor_gate_db`` (per-stem override;
-         only checked under the toms stem — same shape as
-         ``pga_min_prominence`` and ``min_decay_col_min_db``).
+    Resolution order (2026-06-18, generalized 2026-06-19 to
+    any stem — was previously hardcoded to ``toms`` only,
+    which meant a ``snare.pga_max_floor_gate_db`` override
+    was silently ignored, falling through to the global or
+    module default):
+      1. ``<stem_type>.pga_max_floor_gate_db`` — per-stem
+         override. When ``stem_type`` is provided, ONLY that
+         stem is checked. When ``stem_type`` is None
+         (legacy / test fallback), all known stems are
+         walked and the first non-None value wins.
       2. ``onset_detection.pga_max_floor_gate_db`` (the global
          setting in midiconfig.yaml).
       3. :data:`percentile_gated_detector.DEFAULT_MAX_FLOOR_GATE_DB`
          (currently -60.0 dB — see that module's docstring
          for the rationale).
 
-    ``None`` values are skipped so YAML ``null`` keeps the
-    default (rather than the float constructor choking). The
-    returned value is always a finite float.
+    Set the per-stem or global value to a very large positive
+    number (e.g. ``1000``) to effectively disable the cap
+    (the implementation does ``min(raw_gate, cap)``, so a
+    cap larger than any plausible raw gate is a no-op).
+    Set to a value BELOW the raw max p5 to force the floor
+    to that value (useful for diagnostic / tuning runs).
+
+    ``None`` values are skipped at every level so YAML
+    ``null`` keeps the default. Non-numeric values fall back
+    to the module default. The returned value is always a
+    finite float.
     """
     onset_cfg = config.get('onset_detection', {}) or {}
-    toms_cfg = config.get('toms', {}) or {}
-    raw = (
-        toms_cfg.get('pga_max_floor_gate_db')
-        if toms_cfg.get('pga_max_floor_gate_db') is not None
-        else onset_cfg.get('pga_max_floor_gate_db', DEFAULT_MAX_FLOOR_GATE_DB)
-    )
+    # Per-stem overrides.
+    if stem_type is not None:
+        stem_cfgs = [config.get(stem_type, {}) or {}]
+    else:
+        # Fallback: walk all known stems. The first non-None
+        # wins. Same caveat as the other resolvers —
+        # production callers should pass stem_type.
+        stem_cfgs = [config.get(s, {}) or {} for s in _PGA_STEM_NAMES]
+    for stem_cfg in stem_cfgs:
+        raw = stem_cfg.get('pga_max_floor_gate_db')
+        if raw is not None:
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                pass
+    # Global override.
+    raw = onset_cfg.get('pga_max_floor_gate_db', DEFAULT_MAX_FLOOR_GATE_DB)
     try:
         return float(raw)
     except (TypeError, ValueError):
@@ -446,18 +474,12 @@ def detect_pga_events(
     # back to the module's hard-coded default when
     # unset, so the pipeline behavior is identical to
     # before when no per-project overrides exist.
-    # 2026-06-18: _resolve_max_floor_gate_db is still
-    # toms-only (its stem_type generalization was
-    # reverted along with pga_disable_noise_floor). The
-    # cap leak from toms to other stems is a known
-    # limitation: a snare.pga_max_floor_gate_db
-    # override is ignored if toms also sets one.
-    # Acceptable for now (no user has hit this); the
-    # per-stem filter knobs (pga_min_prominence,
-    # min_decay_col_min_db, attack_rise_max_ms) are
-    # the ones the user actually needs per-stem and
-    # ARE correctly resolved below.
-    max_floor_gate_db = _resolve_max_floor_gate_db(config)
+    # 2026-06-19: _resolve_max_floor_gate_db is now
+    # stem_type-aware (generalized to drop the toms-only
+    # hardcode that was leaking toms values into kick
+    # processing). Per-stem overrides for any of the
+    # 5 known PGA stems are honored.
+    max_floor_gate_db = _resolve_max_floor_gate_db(config, stem_type)
     abs_envelope_threshold = _resolve_pga_abs_envelope_threshold(config, stem_type)
     broad_freq_min_hz = _resolve_pga_detector_param(
         config, 'pga_broad_freq_min_hz', DEFAULT_BROAD_FREQ_MIN_HZ, stem_type,
@@ -991,7 +1013,7 @@ def build_pga_events(
     # contract) expect it on the return value.
     # 2026-06-18: pass the max_floor_gate_db cap. See
     # detect_pga_events for the rationale.
-    max_floor_gate_db = _resolve_max_floor_gate_db(config)
+    max_floor_gate_db = _resolve_max_floor_gate_db(config, stem_type)
     abs_envelope_threshold = _resolve_pga_abs_envelope_threshold(config, stem_type)
     broad_freq_min_hz = _resolve_pga_detector_param(
         config, 'pga_broad_freq_min_hz', DEFAULT_BROAD_FREQ_MIN_HZ, stem_type,
@@ -1070,7 +1092,7 @@ def _build_pga_events_with_filter(
 
     # 2026-06-18: pass the max_floor_gate_db cap. See
     # detect_pga_events for the rationale.
-    max_floor_gate_db = _resolve_max_floor_gate_db(config)
+    max_floor_gate_db = _resolve_max_floor_gate_db(config, stem_type)
     abs_envelope_threshold = _resolve_pga_abs_envelope_threshold(config, stem_type)
     broad_freq_min_hz = _resolve_pga_detector_param(
         config, 'pga_broad_freq_min_hz', DEFAULT_BROAD_FREQ_MIN_HZ, stem_type,
