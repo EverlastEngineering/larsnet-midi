@@ -194,16 +194,14 @@ class SettingsManager {
                 break;
                 
             case 'midi':
-                settings.onset_threshold = this.settings['onset-threshold'] || null;
-                settings.onset_delta = this.settings['onset-delta'] || null;
+                // 2026-06-20: onset_threshold / onset_delta / detection_method
+                // removed — all three were tied to the energy/spectral
+                // pipeline that Phase 1 retired. The PGA pipeline uses
+                // per-stem pga_min_prominence (and decay_col_min /
+                // attack_rise where exposed) — see filter_registry.json.
                 settings.min_velocity = this.settings['min-velocity'] || 40;
                 settings.max_velocity = this.settings['max-velocity'] || 127;
                 settings.tempo = this.settings['tempo'] || null;
-                // detection_method: which detector's events become events_configured
-                // (energy / spectral / both). 'both' is the schema default and the
-                // recommended choice — it keeps every energy hit and adds the
-                // spectral candidates that energy missed.
-                settings.detection_method = this.settings['detection-method'] || 'both';
                 break;
                 
             case 'video':

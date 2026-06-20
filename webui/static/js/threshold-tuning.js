@@ -185,7 +185,10 @@ const STEM_SLIDER_CONFIGS = {
         { key: 'open_decay_slope_max', label: '🔓 Open/Closed: Decay Slope', min: 0, max: 10, step: 0.1, fallback: 2.0, unit: 'dB/f', classification: true }
     ],
     cymbals: [
-        { key: 'expected_clusters', label: '🎵 Sound Types', min: 1, max: 4, step: 1, fallback: 2, unit: '', classification: true }
+        // 2026-06-20: expected_clusters slider removed (Phase 3
+        // deleted the schema entry — cymbals clustering is now
+        // auto-derived). The pga_min_prominence slider is added
+        // at runtime by _ensureFilterRegistryLoaded.
     ]
 };
 
