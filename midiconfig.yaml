@@ -105,19 +105,16 @@ onset_detection:
   pga_nms_min_frames: null      # default 20 (~116ms at hop=256; safe NMS floor for typical drumming)
   pga_strike_offset_sec: null   # default 0.008 (8ms; Hann center-of-bin bias for toms strikes)
 
-  # PGA-only pipeline toggle (2026-06-18). When ``true`` for
-  # a given stem, ``process_stem_to_midi`` short-circuits to
-  # ``processing_shell_percentile_gated.process_percentile_gated``
-  # for that stem and skips the energy/spectral/pan detection
-  # paths entirely. The PGA detector was validated for toms
-  # on project 4; the other stems have not been ported yet, so
-  # the safe default is ``false``. A project that wants to
-  # enable PGA for, say, the toms stem sets
-  # ``toms.use_pga_detection: true`` in its per-project
-  # midiconfig.yaml. The root key here is documentation /
+  # PGA-only pipeline toggle (2026-06-18, universal 2026-06-20).
+  # When ``true`` for a given stem, ``process_stem_to_midi``
+  # short-circuits to ``processing_shell_percentile_gated.
+  # process_percentile_gated`` for that stem and skips the
+  # energy/spectral/pan detection paths entirely. The per-stem
+  # overrides below set this to ``true`` for every stem — the
+  # PGA detector has been validated end-to-end on all 5 stems
+  # (projects 4, 6, 7). The global key here is documentation /
   # discoverability only — ``process_stem_to_midi`` reads
-  # ``<stem_type>.use_pga_detection`` per-stem, not this
-  # global. Leave ``false`` here.
+  # ``<stem_type>.use_pga_detection`` per-stem, not this global.
   use_pga_detection: false
   
 # === ENERGY-BASED DETECTION (NEW METHOD - DEFAULT) ===
@@ -147,6 +144,7 @@ filtering:
 kick:
   # Kick drum (bass drum) settings
   midi_note: 36
+  use_pga_detection: true
 
   # Stereo processing
   use_stereo: false  # Kick is typically centered, no benefit from stereo analysis
@@ -205,6 +203,7 @@ snare:
   midi_note: 38               # D1 - Acoustic Snare (default)
   midi_note_rimshot: 37       # C#1 - Side Stick (Rimshot)
   midi_note_clap: 39          # D#1 - Hand Clap
+  use_pga_detection: true
   
   # Pitch detection for classification (snare/rimshot/clap)
   enable_pitch_detection: false  # Enable pitch-based classification (experimental)
@@ -253,8 +252,9 @@ snare:
 toms:
   # Tom drums settings
   midi_note_low: 45      # A1 - Low Tom
-  midi_note_mid: 47      # B1 - Mid Tom  
+  midi_note_mid: 47      # B1 - Mid Tom
   midi_note_high: 50     # D2 - High Tom
+  use_pga_detection: true
   
   # Stereo processing
   use_stereo: true  # Toms are often panned left to right, use stereo for identification
@@ -334,6 +334,7 @@ hihat:
   midi_note_foot_close: 44   # G#1 - Foot close (pedal closes open hihat)
   midi_note_handclap: 39     # D#1 - Hand Clap (detected from hihat bleed)
   midi_note: 42              # Default (closed) for backward compatibility
+  use_pga_detection: true
   
   # Stereo processing
   use_stereo: true  # Hi-hat may be off-center, use stereo for better detection
@@ -388,6 +389,7 @@ cymbals:
   midi_note_crash: 49        # C#2 - Crash Cymbal 1
   midi_note_ride: 51         # D#2 - Ride Cymbal 1
   midi_note_chinese: 52      # E2 - Chinese Cymbal
+  use_pga_detection: true
   
   # Stereo processing
   use_stereo: true  # Cymbals are often panned left/right, use stereo for crash/ride distinction
