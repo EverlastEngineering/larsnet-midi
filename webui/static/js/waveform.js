@@ -834,7 +834,25 @@ function getSensitiveEventsForStem(stemData) {
 // spectral but never get promoted to events_configured. Always
 // returned (no toggle); the caller decides whether to render.
 function getPgaEventsForStem(stemData) {
-    return stemData.events_pga || [];
+    // 2026-06-19: filter to KEPT before returning. The previous
+    // version returned every events_pga entry (including
+    // FILTERED), relying on drawPgaEventBars to hide them when
+    // the tuning panel was closed. That double-layer filter
+    // worked when the sidecar had a healthy mix of KEPT and
+    // FILTERED bars, but failed badly when the sidecar was
+    // mostly-FILTERED (e.g. a strict cymbals threshold that
+    // zero'd out the KEPT set): closing the panel produced an
+    // empty display because every event was both filtered out
+    // by drawPgaEventBars and counted by the time-range
+    // computation. Filtering here — same pattern as
+    // getEventsForStem on the configured layer — restores the
+    // invariant that closing the panel shows the kept events.
+    // The tuning path is unaffected: it passes
+    // waveformTuningEvents (which already contains the live
+    // FILTERED mix) directly into drawPgaEventBars, bypassing
+    // this helper.
+    const all = stemData.events_pga || [];
+    return all.filter(e => e.status === 'KEPT');
 }
 
 function computeTimeRange(events, sensitiveEvents, envelope, pgaEvents) {
