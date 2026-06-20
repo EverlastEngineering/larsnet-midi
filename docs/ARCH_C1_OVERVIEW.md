@@ -1,6 +1,6 @@
 # Architecture Overview
 
-DrumToMIDI is an audio-to-MIDI conversion system for drum tracks using deep learning separation, spectral analysis, and temporal detection.
+DrumToMIDI is an audio-to-MIDI conversion system for drum tracks using deep learning separation and percentile-gated broad-attack (PGA) detection.
 
 ## System Context (C1)
 
@@ -51,8 +51,8 @@ docker exec -it DrumToMIDI-midi bash
 - **5-stem separation**: Kick, snare, hi-hat, toms, cymbals
 - **GPU acceleration**: CUDA (Windows/Linux), Metal/MPS (Mac native)
 - **Sidechain cleanup**: Reduces bleed between stems
-- **Adaptive detection**: Energy thresholds, spectral analysis
-- **Learning mode**: Calibrate thresholds from labeled data
+- **PGA detection**: Percentile-gated broad-attack detector (universal since 2026-06-20)
+- **Per-event filter chain**: Prominence + decay_col_min + attack_rise
 - **Rock Band visualization**: Falling notes with waveforms
 - **Web API**: RESTful endpoints for all operations
 

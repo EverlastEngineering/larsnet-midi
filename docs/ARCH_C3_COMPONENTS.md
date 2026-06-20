@@ -154,15 +154,24 @@ webui/
 ```
 stems_to_midi/
 ├── __init__.py
-├── config.py                   # Configuration dataclass (92% coverage)
-├── detection.py                # Hit detection (91% coverage)
-├── helpers.py                  # Analysis utilities (66% coverage)
-├── learning.py                 # Threshold calibration (95% coverage)
-├── midi.py                     # MIDI generation (100% coverage)
-├── processor.py                # Main orchestrator (65% coverage)
-└── optimization/               # CLI tool for threshold tuning
-    ├── extract_features.py
-    └── optimize.py
+├── analysis_core.py            # Pure analysis utilities (FFT, envelopes, pans)
+├── config.py                   # Configuration dataclass
+├── energy_detection_core.py    # Energy envelope (rms / peak_hold only;
+│                                # the dead 'spectral' method was removed 2026-06-20)
+├── event_features.py           # Per-event feature extraction
+├── learning.py                 # Threshold calibration (legacy)
+├── midi.py                     # MIDI generation
+├── midi_types.py               # TypedDicts for analysis sidecar contract
+├── note_classification_core.py # Per-stem MIDI note assignment
+├── percentile_gated_detector.py # PGA detection (the live detector since 2026-06-20)
+├── pga_event_builder.py        # Per-event filter chain + KEPT/FILTERED stamping
+├── processing_shell.py         # Main orchestrator (PGA short-circuit + audio I/O)
+├── processing_shell_percentile_gated.py # PGA pipeline entry point
+├── rebuild_core.py             # Save & Reconvert fast path (re-filters cached analysis)
+├── stereo_core.py              # Stereo utilities (separate_channels, pan, width)
+└── stft_utils.py               # compute_stft_db + timing helpers (extracted from the
+                                # former spectral_transient_core.py after its detector was
+                                # removed in the PGA-universal cleanup)
 ```
 
 ### `moderngl_renderer/` - GPU Rendering

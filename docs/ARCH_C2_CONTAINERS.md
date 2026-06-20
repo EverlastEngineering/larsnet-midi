@@ -14,7 +14,7 @@ C4Container
         Container(webui, "Web UI", "Flask + JavaScript", "Browser-based interface for all operations")
         Container(cli, "CLI Tools", "Python scripts", "Command-line tools for batch processing")
         Container(separation, "Separation Engine", "PyTorch + MDX23C", "Separates drums into 5 stems")
-        Container(detection, "Detection Engine", "LibROSA + NumPy", "Detects drum hits in stems")
+        Container(detection, "Detection Engine", "PGA + NumPy", "Percentile-gated broad-attack detector (universal 2026-06-20)")
         Container(midi, "MIDI Engine", "Mido + MidiUtil", "Converts detections to MIDI")
         Container(rendering, "Rendering Engine", "ModernGL/OpenCV", "Creates Rock Band-style videos")
         Container(project, "Project Manager", "Python", "Manages project state and files")
@@ -76,13 +76,13 @@ C4Container
   - GPU acceleration (CUDA/MPS)
   - Chunk-based processing
 
-### Detection Engine (`stems_to_midi/detection.py`, `helpers.py`)
+### Detection Engine (`stems_to_midi/processing_shell.py`, `processing_shell_percentile_gated.py`)
 - **Role**: Drum hit detection
-- **Tech**: LibROSA, NumPy, SciPy
+- **Tech**: NumPy, SciPy (PGA detector; no librosa)
 - **Responsibilities**:
-  - Onset detection (energy thresholds)
-  - Spectral analysis (frequency bins)
-  - Hi-hat state classification (open/closed)
+  - Percentile-gated broad-attack (PGA) onset detection
+  - Per-event filter chain: prominence + decay_col_min + attack_rise
+  - Hi-hat state classification (open/closed via PGA decay-slope rule)
   - Tom pitch estimation
   - Velocity estimation
 
