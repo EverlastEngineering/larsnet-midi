@@ -616,22 +616,17 @@ class TestFullPipeline:
         with open(project_dir / "midiconfig.yaml") as f:
             config = yaml.safe_load(f)
         config = _force_pga_detection(config)
-        
-        onset_params = config.get('onset_detection', {})
-        
-        notes = process_stem_to_midi(
+
+        result = process_stem_to_midi(
             cleaned_kick_path,
             stem_type='kick',
             drum_mapping=drum_mapping,
             config=config,
-            onset_threshold=onset_params.get('threshold', 0.3),
-            onset_delta=onset_params.get('delta', 0.01),
-            onset_wait=onset_params.get('wait', 1),
-            hop_length=onset_params.get('hop_length', 512),
             min_velocity=40,
             max_velocity=127
         )
-        
+        notes = result['events']
+
         midi_path = midi_dir / "test_song_cleaned.mid"
         create_midi_file({'kick': notes}, str(midi_path), tempo=120.0)
         
