@@ -967,36 +967,14 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         yaml_path=['hihat', 'use_stereo'],
     ),
 
-    SettingDefinition(
-        key='hihat_open_geomean_min',
-        type=SettingType.FLOAT,
-        default=262.0,
-        label='Open Hi-Hat GeoMean Threshold',
-        description='Minimum spectral geomean to classify a hi-hat hit as open (higher = stricter)',
-        category=SettingCategory.HIHAT,
-        ui_control=UIControl.SLIDER,
-        min_value=50.0,
-        max_value=1000.0,
-        step=10.0,
-        yaml_path=['hihat', 'open_geomean_min'],
-        cli_flag='--hihat-open-geomean',
-    ),
-
-    SettingDefinition(
-        key='hihat_open_sustain_ms',
-        type=SettingType.FLOAT,
-        default=100.0,
-        label='Open Hi-Hat Sustain Threshold',
-        description='Minimum sustain in milliseconds to classify a hi-hat hit as open (higher = stricter). Aligned with midiconfig.yaml default.',
-        category=SettingCategory.HIHAT,
-        ui_control=UIControl.SLIDER,
-        min_value=20.0,
-        max_value=500.0,
-        step=5.0,
-        unit='ms',
-        yaml_path=['hihat', 'open_sustain_ms'],
-        cli_flag='--hihat-open-sustain-ms',
-    ),
+    # 2026-06-19: hihat_open_geomean_min and hihat_open_sustain_ms
+    # removed from the schema. The slope rule
+    # (hihat_open_decay_slope_max, below) is the only hihat
+    # open/closed classifier on current sidecars. The
+    # geomean+sustain rule in classify_hihat_notes is a
+    # defensive fallback that only fires when decay_slope_db
+    # is missing (older sidecars from before 2026-06-19), so
+    # users never need to tune it.
 
     # 2026-06-19: broadband-envelope decay-slope classifier for
     # open/closed hihat. ``decay_slope_db`` is the mean per-frame

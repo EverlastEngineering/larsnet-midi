@@ -45,8 +45,15 @@ def classify_hihat_notes(
     Args:
         events: KEPT hihat event dicts with body_energy, sizzle_energy,
             sustain_ms, and optionally geomean fields.
-        config: Full config dict. Reads hihat.open_geomean_min (default 262)
-            and hihat.open_sustain_ms (default 100).
+        config: Full config dict. Reads hihat.open_decay_slope_max
+            (default 2.0 dB/frame) for the slope rule. The legacy
+            hihat.open_geomean_min (default 262) and
+            hihat.open_sustain_ms (default 100) keys are also
+            read by the defensive fallback path, which only
+            fires when decay_slope_db is missing (older sidecars
+            from before 2026-06-19). They are no longer in the
+            settings schema or project yaml — current projects
+            will never go down the fallback path.
         force_reclassify: If True, recompute hihat_state for every event
             even if one is already stored. Default False.
 
