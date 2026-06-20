@@ -54,7 +54,7 @@ import numpy as np
 from scipy.signal import find_peaks, peak_widths
 from typing import Tuple
 
-from .spectral_transient_core import timed
+from .stft_utils import timed
 
 # Frequency band cutoffs (Hz) — must match DEFAULT_BANDS in
 # spectral_transient_core.py.
@@ -383,7 +383,7 @@ def _detect_percentile_gated_broad_attacks_impl(
             envelope, peak indices, prominences) for inspection.
     """
     # Import here to avoid an import cycle at module load time.
-    from .spectral_transient_core import compute_stft_db
+    from .stft_utils import compute_stft_db
 
     freqs, times, s_db = compute_stft_db(audio, sr, n_fft=n_fft, hop=hop)
 

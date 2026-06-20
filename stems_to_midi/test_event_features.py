@@ -39,7 +39,7 @@ from stems_to_midi.event_features import (
     compute_event_features,
     compute_event_features_for_list,
 )
-from stems_to_midi import spectral_transient_core
+from stems_to_midi import stft_utils
 from stems_to_midi import event_features as _event_features_module
 
 
@@ -47,7 +47,7 @@ from stems_to_midi import event_features as _event_features_module
 def _reset_shell_caches():
     """Clear module-level shell caches before each test.
 
-    Both ``spectral_transient_core._STFT_CACHE`` and
+    Both ``stft_utils._STFT_CACHE`` and
     ``event_features._ENVELOPE_CACHE`` are keyed on ``id(audio)``.
     Across tests, a freed audio array's id may be reissued to a
     new, unrelated array — without clearing, the new array would
@@ -55,10 +55,10 @@ def _reset_shell_caches():
     core itself is stateless and deterministic; this fixture just
     isolates tests from the shell's id-keyed memoization.
     """
-    spectral_transient_core._STFT_CACHE.clear()
+    stft_utils._STFT_CACHE.clear()
     _event_features_module._ENVELOPE_CACHE.clear()
     yield
-    spectral_transient_core._STFT_CACHE.clear()
+    stft_utils._STFT_CACHE.clear()
     _event_features_module._ENVELOPE_CACHE.clear()
 
 

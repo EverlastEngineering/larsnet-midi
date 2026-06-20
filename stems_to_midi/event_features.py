@@ -62,7 +62,7 @@ from functools import wraps
 import numpy as np
 import os
 
-from .spectral_transient_core import timed
+from .stft_utils import timed
 
 
 # Set LARSNET_TIMING=1 in environment to opt in to [t+Xs] timing logs.
@@ -185,7 +185,7 @@ def _envelope_at_time(
         cached_audio, result = cached
         if cached_audio is audio:
             return result
-    from .spectral_transient_core import compute_stft_db
+    from .stft_utils import compute_stft_db
     freqs, times, s_db = compute_stft_db(audio, sr, n_fft=n_fft, hop=hop)
     # dB → linear: S = 10^(dB/20) for magnitude, but for
     # power it's 10^(dB/10). STFT output is magnitude (dB
@@ -651,7 +651,7 @@ def compute_decay_t60_ms(
       - Toms: 300-800ms
       - Cymbals: 800-2000ms
     """
-    from .spectral_transient_core import compute_stft_db
+    from .stft_utils import compute_stft_db
 
     onset_sample = int(event_time_sec * sr) + int(skip_ms * sr / 1000.0)
     window_samples = int(body_window_ms * sr / 1000.0)
@@ -714,7 +714,7 @@ def compute_spectral_centroid_hz(
 
     Returns None if the segment is too short.
     """
-    from .spectral_transient_core import compute_stft_db
+    from .stft_utils import compute_stft_db
 
     onset_sample = int(event_time_sec * sr) + int(skip_ms * sr / 1000.0)
     window_samples = int(body_window_ms * sr / 1000.0)
@@ -815,7 +815,7 @@ def compute_spectral_flatness(
         float in [0, 1] or None if the segment is too
         short or the spectrum is silent.
     """
-    from .spectral_transient_core import compute_stft_db
+    from .stft_utils import compute_stft_db
 
     onset_sample = int(event_time_sec * sr) + int(skip_ms * sr / 1000.0)
     window_samples = int(body_window_ms * sr / 1000.0)
@@ -942,7 +942,7 @@ def compute_high_res_decay_signature(
         hr_peak_envelope, decay_envelope_energy,
         decay_col_min_median_db. All may be None on failure.
     """
-    from .spectral_transient_core import compute_stft_db
+    from .stft_utils import compute_stft_db
 
     # Extract audio window: 10ms before, 200ms after the event
     t_start = max(0.0, event_time_sec - 0.010)

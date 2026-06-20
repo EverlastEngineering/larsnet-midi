@@ -151,7 +151,7 @@ def _load_real_toms():
 # memory pressure reuses a freed buffer's id).
 @pytest.fixture(autouse=True)
 def _clear_stft_cache():
-    from stems_to_midi.spectral_transient_core import _STFT_CACHE
+    from stems_to_midi.stft_utils import _STFT_CACHE
     _STFT_CACHE.clear()
     yield
     # No teardown — let other tests handle their own state.

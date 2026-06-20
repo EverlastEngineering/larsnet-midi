@@ -526,7 +526,7 @@ def _clear_stft_cache():
     Scoped to this class only — other tests in the suite are
     unaffected.
     """
-    from stems_to_midi.spectral_transient_core import _STFT_CACHE
+    from stems_to_midi.stft_utils import _STFT_CACHE
     _STFT_CACHE.clear()
     yield
     # No teardown — leave the cache alone. Subsequent tests in
@@ -1330,7 +1330,7 @@ class TestPostFilterFeatureRecompute:
         from stems_to_midi.pga_event_builder import (
             _compute_features_for_filtered_events,
         )
-        from stems_to_midi.spectral_transient_core import _STFT_CACHE
+        from stems_to_midi.stft_utils import _STFT_CACHE
         _STFT_CACHE.clear()
         # Build audio with 2 strikes so features have
         # something to measure.

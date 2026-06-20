@@ -130,19 +130,6 @@ def calculate_energy_envelope(
                 energy[i] = np.max(envelope[start:end])
     
     elif method == 'spectral':
-        # === CLEANUP-START: method='spectral' branch (no live callers) ===
-        # Spectral flux - better for detecting timbral changes
-        # DEAD (2026-06-20): no live caller passes method='spectral'.
-        #   The PGA pipeline (processing_shell_percentile_gated) only
-        #   passes 'peak_hold' (default) or 'rms' (user-overridden).
-        #   Tests test_detector_exhaustive.py only exercise 'rms'.
-        #   Phase 7 will hard-delete this branch.
-#         energy = librosa.onset.onset_strength(
-#             y=audio,
-#             sr=sr,
-#             hop_length=hop_length
-#         )
-        # === CLEANUP-END ===
         # Defensive: if method='spectral' is somehow reached, fall
         # back to 'rms' rather than crashing. This is a safety net
         # for any in-flight midiconfig.yaml that still has

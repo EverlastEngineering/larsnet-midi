@@ -10,14 +10,9 @@ from pathlib import Path
 import tempfile
 import soundfile as sf
 from stems_to_midi.config import load_config, DrumMapping
-from stems_to_midi.detection_shell import (
-    detect_onsets,
-    estimate_velocity,
-    classify_tom_pitch,
-    detect_hihat_state
-)
 from stems_to_midi.processing_shell import process_stem_to_midi
 from stems_to_midi.midi import create_midi_file, read_midi_notes, save_envelope_data, load_envelope_data
+from stems_to_midi.analysis_core import estimate_velocity
 
 
 # ============================================================================
@@ -202,55 +197,6 @@ class TestConfiguration:
 # ONSET DETECTION TESTS
 # ============================================================================
 
-class TestOnsetDetection:
-    """Test onset detection functionality."""
-    
-    def test_detect_onsets_synthetic(self, synthetic_audio):
-        """Test onset detection on synthetic audio with known transients."""
-        audio, sr, expected_times, _ = synthetic_audio
-        
-        onset_times, onset_strengths = detect_onsets(
-            audio, sr, 
-            hop_length=512,
-            threshold=0.01,
-            delta=0.005,
-            wait=1
-        )
-        
-        # Should detect close to 4 onsets
-        assert len(onset_times) >= 3, f"Expected ~4 onsets, got {len(onset_times)}"
-        
-        # Check timing accuracy (within 50ms)
-        for expected_time in expected_times:
-            closest_detected = min(onset_times, key=lambda t: abs(t - expected_time))
-            time_error = abs(closest_detected - expected_time)
-            assert time_error < 0.05, f"Onset at {expected_time}s off by {time_error*1000:.1f}ms"
-    
-    def test_detect_onsets_silent(self):
-        """Test onset detection on silent audio."""
-        sr = 22050
-        audio = np.zeros(sr * 1)  # 1 second of silence
-        
-        onset_times, onset_strengths = detect_onsets(audio, sr)
-        
-        # Should detect no onsets (or very few spurious ones)
-        assert len(onset_times) <= 2, f"Silent audio shouldn't have onsets, got {len(onset_times)}"
-    
-    def test_detect_onsets_returns_normalized_strengths(self, synthetic_audio):
-        """Test that onset strengths are normalized to 0-1 range."""
-        audio, sr, _, _ = synthetic_audio
-        
-        onset_times, onset_strengths = detect_onsets(audio, sr)
-        
-        assert len(onset_strengths) > 0
-        assert np.all(onset_strengths >= 0.0)
-        assert np.all(onset_strengths <= 1.0)
-
-
-# ============================================================================
-# VELOCITY ESTIMATION TESTS
-# ============================================================================
-
 class TestVelocityEstimation:
     """Test MIDI velocity calculation."""
     
@@ -283,124 +229,6 @@ class TestVelocityEstimation:
 
 # ============================================================================
 # TOM PITCH DETECTION TESTS
-# ============================================================================
-
-class TestTomPitchDetection:
-    """Test tom pitch detection and classification."""
-    
-    def test_classify_tom_pitch_single(self):
-        """Test classification with single pitch."""
-        pitches = np.array([100.0, 100.0, 100.0])
-        classifications = classify_tom_pitch(pitches)
-        
-        # All same pitch should be classified as mid
-        assert np.all(classifications == 1)
-    
-    def test_classify_tom_pitch_two_groups(self):
-        """Test classification with two distinct pitches."""
-        pitches = np.array([80.0, 80.0, 160.0, 160.0])
-        classifications = classify_tom_pitch(pitches)
-        
-        # Should split into low (0) and high (2)
-        assert np.all(classifications[:2] == 0)  # Low
-        assert np.all(classifications[2:] == 2)  # High
-    
-    def test_classify_tom_pitch_three_groups(self):
-        """Test classification with three distinct pitches."""
-        pitches = np.array([70.0, 100.0, 180.0])
-        classifications = classify_tom_pitch(pitches)
-        
-        # Should be [low, mid, high]
-        assert classifications[0] == 0
-        assert classifications[1] == 1
-        assert classifications[2] == 2
-    
-    def test_classify_tom_pitch_handles_zeros(self):
-        """Test that failed detections (0 Hz) are handled."""
-        pitches = np.array([0.0, 100.0, 0.0, 150.0])
-        classifications = classify_tom_pitch(pitches)
-        
-        # Should return classifications for all, even zeros
-        assert len(classifications) == len(pitches)
-        assert all(c in [0, 1, 2] for c in classifications)
-
-
-# ============================================================================
-# HI-HAT STATE DETECTION TESTS
-# ============================================================================
-
-class TestHiHatStateDetection:
-    """Test hi-hat open/closed/handclap detection."""
-    
-    def test_detect_hihat_state_with_precalculated(self, sample_config):
-        """Test hi-hat state detection with pre-calculated sustain durations."""
-        # Current classification uses: Open = (GeoMean >= 262) AND (SustainMs >= 100)
-        onset_times = np.array([0.5, 1.0, 1.5, 2.0])
-        sustain_durations = [80.0, 180.0, 50.0, 120.0]  # ms
-        spectral_data = [
-            {'body_energy': 100, 'sizzle_energy': 200},   # Closed: GeoMean=141 < 262
-            {'body_energy': 400, 'sizzle_energy': 200},   # Open: GeoMean=283 > 262, Sustain=180 > 100
-            {'body_energy': 180, 'sizzle_energy': 200},   # Closed: GeoMean=190 < 262
-            {'body_energy': 300, 'sizzle_energy': 250}    # Open: GeoMean=274 > 262, Sustain=120 > 100
-        ]
-        
-        # Dummy audio (not used when sustain_durations provided)
-        sr = 44100
-        audio = np.zeros(sr * 3)
-        
-        # Configure with learned thresholds
-        config = sample_config.copy()
-        config['hihat'] = {
-            'open_sustain_ms': 100,
-            'open_geomean_min': 262.0
-        }
-        
-        states = detect_hihat_state(
-            audio, sr, onset_times,
-            sustain_durations=sustain_durations,
-            open_sustain_threshold_ms=100.0,
-            spectral_data=spectral_data,
-            config=config
-        )
-        
-        assert len(states) == 4
-        assert states[0] == 'closed'  # GeoMean=141 < 262
-        assert states[1] == 'open'    # GeoMean=283 >= 262 AND Sustain=180 >= 100
-        assert states[2] == 'closed'  # GeoMean=190 < 262
-        assert states[3] == 'open'    # GeoMean=274 >= 262 AND Sustain=120 >= 100
-    
-    def test_detect_hihat_closed_low_energy(self, sample_config):
-        """Test closed hihat detection with low energy."""
-        onset_times = np.array([0.5, 1.0])
-        sustain_durations = [30.0, 50.0]  # Short sustain
-        spectral_data = [
-            {'body_energy': 50, 'sizzle_energy': 100},   # GeoMean=71 < 262 → closed
-            {'body_energy': 100, 'sizzle_energy': 150}   # GeoMean=122 < 262 → closed
-        ]
-        
-        audio = np.zeros(44100 * 2)
-        sr = 44100
-        
-        config = sample_config.copy()
-        config['hihat'] = {
-            'open_sustain_ms': 100,
-            'open_geomean_min': 262.0
-        }
-        
-        states = detect_hihat_state(
-            audio, sr, onset_times,
-            sustain_durations=sustain_durations,
-            spectral_data=spectral_data,
-            config=config
-        )
-        
-        assert len(states) == 2
-        assert states[0] == 'closed'  # Low energy
-        assert states[1] == 'closed'  # Low energy
-
-
-# ============================================================================
-# DRUM MAPPING TESTS
 # ============================================================================
 
 class TestDrumMapping:
