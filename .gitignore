@@ -70,3 +70,7 @@ site/
 .claude/settings.local.json
 .claude/settings.local.json
 .playwright-mcp
+
+# Playwright / test run artifacts
+test-results/
+playwright-report/
