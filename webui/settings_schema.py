@@ -305,87 +305,10 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
     # Global Onset Detection Settings
     # ================================
 
-    SettingDefinition(
-        key='onset_threshold',
-        type=SettingType.FLOAT,
-        default=0.3,
-        label='Onset Threshold',
-        description='Detection sensitivity (lower = more sensitive, catches quieter hits)',
-        category=SettingCategory.ONSET_DETECTION,
-        ui_control=UIControl.SLIDER,
-        min_value=0.0,
-        max_value=1.0,
-        step=0.01,
-        yaml_path=['onset_detection', 'threshold'],
-        cli_flag='--onset-threshold',
-    ),
 
-    SettingDefinition(
-        key='onset_delta',
-        type=SettingType.FLOAT,
-        default=0.01,
-        label='Onset Delta',
-        description='Peak picking sensitivity (lower = more sensitive to variations)',
-        category=SettingCategory.ONSET_DETECTION,
-        ui_control=UIControl.NUMBER,
-        min_value=0.0,
-        max_value=0.1,
-        step=0.001,
-        yaml_path=['onset_detection', 'delta'],
-        cli_flag='--onset-delta',
-    ),
 
-    SettingDefinition(
-        key='onset_wait',
-        type=SettingType.INT,
-        default=3,
-        label='Onset Wait',
-        description='Minimum frames between peaks (1 frame ≈ 11ms, allows fast repeated hits)',
-        category=SettingCategory.ONSET_DETECTION,
-        ui_control=UIControl.NUMBER,
-        min_value=1,
-        max_value=20,
-        step=1,
-        unit='frames',
-        advanced=True,
-        yaml_path=['onset_detection', 'wait'],
-        cli_flag='--onset-wait',
-    ),
 
-    SettingDefinition(
-        key='hop_length',
-        type=SettingType.INT,
-        default=512,
-        label='Hop Length',
-        description='Samples between frames (affects time resolution)',
-        category=SettingCategory.ONSET_DETECTION,
-        ui_control=UIControl.NUMBER,
-        min_value=128,
-        max_value=2048,
-        step=128,
-        unit='samples',
-        advanced=True,
-        yaml_path=['onset_detection', 'hop_length'],
-        cli_flag='--hop-length',
-    ),
 
-    SettingDefinition(
-        key='detection_method',
-        type=SettingType.CHOICE,
-        default='both',
-        label='Detection Method',
-        description=(
-            "Which detector's events become events_configured. The "
-            "spectral detector and the energy detector BOTH always run; "
-            "this only chooses which list is promoted to "
-            "events_configured for the MIDI output."
-        ),
-        category=SettingCategory.ONSET_DETECTION,
-        ui_control=UIControl.SELECT,
-        allowed_values=['energy', 'spectral', 'both'],
-        yaml_path=['onset_detection', 'detection_method'],
-        cli_flag='--detection-method',
-    ),
 
     # ======================
     # MIDI Output Settings
@@ -440,20 +363,6 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
     # =================
     # Global filtering
     # =================
-    SettingDefinition(
-        key='reverb_continuation_attack_threshold',
-        type=SettingType.FLOAT,
-        default=0.4,
-        label='Reverb Attack Threshold',
-        description='Attack sharpness threshold for reverb continuation filtering (real hits >= 0.4, reverb/echo < 0.4)',
-        category=SettingCategory.MIDI_OUTPUT,
-        ui_control=UIControl.SLIDER,
-        min_value=0.0,
-        max_value=1.0,
-        step=0.01,
-        yaml_path=['filtering', 'reverb_continuation_attack_threshold'],
-        cli_flag='--reverb-attack-threshold',
-    ),
     
     # =================
     # Per-Stem Settings
@@ -476,21 +385,6 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         advanced=True,
     ),
 
-    SettingDefinition(
-        key='kick_onset_threshold',
-        type=SettingType.FLOAT,
-        default=0.1,
-        label='Onset Threshold Override',
-        description='Per-stem onset threshold (overrides global setting)',
-        category=SettingCategory.KICK,
-        ui_control=UIControl.NUMBER,
-        min_value=0.0,
-        max_value=1.0,
-        step=0.01,
-        nullable=True,
-        advanced=True,
-        yaml_path=['kick', 'onset_threshold'],
-    ),
 
     SettingDefinition(
         key='kick_timing_offset',
@@ -508,20 +402,6 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         yaml_path=['kick', 'timing_offset'],
     ),
 
-    SettingDefinition(
-        key='kick_geomean_threshold',
-        type=SettingType.FLOAT,
-        default=800.0,
-        label='GeoMean Threshold',
-        description='Spectral filtering threshold (rejects artifacts)',
-        category=SettingCategory.KICK,
-        ui_control=UIControl.NUMBER,
-        min_value=0.0,
-        max_value=3000.0,
-        step=1.0,
-        yaml_path=['kick', 'geomean_threshold'],
-        cli_flag='--kick-geomean',
-    ),
 
     SettingDefinition(
         key='kick_use_stereo',
@@ -594,33 +474,7 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         yaml_path=['snare', 'use_stereo'],
     ),
 
-    SettingDefinition(
-        key='snare_geomean_threshold',
-        type=SettingType.FLOAT,
-        default=40.0,
-        label='GeoMean Threshold',
-        description='Snare spectral filtering threshold (rejects artifacts)',
-        category=SettingCategory.SNARE,
-        ui_control=UIControl.NUMBER,
-        min_value=0.0,
-        max_value=500.0,
-        step=1.0,
-        yaml_path=['snare', 'geomean_threshold'],
-        cli_flag='--snare-geomean',
-    ),
 
-    SettingDefinition(
-        key='snare_cluster_feature',
-        type=SettingType.CHOICE,
-        default='auto',
-        label='Cluster Feature',
-        description='Feature used for snare sub-type clustering (auto = stereo_width, then spectral_centroid_hz)',
-        category=SettingCategory.SNARE,
-        ui_control=UIControl.SELECT,
-        allowed_values=['auto', 'stereo_width', 'spectral_centroid_hz', 'pitch_hz', 'pan_confidence'],
-        yaml_path=['snare', 'cluster_feature'],
-        cli_flag='--snare-cluster-feature',
-    ),
     
     # Toms MIDI notes
     SettingDefinition(
@@ -682,33 +536,7 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         yaml_path=['toms', 'use_stereo'],
     ),
 
-    SettingDefinition(
-        key='toms_geomean_threshold',
-        type=SettingType.FLOAT,
-        default=80.0,
-        label='GeoMean Threshold',
-        description='Toms spectral filtering threshold (rejects artifacts)',
-        category=SettingCategory.TOMS,
-        ui_control=UIControl.NUMBER,
-        min_value=0.0,
-        max_value=500.0,
-        step=1.0,
-        yaml_path=['toms', 'geomean_threshold'],
-        cli_flag='--toms-geomean',
-    ),
 
-    SettingDefinition(
-        key='toms_cluster_feature',
-        type=SettingType.CHOICE,
-        default='auto',
-        label='Cluster Feature',
-        description='Feature used for tom low/mid/high clustering (auto = pitch_hz, then spectral_centroid_hz)',
-        category=SettingCategory.TOMS,
-        ui_control=UIControl.SELECT,
-        allowed_values=['auto', 'pitch_hz', 'spectral_centroid_hz', 'stereo_width', 'pan_confidence'],
-        yaml_path=['toms', 'cluster_feature'],
-        cli_flag='--toms-cluster-feature',
-    ),
 
     # Spectral snap settings — per-stem configuration of the
     # "head snap" frequency range for the spectral-transient
@@ -1003,20 +831,6 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         cli_flag='--hihat-open-decay-slope-max',
     ),
 
-    SettingDefinition(
-        key='hihat_geomean_threshold',
-        type=SettingType.FLOAT,
-        default=8.0,
-        label='GeoMean Threshold',
-        description='Hi-hat spectral filtering threshold (rejects artifacts)',
-        category=SettingCategory.HIHAT,
-        ui_control=UIControl.NUMBER,
-        min_value=0.0,
-        max_value=200.0,
-        step=0.5,
-        yaml_path=['hihat', 'geomean_threshold'],
-        cli_flag='--hihat-geomean',
-    ),
 
     # Cymbals MIDI note
     SettingDefinition(
@@ -1094,180 +908,29 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         yaml_path=['cymbals', 'use_stereo'],
     ),
 
-    SettingDefinition(
-        key='cymbals_geomean_threshold',
-        type=SettingType.FLOAT,
-        default=100.0,
-        label='GeoMean Threshold',
-        description='Cymbals spectral filtering threshold (rejects artifacts)',
-        category=SettingCategory.CYMBALS,
-        ui_control=UIControl.NUMBER,
-        min_value=0.0,
-        max_value=1000.0,
-        step=5.0,
-        yaml_path=['cymbals', 'geomean_threshold'],
-        cli_flag='--cymbals-geomean',
-    ),
 
-    SettingDefinition(
-        key='cymbals_cluster_feature',
-        type=SettingType.CHOICE,
-        default='auto',
-        label='Cluster Feature',
-        description='Feature used for cymbal sub-type clustering (auto = spectral_centroid_hz, then stereo_width)',
-        category=SettingCategory.CYMBALS,
-        ui_control=UIControl.SELECT,
-        allowed_values=['auto', 'spectral_centroid_hz', 'stereo_width', 'pitch_hz', 'pan_confidence'],
-        yaml_path=['cymbals', 'cluster_feature'],
-        cli_flag='--cymbals-cluster-feature',
-    ),
     
     # Kick Clustering
-    SettingDefinition(
-        key='kick_expected_clusters',
-        type=SettingType.INT,
-        default=1,
-        label='Expected Clusters',
-        description='Expected number of distinct kick sounds (1 = single kick)',
-        category=SettingCategory.KICK,
-        ui_control=UIControl.NUMBER,
-        min_value=1,
-        max_value=5,
-        step=1,
-        yaml_path=['kick', 'expected_clusters'],
-        cli_flag='--kick-clusters',
-        advanced=True,
-    ),
 
     # Snare Clustering
-    SettingDefinition(
-        key='snare_expected_clusters',
-        type=SettingType.INT,
-        default=1,
-        label='Expected Clusters',
-        description='Expected number of distinct snare sounds (1 = single snare, 2 = snare + side-stick)',
-        category=SettingCategory.SNARE,
-        ui_control=UIControl.NUMBER,
-        min_value=1,
-        max_value=5,
-        step=1,
-        yaml_path=['snare', 'expected_clusters'],
-        cli_flag='--snare-clusters',
-        advanced=True,
-    ),
 
     # Toms Clustering
-    SettingDefinition(
-        key='toms_expected_clusters',
-        type=SettingType.INT,
-        default=3,
-        label='Expected Clusters',
-        description='Expected number of distinct tom sounds (3 = low/mid/high)',
-        category=SettingCategory.TOMS,
-        ui_control=UIControl.NUMBER,
-        min_value=1,
-        max_value=5,
-        step=1,
-        yaml_path=['toms', 'expected_clusters'],
-        cli_flag='--toms-clusters',
-        advanced=True,
-    ),
 
     # Hihat Clustering
-    SettingDefinition(
-        key='hihat_expected_clusters',
-        type=SettingType.INT,
-        default=2,
-        label='Expected Clusters',
-        description='Expected number of distinct hihat sounds (2 = open + closed)',
-        category=SettingCategory.HIHAT,
-        ui_control=UIControl.NUMBER,
-        min_value=1,
-        max_value=5,
-        step=1,
-        yaml_path=['hihat', 'expected_clusters'],
-        cli_flag='--hihat-clusters',
-        advanced=True,
-    ),
 
     # Cymbals Clustering
-    SettingDefinition(
-        key='cymbals_expected_clusters',
-        type=SettingType.INT,
-        default=2,
-        label='Expected Clusters',
-        description='Expected number of distinct cymbals (e.g., 2 = left crash + right crash)',
-        category=SettingCategory.CYMBALS,
-        ui_control=UIControl.NUMBER,
-        min_value=1,
-        max_value=5,
-        step=1,
-        yaml_path=['cymbals', 'expected_clusters'],
-        cli_flag='--cymbals-clusters',
-        advanced=True,
-    ),
     
     # ===================
     # Clustering Settings
     # ===================
     
-    SettingDefinition(
-        key='clustering_method',
-        type=SettingType.CHOICE,
-        default='dbscan',
-        label='Clustering Method',
-        description='Algorithm for grouping similar onsets (DBSCAN = density-based, k-means = centroid-based)',
-        category=SettingCategory.CLUSTERING,
-        ui_control=UIControl.SELECT,
-        allowed_values=['dbscan', 'kmeans'],
-        yaml_path=['clustering', 'method'],
-        advanced=True,
-    ),
     
     # =============================
     # Threshold Optimization Settings
     # =============================
     
-    SettingDefinition(
-        key='threshold_optimization_enabled',
-        type=SettingType.BOOL,
-        default=False,
-        label='Enable Threshold Optimization',
-        description='Automatically discover optimal thresholds by iterating until cluster count matches expected',
-        category=SettingCategory.THRESHOLD_OPTIMIZATION,
-        ui_control=UIControl.CHECKBOX,
-        yaml_path=['threshold_optimization', 'enabled'],
-    ),
     
-    SettingDefinition(
-        key='threshold_optimization_max_iterations',
-        type=SettingType.INT,
-        default=20,
-        label='Max Iterations',
-        description='Maximum number of optimization iterations before giving up',
-        category=SettingCategory.THRESHOLD_OPTIMIZATION,
-        ui_control=UIControl.NUMBER,
-        min_value=5,
-        max_value=100,
-        step=5,
-        yaml_path=['threshold_optimization', 'max_iterations'],
-        advanced=True,
-    ),
     
-    SettingDefinition(
-        key='threshold_optimization_tolerance',
-        type=SettingType.INT,
-        default=0,
-        label='Cluster Count Tolerance',
-        description='Stop when cluster count is within ±N of expected (0 = exact match required)',
-        category=SettingCategory.THRESHOLD_OPTIMIZATION,
-        ui_control=UIControl.NUMBER,
-        min_value=0,
-        max_value=5,
-        step=1,
-        yaml_path=['threshold_optimization', 'tolerance'],
-        advanced=True,
-    ),
     
     # ===================
     # Separation Settings

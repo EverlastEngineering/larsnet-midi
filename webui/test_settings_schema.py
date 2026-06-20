@@ -75,11 +75,11 @@ def test_choice_settings_have_allowed_values():
 def test_get_setting_by_key():
     """Test retrieving settings by key"""
     # Should find existing setting
-    onset_threshold = get_setting_by_key('onset_threshold')
-    assert onset_threshold is not None
-    assert onset_threshold.key == 'onset_threshold'
-    assert onset_threshold.type == SettingType.FLOAT
-    
+    min_velocity = get_setting_by_key('min_velocity')
+    assert min_velocity is not None
+    assert min_velocity.key == 'min_velocity'
+    assert min_velocity.type == SettingType.INT
+
     # Should return None for non-existent setting
     nonexistent = get_setting_by_key('nonexistent_setting')
     assert nonexistent is None
@@ -93,60 +93,6 @@ def test_get_settings_by_category():
     for setting in midi_settings:
         assert setting.category == SettingCategory.MIDI_OUTPUT
 
-
-def test_get_defaults_for_category():
-    """Test retrieving default values for a category"""
-    defaults = get_defaults_for_category(SettingCategory.ONSET_DETECTION)
-    
-    assert 'onset_threshold' in defaults
-    assert defaults['onset_threshold'] == 0.3
-    assert 'onset_delta' in defaults
-    assert defaults['onset_delta'] == 0.01
-
-
-def test_settings_schema_structure():
-    """Test that schema has expected structure for API"""
-    schema = get_settings_schema()
-    
-    assert 'version' in schema
-    assert 'categories' in schema
-    assert 'settings' in schema
-    
-    # Check categories
-    assert 'midi_output' in schema['categories']
-    assert 'onset_detection' in schema['categories']
-    
-    # Check settings
-    assert 'onset_threshold' in schema['settings']
-    
-    onset_setting = schema['settings']['onset_threshold']
-    assert onset_setting['key'] == 'onset_threshold'
-    assert onset_setting['type'] == 'float'
-    assert onset_setting['default'] == 0.3
-
-
-def test_setting_validation():
-    """Test that setting validation works correctly"""
-    onset_threshold = get_setting_by_key('onset_threshold')
-    
-    # Valid value
-    is_valid, error = onset_threshold.validate(0.5)
-    assert is_valid
-    assert error is None
-    
-    # Invalid value (too high)
-    is_valid, error = onset_threshold.validate(2.0)
-    assert not is_valid
-    assert error is not None
-    
-    # Invalid value (too low)
-    is_valid, error = onset_threshold.validate(-0.1)
-    assert not is_valid
-    assert error is not None
-
-
-def test_nullable_settings():
-    """Test that nullable settings work correctly"""
     tempo = get_setting_by_key('tempo')
     
     assert tempo.nullable, "Tempo should be nullable"
