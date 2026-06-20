@@ -761,8 +761,27 @@ function onSliderInput(e) {
     updateTuningSaveButton();
 
     if (isClassification) {
-        // Classification slider — only needs server reclassify, no local filtering
-        scheduleReclassify();
+        // 2026-06-19: classification sliders MUST also enter
+        // tuning mode (applyTuningFilter → waveformTuningEvents =
+        // tuningBaseEvents from events_pga). Without this, the
+        // reclassify merge at doReclassify:1050 hits the empty
+        // `events_configured` for PGA-only stems (hihat, toms,
+        // snare), so hihat_state / classification updates have
+        // no array to land in. The visible symptom: dragging
+        // the open/closed slider triggers a server round-trip
+        // but the displayed events keep their old labels (or no
+        // labels at all) until the user Saves & Reconverts.
+        // The filter pipeline here is a no-op for classification
+        // sliders (no prominence/min_decay_col_min/attack_rise
+        // changes), but its side effect — populating
+        // waveformTuningEvents — is exactly what the reclassify
+        // merge needs.
+        if (tuningRafId) cancelAnimationFrame(tuningRafId);
+        tuningRafId = requestAnimationFrame(() => {
+            applyTuningFilter();
+            tuningRafId = null;
+            scheduleReclassify();
+        });
     } else {
         // Filtering slider — local filter first. Reclassify only if we have
         // prior classification results to re-apply (stems with sub-type
@@ -1013,11 +1032,17 @@ async function doReclassify() {
     const stemType = waveformActiveStem;
     const stored = tuningSliderValues[stemType] || {};
 
-    // Build config overrides from classification slider values
+    // Build config overrides from classification slider values.
+    // 2026-06-19: keys are written as `${stemType}.${key}` (dotted
+    // path) so the server-side reclassify endpoint walks the path
+    // correctly. Without the prefix the override would land at
+    // config['open_decay_slope_max'] (top level) and silently be
+    // ignored by classify_hihat_notes, which reads from
+    // config['hihat']['open_decay_slope_max'].
     const configOverrides = {};
     for (const key of CLASSIFICATION_KEYS) {
         if (stored[key] != null) {
-            configOverrides[key] = stored[key];
+            configOverrides[`${stemType}.${key}`] = stored[key];
         }
     }
 

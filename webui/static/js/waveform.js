@@ -1322,7 +1322,15 @@ function updateLegendBar(stemData, displayEvents, pgaEvents, spectralOverlayActi
         // events_configured list contains only method=
         // 'percentile_gated' events, and the per-classification
         // grouping is meaningless for that single-method view.
-        if (e.method === 'percentile_gated') continue;
+        // 2026-06-19: PGA events for hihat ARE the
+        // per-classification events (hihats use a per-event
+        // hihat_state label, not a k-means cluster label).
+        // Falling through to the hihat branch lets them count
+        // toward hihatOpenGroups. For other stems the PGA
+        // events should still skip — their per-classification
+        // grouping uses k-means (cluster_id) and the "PGA (N)"
+        // entry below already covers them.
+        if (e.method === 'percentile_gated' && !isHihat) continue;
         // Check for hihat open/closed classification first
         if (isHihat && e.hihat_state) {
             hihatOpenGroups[e.hihat_state]++;
