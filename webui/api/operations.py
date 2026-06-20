@@ -564,8 +564,18 @@ def reclassify():
                 'message': f'No analysis data for stem: {stem_type}'
             }), 404
 
-        # Get KEPT events (work on copies to avoid side effects)
-        configured_events = stem_data.get('events_configured', [])
+        # Get KEPT events (work on copies to avoid side effects).
+        # For PGA-only stems (hihat, toms, snare as of 2026-06-19),
+        # events_configured is empty — events_pga is the sole source.
+        # Without this fallback the reclassify endpoint would silently
+        # no-op on PGA-only hihat (its hihats have no events_configured
+        # entry, and classify_hihat_notes needs the decay_slope_db
+        # field that lives on events_pga to apply the slope rule).
+        configured_events = (
+            stem_data.get('events_configured')
+            or stem_data.get('events_pga')
+            or []
+        )
         kept_events = [
             copy.deepcopy(e) for e in configured_events
             if e.get('status') == 'KEPT'
@@ -584,16 +594,31 @@ def reclassify():
         config = load_config(project['path'] / 'midiconfig.yaml')
         drum_mapping = DrumMapping.from_config(config)
 
-        # Apply config overrides for this stem's classification params
+        # Apply config overrides. Keys are dotted paths matching the
+        # YAML structure (e.g. 'hihat.open_decay_slope_max',
+        # 'snare.expected_clusters'). Walk each path so the override
+        # lands in the correct nested section — without this, a key
+        # like 'hihat.open_decay_slope_max' would have been written
+        # literally as config['hihat']['hihat.open_decay_slope_max']
+        # and silently ignored by classify_hihat_notes (which reads
+        # config['hihat']['open_decay_slope_max']). Mirrors the
+        # walk performed by stems_to_midi.rebuild_shell.
+        # _apply_config_overrides so the two endpoints agree.
         if config_overrides:
-            if stem_type not in config:
-                config[stem_type] = {}
-            for key, value in config_overrides.items():
-                config[stem_type][key] = value
+            for dotted_key, value in config_overrides.items():
+                if value is None:
+                    continue
+                parts = dotted_key.split('.')
+                node = config
+                for part in parts[:-1]:
+                    if part not in node or not isinstance(node[part], dict):
+                        node[part] = {}
+                    node = node[part]
+                node[parts[-1]] = value
 
         # Run classification. force_reclassify=True because the reclassify
         # endpoint is only called when the user has changed a classification
-        # slider (open_geomean_min, open_sustain_ms, expected_clusters, or
+        # slider (open_decay_slope_max, expected_clusters, or
         # cluster_feature) — we WANT the new thresholds to take effect on
         # every event, not preserve the old hihat_state / classification.
         classify_notes(kept_events, stem_type, drum_mapping, config,

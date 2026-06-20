@@ -374,9 +374,15 @@ def get_project_tuning_config(project_number, stem_type):
                 else onset_cfg.get('attack_rise_max_ms', 20.0)
             ),
 
-            # Hihat open/closed classification (2026-06-13).
-            'open_geomean_min': stem_cfg.get('open_geomean_min', 262.0),
-            'open_sustain_ms': stem_cfg.get('open_sustain_ms', 100.0),
+            # Hihat open/closed classification (2026-06-19).
+            # The slope rule (open_decay_slope_max) is the only active
+            # classifier on current sidecars; classify_hihat_notes
+            # falls back to open_geomean_min/open_sustain_ms only when
+            # decay_slope_db is missing (older sidecars). Exposing
+            # just the slope threshold matches what the WebUI slider
+            # shows; the legacy keys are read by the Python fallback
+            # path but no longer surfaced here.
+            'open_decay_slope_max': stem_cfg.get('open_decay_slope_max', 2.0),
 
             # Cluster assignment (k-means, used by snare/toms/cymbals).
             'expected_clusters': stem_cfg.get('expected_clusters', 2),

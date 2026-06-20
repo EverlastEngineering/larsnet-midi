@@ -120,7 +120,16 @@ def _classification_thresholds_changed(
     """
     if stem_type == 'hihat':
         hihat_config = config.get('hihat', {})
-        for key in ('open_geomean_min', 'open_sustain_ms'):
+        # 2026-06-19: open_decay_slope_max replaces the legacy
+        # open_geomean_min + open_sustain_ms pair. The legacy keys
+        # remain in the loop defensively (some pre-2026-06-19
+        # analysis.json sidecars may have them stored, and removing
+        # them here would silently skip reclassification when an
+        # older project is rebuilt). The slope key is the primary
+        # gate — without it, dragging the slope slider would save
+        # to YAML but never trigger force_reclassify, leaving the
+        # rebuilt events with stale hihat_state values.
+        for key in ('open_decay_slope_max', 'open_geomean_min', 'open_sustain_ms'):
             current = hihat_config.get(key)
             stored = stored_logic.get(key)
             # Only treat as a real change when both sides are known and
