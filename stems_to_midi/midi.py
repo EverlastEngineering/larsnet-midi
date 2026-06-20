@@ -378,73 +378,14 @@ def _serialize_onset_events(
 
 def _serialize_spectral_events(spectral_events: list) -> list:
     """
-    Serialize spectral-transient events for the analysis.json sidecar.
-
-    The spectral detector produces a different event shape than the
-    energy detector (no geomean, no sustain_ms, no pan), so it gets its
-    own minimal serializer. Each event has at least::
-
-        {
-            'time': float,
-            'band_powers': [b0, b1, b2, b3, b4],  # linear power per band
-            'band_max_idx': int,       # argmax of band_powers, 0-4
-            'band_max_ratio': float,   # top / second-highest band, raw
-                                       # (>= 1 by construction; was
-                                       # previously shown to the user
-                                       # as `strength` after a lossy
-                                       # clamp-to-1.0 rescale that
-                                       # masked real differences —
-                                       # see test_tooltip_data_contract
-                                       # 2026-06-10). The detector
-                                       # also emits `band_max_ratio_10`
-                                       # (= ratio / 10, unclamped) as
-                                       # a back-compat alias.
-            'method': 'spectral',
-        }
-
-    The per-band profile (2026-06-09) replaces the legacy
-    ``bins_above_floor`` / ``max_db`` fields — those described a
-    single-number summary; the band profile preserves the full
-    spectral shape so the WebUI tooltip and downstream classifiers
-    can distinguish tom hits (band 0-dominant) from hi-hat sizzle
-    (band 3-4 dominant).
-
-    Args:
-        spectral_events: List of spectral event dicts from
-                         ``_run_spectral_detection``.
-
-    Returns:
-        List of JSON-ready event dicts with rounded numeric values.
+    2026-06-20: function stub retained for one release to keep the
+    public surface stable. Returns an empty list because the
+    spectral-transient detector is no longer run by the main
+    pipeline (PGA is universal). All callers that previously read
+    events_spectral from the sidecar have been updated to no
+    longer expect the key. Phase 7 will hard-delete this stub.
     """
-    out = []
-    for ev in spectral_events:
-        # Required fields with rounding. ``time`` uses 4-decimal
-        # precision to match the other event lists in the sidecar
-        # (see _serialize_onset_events); band_powers uses 6 decimals
-        # (linear power is small — sub-band sums on quiet hits are
-        # 1e-6 to 1e-9); other floats use 2 decimals.
-        bp_raw = ev.get('band_powers')
-        if bp_raw is not None:
-            band_powers = [_round_value(float(x), 6) for x in bp_raw]
-        else:
-            band_powers = None
-        out.append({
-            'time': _round_value(ev.get('time'), 4),
-            'strength': _round_value(ev.get('strength'), 4),
-            'band_powers': band_powers,
-            'band_max_idx': ev.get('band_max_idx'),
-            'band_max_ratio': _round_value(ev.get('band_max_ratio'), 2),
-            # Detection signal values at the event frame (2026-06-09).
-            # Useful for diagnosing why an event fired (or didn't) —
-            # the RING signal (band_delta) fires on per-band-dominant
-            # content, the SNAP signal (snap_delta) fires on broadband
-            # content in the configured snap_bands. See the WebUI
-            # tooltip for human-readable annotation.
-            'band_delta': _round_value(ev.get('band_delta'), 4),
-            'snap_delta': _round_value(ev.get('snap_delta'), 6),
-            'method': ev.get('method', 'spectral'),
-        })
-    return out
+    return []
 
 
 def _serialize_pga_events(pga_events: list) -> list:
@@ -591,7 +532,8 @@ def save_analysis_sidecar(
         - Logic block per stem (thresholds, passes)
         - events_configured: All onsets from configured detection (KEPT + FILTERED)
         - events_sensitive: All onsets from max-sensitivity detection (for interactive tuning)
-        - events_spectral: All onsets from the spectral-transient detector
+        - events_spectral: REMOVED 2026-06-20 — see Phase 5 of
+          agent-plans/pga-cleanup-2026-06.plan.md
           (complementary signal, always computed alongside the energy
           detector so the WebUI can compare both candidate lists)
         - Numeric precision: times=4 decimals, features=2 decimals
@@ -748,11 +690,11 @@ def save_analysis_sidecar(
         # Serialize sensitive events (all from max-sensitivity detection)
         sensitive_events = _serialize_onset_events(sensitive_onset_data) if sensitive_onset_data else []
 
-        # Serialize spectral-transient events (complementary detector).
-        # These have a different shape from the energy-detector events:
-        # only time / strength / bins_above_floor / max_db / method.
-        spectral_onset_data = analysis.get('spectral_onset_data', [])
-        spectral_events = _serialize_spectral_events(spectral_onset_data) if spectral_onset_data else []
+        # 2026-06-20: spectral-transient events no longer serialized
+        # to the sidecar. PGA is the only detector that runs in the
+        # main pipeline now, and the WebUI removed its spectral
+        # overlay in Phase 0.5. The events_spectral key is dropped
+        # from the sidecar shape.
 
         # Serialize percentile-gated broad-attack events (2026-06-10).
         # PGA events have a simple shape — time, method, status. The
@@ -796,8 +738,9 @@ def save_analysis_sidecar(
         total_pga_events = len(pga_events)
         # Assemble stem data. The stem block shape is
         # stable: ``logic``, ``events_configured``,
-        # ``events_sensitive``, ``events_spectral``,
+        # ``events_sensitive``,
         # ``events_pga``. No top-level threshold fields.
+        # (events_spectral was removed 2026-06-20.)
         # Build stem dict — only include event arrays when non-empty.
         # Toms (2026-06-15): events_configured and events_sensitive
         # are absent for toms; events_pga is the sole source of truth.
@@ -810,8 +753,6 @@ def save_analysis_sidecar(
             stem_dict['events_configured'] = configured_events
         if sensitive_events:
             stem_dict['events_sensitive'] = sensitive_events
-        if spectral_events:
-            stem_dict['events_spectral'] = spectral_events
         # Toms (2026-06-15): events_pga is the sole source of truth.
         # Drop empty arrays so the keys are absent from the sidecar JSON.
         if not configured_events:
