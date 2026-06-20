@@ -748,6 +748,19 @@ function drawPgaEventBars(ctx, events, timeToX, PAD, plotW, plotH) {
     // matching the green velocity-bar convention used elsewhere.
     const maxBarH = plotH;
 
+    // 2026-06-19: per-classification color overlay for PGA
+    // events. PGA bars were always violet because the
+    // PGA-only draw loop (this function) didn't go through
+    // getEventColor. Now it does: hihat open/closed events
+    // get the orange/cyan pair when the classification toggle
+    // is on; falls back to violet when off. Other stems'
+    // classification branches remain at violet for now —
+    // they're already filtered to a single category (toms is
+    // a single note), and the existing getEventColor
+    // per-classification branches apply to the
+    // non-PGA-rendering paths.
+    const classEnabled = classificationEnabledByStem[waveformActiveStem] !== false;
+
     for (const event of events) {
         if (event.time == null) continue;
         const isFiltered = event.status === 'FILTERED';
@@ -770,14 +783,32 @@ function drawPgaEventBars(ctx, events, timeToX, PAD, plotW, plotH) {
         // the events panel (barTop = PAD.top + plotH - barH).
         const barTop = PAD.top + plotH - barH;
 
+        // 2026-06-19: pick the per-classification color when
+        // the toggle is on. Order matches getEventColor's KEPT
+        // branches: hihat_state first (open/closed), then the
+        // generic cluster-id path. Falls back to the violet
+        // PGA color when the toggle is off OR the event has
+        // no classification metadata.
+        let barColor = WAVEFORM_COLORS.markerPga;
+        if (classEnabled) {
+            if (event.hihat_state === 'open') {
+                barColor = HIHAT_OPEN_COLOR;
+            } else if (event.hihat_state === 'closed') {
+                barColor = HIHAT_CLOSED_COLOR;
+            } else if (event.classification != null
+                       && CLASSIFICATION_COLORS[event.classification]) {
+                barColor = CLASSIFICATION_COLORS[event.classification];
+            }
+        }
+
         // Filled rectangle — faded for FILTERED, full for KEPT
         ctx.globalAlpha = isFiltered ? 0.35 : 0.85;
-        ctx.fillStyle = WAVEFORM_COLORS.markerPga;
+        ctx.fillStyle = barColor;
         ctx.fillRect(x - barWidth / 2, barTop, barWidth, barH);
 
         // Outline for crispness at zoom levels
         ctx.globalAlpha = isFiltered ? 0.4 : 1.0;
-        ctx.strokeStyle = WAVEFORM_COLORS.markerPga;
+        ctx.strokeStyle = barColor;
         ctx.lineWidth = 0.5;
         ctx.strokeRect(x - barWidth / 2, barTop, barWidth, barH);
     }
