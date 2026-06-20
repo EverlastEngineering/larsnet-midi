@@ -54,6 +54,7 @@ __all__ = [
 ]
 
 
+# === CLEANUP-START: dead helper _load_and_validate_audio ===
 def _load_and_validate_audio(
     audio_path: Union[str, Path],
     config: Dict,
@@ -159,6 +160,8 @@ def _load_and_validate_audio(
     return audio, sr
 
 
+# === CLEANUP-END ===
+# === CLEANUP-START: dead helper _configure_onset_detection ===
 def _configure_onset_detection(
     config: Dict,
     stem_type: str
@@ -212,6 +215,8 @@ def _configure_onset_detection(
         }
 
 
+# === CLEANUP-END ===
+# === CLEANUP-START: dead helper _detect_tom_pitches ===
 def _detect_tom_pitches(
     audio: np.ndarray,
     sr: int,
@@ -287,6 +292,8 @@ def _detect_tom_pitches(
     return tom_classifications
 
 
+# === CLEANUP-END ===
+# === CLEANUP-START: dead helper _detect_cymbal_pitches ===
 def _detect_cymbal_pitches(
     audio: np.ndarray,
     sr: int,
@@ -395,6 +402,8 @@ def _detect_cymbal_pitches(
     return cymbal_classifications
 
 
+# === CLEANUP-END ===
+# === CLEANUP-START: dead helper _detect_snare_pitches ===
 def _detect_snare_pitches(
     audio: np.ndarray,
     sr: int,
@@ -473,6 +482,8 @@ def _detect_snare_pitches(
     return snare_classifications
 
 
+# === CLEANUP-END ===
+# === CLEANUP-START: dead helper _create_midi_events ===
 def _create_midi_events(
     onset_times: np.ndarray,
     normalized_values: np.ndarray,
@@ -638,6 +649,8 @@ def _create_midi_events(
     return events
 
 
+# === CLEANUP-END ===
+# === CLEANUP-START: dead helper _run_sensitive_detection ===
 def _run_sensitive_detection(
     audio: np.ndarray,
     audio_mono: np.ndarray,
@@ -744,6 +757,8 @@ def _run_sensitive_detection(
     return sensitive_onset_data
 
 
+# === CLEANUP-END ===
+# === CLEANUP-START: dead helper build_spectral_config_for_stem ===
 def build_spectral_config_for_stem(
     stem_type: str,
     project_config: dict,
@@ -784,6 +799,8 @@ def build_spectral_config_for_stem(
     )
 
 
+# === CLEANUP-END ===
+# === CLEANUP-START: dead helper _run_spectral_detection ===
 def _run_spectral_detection(
     audio: np.ndarray,
     audio_mono: np.ndarray,
@@ -903,6 +920,8 @@ def _run_spectral_detection(
     ]
 
 
+# === CLEANUP-END ===
+# === CLEANUP-START: dead helper _build_events_configured ===
 def _build_events_configured(
     all_onset_data: list,
     spectral_onset_data: list,
@@ -1118,6 +1137,7 @@ def _build_events_configured(
     return list(all_onset_data) + list(spectral_as_onsets)
 
 
+# === CLEANUP-END ===
 def process_stem_to_midi(
     audio_path: Union[str, Path],
     stem_type: str,
@@ -1179,6 +1199,7 @@ def process_stem_to_midi(
             audio_path, drum_mapping, config,
             min_velocity, max_velocity, stem_type=stem_type,
         )
+# === CLEANUP-START: unreachable tail of process_stem_to_midi (after PGA short-circuit) ===
 
     # Step 1: Load and validate audio
     audio, sr = _load_and_validate_audio(audio_path, config, stem_type, max_duration)
@@ -1911,3 +1932,4 @@ def process_stem_to_midi(
         # {stem}.contrast_envelope.npz.
         'pga_envelope_data': pga_envelope_data,
     }
+# === CLEANUP-END ===
