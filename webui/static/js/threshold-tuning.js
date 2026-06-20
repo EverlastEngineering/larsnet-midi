@@ -332,7 +332,6 @@ function resetTuningSliders() {
     // Clear stored values so buildSlidersForStem reads from logic block
     delete tuningSliderValues[waveformActiveStem];
     delete clusterNoteOverrides[waveformActiveStem];
-    delete clusterFeatureOverrides[waveformActiveStem];
     lastClassification = null;
     tuningBaseEvents = null;
     hideClusterCards();
@@ -540,35 +539,10 @@ function buildSlidersForStem(stemType) {
             </div>`;
     }).join('');
 
-    // Add cluster feature dropdown if this stem supports it
-    const featureChoices = STEM_FEATURE_CHOICES[stemType];
-    if (featureChoices) {
-        const configuredFeature = logic.cluster_feature || 'auto';
-        const currentFeature = clusterFeatureOverrides[stemType] || configuredFeature;
-
-        const options = featureChoices.map(fc => {
-            const selected = fc.value === currentFeature ? 'selected' : '';
-            return `<option value="${fc.value}" ${selected}>${fc.label}</option>`;
-        }).join('');
-
-        const configuredLabel = configuredFeature !== 'auto'
-            ? `<span class="text-gray-600 text-xs ml-1">(configured: ${configuredFeature})</span>`
-            : '';
-
-        container.insertAdjacentHTML('beforeend', `
-            <div class="tuning-slider-row">
-                <div class="flex items-center justify-between mb-1">
-                    <label class="text-xs text-gray-300">🔬 Cluster By${configuredLabel}</label>
-                </div>
-                <select id="tuning-cluster-feature"
-                        class="w-full text-xs bg-gray-700 border border-gray-600 rounded px-2 py-1.5 text-gray-200"
-                        data-stem="${stemType}">
-                    ${options}
-                </select>
-            </div>`);
-
-        document.getElementById('tuning-cluster-feature')?.addEventListener('change', onClusterFeatureChange);
-    }
+    // 2026-06-20: cluster-feature dropdown removed. The Python
+    // pipeline auto-derives k-means labels for snare/cymbals;
+    // there's no per-user feature choice to expose. (See
+    // STEM_FEATURE_CHOICES doc above for context.)
 
     // Add hihat open/closed classification toggle (only for hihat stem)
     if (stemType === 'hihat') {
@@ -883,26 +857,13 @@ function onToggleInput(e) {
 /**
  * Handle cluster feature dropdown change — stores override and reclassifies.
  */
-function onClusterFeatureChange(e) {
-    const stemType = e.target.dataset.stem;
-    const feature = e.target.value;
-
-    if (feature === 'auto') {
-        delete clusterFeatureOverrides[stemType];
-    } else {
-        clusterFeatureOverrides[stemType] = feature;
-    }
-
-    // Clear existing cluster note overrides since clusters will change
-    delete clusterNoteOverrides[stemType];
-
-    // Store in slider values so it gets sent as config override
-    if (!tuningSliderValues[stemType]) tuningSliderValues[stemType] = {};
-    tuningSliderValues[stemType]['cluster_feature'] = feature;
-
-    updateTuningSaveButton();
-    scheduleReclassify();
-}
+/**
+ * 2026-06-20: onClusterFeatureChange was removed. The cluster-feature
+ * dropdown (which re-ran k-means over a user-chosen per-event feature)
+ * was tied to the dead `*_cluster_feature` schema entries (snare/cymbals),
+ * which Phase 3 removed. The Python pipeline auto-derives k-means
+ * labels for snare/cymbals now — no user choice needed.
+ */
 
 /**
  * Handle hihat open/closed classification toggle.
@@ -950,37 +911,12 @@ const CLASSIFICATION_KEYS = new Set(['open_decay_slope_max', 'expected_clusters'
 let clusterNoteOverrides = {};
 
 /**
- * Per-stem cluster feature override from dropdown.
- * Format: { stemType: featureName }
+ * 2026-06-20: STEM_FEATURE_CHOICES was removed in the PGA-universal
+ * cleanup. The cluster-feature dropdown was a UI surface for the
+ * legacy `*_cluster_feature` schema entries (snare/cymbals), which
+ * Phase 3 removed from the schema. The Python pipeline falls back
+ * to auto-derived labels via k-means — no user choice is needed.
  */
-let clusterFeatureOverrides = {};
-
-/**
- * Available clustering features per stem for the feature dropdown.
- */
-const STEM_FEATURE_CHOICES = {
-    snare: [
-        { value: 'auto', label: 'Auto' },
-        { value: 'stereo_width', label: 'Stereo Width' },
-        { value: 'pan_confidence', label: 'Pan Position' },
-        { value: 'spectral_centroid_hz', label: 'Brightness' },
-        { value: 'pitch_hz', label: 'Pitch' },
-    ],
-    // Toms (2026-06-12): the toms pipeline is PGA-only, so the
-    // cluster-feature dropdown (which re-runs k-means over a chosen
-    // per-event feature) is no longer exposed in the toms slideout.
-    // The cluster cards below (Low/Mid/High pitch note assignment)
-    // still render because they're useful for mapping the auto-
-    // derived k-means labels onto MIDI notes — that part doesn't
-    // change. The feature dropdown is what the user removed.
-    cymbals: [
-        { value: 'auto', label: 'Auto' },
-        { value: 'spectral_centroid_hz', label: 'Brightness' },
-        { value: 'stereo_width', label: 'Stereo Width' },
-        { value: 'pan_confidence', label: 'Pan Position' },
-        { value: 'pitch_hz', label: 'Pitch' },
-    ],
-};
 
 /**
  * Available MIDI note choices per stem for the cluster note dropdowns.
@@ -1261,13 +1197,8 @@ function updateTuningSaveButton() {
         }
     }
 
-    // Check if cluster feature has been changed
-    if (!hasChanges && clusterFeatureOverrides[stemType]) {
-        const configuredFeature = logic.cluster_feature || 'auto';
-        if (clusterFeatureOverrides[stemType] !== configuredFeature) {
-            hasChanges = true;
-        }
-    }
+    // 2026-06-20: cluster-feature change-detection removed
+    // (clusterFeatureOverrides no longer exists).
 
     btn.classList.toggle('hidden', !hasChanges);
 }
@@ -1361,17 +1292,9 @@ function buildConfigUpdates(stemType) {
         });
     }
 
-    // Include cluster feature override if changed
-    const featureOverride = clusterFeatureOverrides[stemType];
-    if (featureOverride) {
-        const configuredFeature = logic.cluster_feature || 'auto';
-        if (featureOverride !== configuredFeature) {
-            updates.push({
-                path: [stemType, 'cluster_feature'],
-                value: featureOverride,
-            });
-        }
-    }
+    // 2026-06-20: cluster-feature override removed from
+    // config_overrides (the dropped STEM_FEATURE_CHOICES dropdown
+    // was the only producer of cluster_feature overrides).
 
     return updates;
 }
@@ -1454,7 +1377,6 @@ async function saveTuningAndReconvert() {
                 lastClassification = null;
                 delete tuningSliderValues[stemType];
                 delete clusterNoteOverrides[stemType];
-                delete clusterFeatureOverrides[stemType];
                 hideClusterCards();
 
                 // Rebuild sliders from fresh logic block if panel is still open
