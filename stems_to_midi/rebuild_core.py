@@ -812,7 +812,36 @@ def rebuild_events_from_analysis(
         if pga_rebuild_active:
             changed = False
             lowered = False
-            classification_changed = False
+            # 2026-06-20: the classification thresholds (e.g. hihat
+            # open_decay_slope_max) are independent of the prominence
+            # filter — they live on the events themselves, not on
+            # the spectral_config. PGA stems still need to detect
+            # a slope change so Save & Reconvert forces
+            # classify_notes to re-stamp hihat_state on every KEPT
+            # event. Without this, the stored hihat_state from the
+            # last conversion is preserved unchanged and the user's
+            # slope slider value sits in yaml with no visible
+            # effect on the sidecar.
+            #
+            # PGA stems have no sidecar logic block (stored_logic
+            # is empty here), so the standard diff against
+            # stored_logic can't run — every key would compare
+            # None vs current. We force classification any time a
+            # classification threshold is configured for this stem
+            # in yaml. Cheap (a per-event rule check on the kept
+            # set) and correct: every rebuild re-applies the
+            # current rule from scratch. The previous behavior
+            # (preserve stored hihat_state forever) was a bug —
+            # the user's slope change had no visible effect on
+            # Save & Reconvert.
+            if stem_type == 'hihat' and config.get('hihat', {}).get('open_decay_slope_max') is not None:
+                classification_changed = True
+            elif _classification_thresholds_changed(
+                spectral_config, stored_logic, config, stem_type,
+            ):
+                classification_changed = True
+            else:
+                classification_changed = False
         else:
             changed = _thresholds_changed(spectral_config, stored_logic)
             lowered = changed and _thresholds_lowered(spectral_config, stored_logic)
@@ -863,6 +892,7 @@ def rebuild_events_from_analysis(
             from .pga_event_builder import (
                 apply_pga_prominence_filter,
                 apply_pga_decay_col_min_filter,
+                apply_attack_rise_max_filter,
             )
             raw_pga = list(stem_data.get('events_pga', []))
             if raw_pga:
@@ -873,10 +903,28 @@ def rebuild_events_from_analysis(
                 # detect_pga_events.
                 stem_col_min = config.get(stem_type, {}).get('min_decay_col_min_db')
                 global_col_min = config.get('onset_detection', {}).get('min_decay_col_min_db')
-                col_min_threshold = float(
-                    stem_col_min if stem_col_min is not None
-                    else global_col_min if global_col_min is not None
-                    else -80.0
+                # 2026-06-20: only apply decay_col_min / attack_rise
+                # when the threshold is explicitly configured for
+                # this stem or globally. The hard-coded -80.0 default
+                # was calibrated for TOMS strikes (range -60 to -84 dB
+                # per filter_registry.json) and silently filters every
+                # cymbals / hihat / snare event whose decay_col_min is
+                # in the -95 to -120 dB range. The WebUI panel
+                # skips these filters when they're not in
+                # tuningConfig (no slider exposed), so the rebuild
+                # path must mirror that — otherwise the panel shows
+                # N kept events and Save & Reconvert wipes them to 0.
+                col_min_threshold = (
+                    float(stem_col_min) if stem_col_min is not None
+                    else float(global_col_min) if global_col_min is not None
+                    else None
+                )
+                stem_attack_rise = config.get(stem_type, {}).get('attack_rise_max_ms')
+                global_attack_rise = config.get('onset_detection', {}).get('attack_rise_max_ms')
+                attack_rise_threshold = (
+                    float(stem_attack_rise) if stem_attack_rise is not None
+                    else float(global_attack_rise) if global_attack_rise is not None
+                    else None
                 )
                 # Run the prominence filter first.
                 pga_kept, pga_filtered = apply_pga_prominence_filter(
@@ -888,29 +936,28 @@ def rebuild_events_from_analysis(
                 # passed the prominence check but failed the
                 # ring-quality check (decay_col_min_median_db
                 # below the threshold) are tagged FILTERED.
-                pga_kept, col_min_filtered = apply_pga_decay_col_min_filter(
-                    pga_kept,
-                    col_min_threshold,
-                )
-                pga_filtered = pga_filtered + col_min_filtered
+                # 2026-06-20: only runs when col_min_threshold is
+                # not None — see comment above on WebUI/server
+                # agreement.
+                if col_min_threshold is not None:
+                    pga_kept, col_min_filtered = apply_pga_decay_col_min_filter(
+                        pga_kept,
+                        col_min_threshold,
+                    )
+                    pga_filtered = pga_filtered + col_min_filtered
                 # 2026-06-17: attack_rise filter (third PGA
                 # pass). Catches wire-tail / step-back FPs
                 # that pass prominence + decay_col_min but
                 # have an unusually long 10-90% rise time.
                 # Layered on top of the previous filters.
-                stem_attack_rise = config.get(stem_type, {}).get('attack_rise_max_ms')
-                global_attack_rise = config.get('onset_detection', {}).get('attack_rise_max_ms')
-                attack_rise_threshold = float(
-                    stem_attack_rise if stem_attack_rise is not None
-                    else global_attack_rise if global_attack_rise is not None
-                    else 20.0
-                )
-                from .pga_event_builder import apply_attack_rise_max_filter
-                pga_kept, attack_filtered = apply_attack_rise_max_filter(
-                    pga_kept,
-                    attack_rise_threshold,
-                )
-                pga_filtered = pga_filtered + attack_filtered
+                # 2026-06-20: only runs when attack_rise_threshold
+                # is not None — same rationale.
+                if attack_rise_threshold is not None:
+                    pga_kept, attack_filtered = apply_attack_rise_max_filter(
+                        pga_kept,
+                        attack_rise_threshold,
+                    )
+                    pga_filtered = pga_filtered + attack_filtered
                 # Build time-keyed lookup for status assignment
                 kept_times = {round(e['time'], 4) for e in pga_kept}
                 filtered_times = {round(e['time'], 4) for e in pga_filtered}
@@ -942,11 +989,17 @@ def rebuild_events_from_analysis(
                                 f"below pga_min_prominence ({prom:.0f} < {pga_threshold:.0f})"
                                 if prom is not None else 'below pga_min_prominence'
                             )
-                    # Update pga_filter_config to reflect the new thresholds
+                    # Update pga_filter_config to reflect the new
+                    # thresholds. 2026-06-20: only stamp the keys
+                    # whose filter is actually active — a stem that
+                    # never had decay_col_min configured should not
+                    # gain a stale -80.0 in its sidecar metadata.
                     ev['pga_filter_config'] = dict(ev.get('pga_filter_config', {}))
                     ev['pga_filter_config']['pga_min_prominence'] = pga_threshold
-                    ev['pga_filter_config']['min_decay_col_min_db'] = col_min_threshold
-                    ev['pga_filter_config']['attack_rise_max_ms'] = attack_rise_threshold
+                    if col_min_threshold is not None:
+                        ev['pga_filter_config']['min_decay_col_min_db'] = col_min_threshold
+                    if attack_rise_threshold is not None:
+                        ev['pga_filter_config']['attack_rise_max_ms'] = attack_rise_threshold
 
                 # events_configured for PGA-only stems is EMPTY —
                 # events_pga is the single source of truth. rebuild_core
@@ -957,6 +1010,44 @@ def rebuild_events_from_analysis(
                 updated_stems[stem_type]['events_pga'] = raw_pga
                 # events_configured intentionally absent for PGA-only
                 # stems.
+
+                # 2026-06-20: re-run classify_notes on the KEPT PGA
+                # events so a hihat open_decay_slope_max slider
+                # change (or any other per-stem classification
+                # threshold) takes effect on Save & Reconvert.
+                # Without this, the stored hihat_state / classification
+                # from the last conversion is preserved unchanged and
+                # the rebuilt MIDI + sidecar silently keep stale
+                # labels. force_reclassify=True mirrors the reclassify
+                # endpoint's contract — the user explicitly moved a
+                # classification slider, so the rule must re-fire.
+                # Note: classify_notes is imported at module top
+                # (line 36). A local re-import here would shadow the
+                # module-level binding and break the non-PGA
+                # classify_notes call later in this function (Python
+                # would treat the symbol as a local that hasn't been
+                # bound on the non-PGA path).
+                classify_notes(
+                    events, stem_type, drum_mapping, config,
+                    force_reclassify=classification_changed,
+                )
+                # Also stamp the new classification back onto the
+                # raw_pga entries (events_configured is empty for
+                # PGA-only stems, so the sidecar reader falls
+                # through to events_pga — the source of truth).
+                time_to_kept = {round(e['time'], 4): e for e in events}
+                for ev in raw_pga:
+                    if ev.get('status') != 'KEPT':
+                        continue
+                    t = round(ev['time'], 4)
+                    cls_ev = time_to_kept.get(t)
+                    if cls_ev is not None:
+                        if 'hihat_state' in cls_ev:
+                            ev['hihat_state'] = cls_ev['hihat_state']
+                        if 'classification' in cls_ev:
+                            ev['classification'] = cls_ev['classification']
+                        if 'note' in cls_ev:
+                            ev['note'] = cls_ev['note']
 
                 # Build MIDI events for PGA-only stems directly from
                 # PGA kept events. These stems use ONLY events_pga —

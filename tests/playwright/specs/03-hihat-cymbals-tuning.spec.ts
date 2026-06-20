@@ -291,10 +291,13 @@ test("hihat open/closed slider end-to-end + cymbals close-panel display", async 
   // Force a server-side rebuild so the sidecar reflects the
   // reset threshold — without this, a previous test run that left
   // prominence=500 cached in the sidecar would make the
-  // before/after KEPT counts equal.
-  await request.post(
-    `/api/rebuild-midi/${FIXTURE_PROJECT_NUMBER}?honor_overrides=true`,
-  );
+  // before/after KEPT counts equal. The endpoint reads
+  // project_number from the JSON body (not the URL path), so
+  // /api/rebuild-midi/<n> returns 404 — must POST to
+  // /api/rebuild-midi with a body. 2026-06-20.
+  await request.post(`/api/rebuild-midi`, {
+    data: { project_number: FIXTURE_PROJECT_NUMBER, honor_overrides: true },
+  });
   const yamlBefore = await readProjectConfig(request, FIXTURE_PROJECT_NUMBER);
   const preTestHihatSlope =
     extractHihatSlopeMax(yamlBefore) ?? HIHAT_SLOPE_DEFAULT;
@@ -378,34 +381,30 @@ test("hihat open/closed slider end-to-end + cymbals close-panel display", async 
     // The legend always shows open/closed counts when classification
     // is on — getEventsForStem falls back to events_pga when
     // events_configured is empty (which is the case for hihat).
-    // So we observe the legend BEFORE the drag, then AFTER, and
-    // assert the counts shift in the expected direction: at
-    // slope=0.7, very few events have decay_slope_db < 0.7 so
-    // most surviving hihats are "closed". At slope=5.5, the
-    // threshold rises — events that were closed at 0.7 (slope in
-    // [0.7, 5.5]) flip to "open". The OPEN count rises; the
+    // The fill() at step (3) already triggered the drag — the
+    // reclassify is RAF-debounced (classification branch +
+    // scheduleReclassify 500ms timer). Wait for it to land then
+    // assert the AFTER distribution shifted in the expected
+    // direction: at slope=0.7 (the pre-test value), very few
+    // events have decay_slope_db < 0.7 so most surviving hihats
+    // are "closed". At slope=5.5 (the dragged value), the
+    // threshold rises — events that were closed at 0.7 (slope
+    // in [0.7, 5.5]) flip to "open". The OPEN count rises; the
     // CLOSED count falls.
-    const openClosedBefore = await readOpenClosedCounts(page);
-    expect(openClosedBefore).not.toBeNull();
     await page.waitForTimeout(RECLASSIFY_WAIT_MS);
     const openClosedAfter = await readOpenClosedCounts(page);
     expect(openClosedAfter).not.toBeNull();
-    // Reclassify shifted at least one event's label. The
-    // classification slider exists for the user to adjust this;
-    // a no-op reclassify would mean the threshold has no effect.
-    const totalBefore =
-      openClosedBefore.open + openClosedBefore.closed;
-    const totalAfter =
-      openClosedAfter.open + openClosedAfter.closed;
-    // The KEPT-set total must remain roughly stable across a
-    // reclassify (reclassify relabels KEPT events, doesn't drop
-    // them); allow a small fudge for the merge's KEPT-only
-    // filter.
-    expect(Math.abs(totalBefore - totalAfter)).toBeLessThanOrEqual(5);
-    // The OPEN count must have moved up — slope=5.5 is more
-    // permissive than slope=0.7 (events that were closed at 0.7
-    // are now open at 5.5).
-    expect(openClosedAfter.open).toBeGreaterThan(openClosedBefore.open);
+    // The KEPT-set total must remain stable across a reclassify
+    // (reclassify relabels KEPT events, doesn't drop them); allow
+    // a small fudge for the merge's KEPT-only filter.
+    const totalAfter = openClosedAfter.open + openClosedAfter.closed;
+    // At slope=5.5, the hihat fixture's KEPT set is ~98% open
+    // (the dataset has 802/808 events with decay_slope_db in
+    // [0.7, 5.5]). Pre-fix this was ~6/808 because the
+    // override wasn't taking effect. Hard check: more than
+    // 90% of the KEPT set must be open.
+    expect(totalAfter).toBeGreaterThan(700);
+    expect(openClosedAfter.open).toBeGreaterThan(700);
 
     // (6) Live color — for the hihat slope slider, the per-event
     //     color is HIHAT_OPEN_COLOR (orange) for events with
@@ -596,8 +595,14 @@ test("hihat open/closed slider end-to-end + cymbals close-panel display", async 
       },
     );
 
-    // Restore cymbals to the fixture default so the close-panel
-    // assertion (11) sees the all-FILTERED state we want to test.
+    // Restore cymbals to the fixture default (8300) so the
+    // close-panel assertion (11) sees a small KEPT set — the
+    // 2026-06-20 fix removed the hard-coded -80.0 decay_col_min
+    // default so the KEPT set is now a function of prominence
+    // alone, not the layered chain. At prominence=8300, the
+    // dataset's top 13 events (out of 565) pass the filter —
+    // none of the FILTERED events should remain in the
+    // displayed waveform set.
     await writeConfigPath(
       request,
       FIXTURE_PROJECT_NUMBER,
@@ -606,28 +611,33 @@ test("hihat open/closed slider end-to-end + cymbals close-panel display", async 
     );
     // Force a rebuild so the sidecar reflects the new threshold.
     // Without this, drawPgaEventBars reads from a stale sidecar
-    // (the prominence moved during the test).
-    await request.post(
-      `/api/rebuild-midi/${FIXTURE_PROJECT_NUMBER}?honor_overrides=true`,
-    );
+    // (the prominence moved during the test). The endpoint reads
+    // project_number from the JSON body (not the URL path), so
+    // /api/rebuild-midi/<n> returns 404 — must POST to
+    // /api/rebuild-midi with a body. 2026-06-20.
+    await request.post(`/api/rebuild-midi`, {
+      data: { project_number: FIXTURE_PROJECT_NUMBER, honor_overrides: true },
+    });
     // Wait for the rebuild to land. The endpoint is async; poll
-    // the analysis JSON until the cymbals prominence field on
-    // each event reflects the threshold.
+    // the analysis JSON until the cymbals KEPT count matches
+    // what prominence=8300 admits (13 events with prominence
+    // >= 8300 in the dataset).
     await waitFor(
       async () => {
         const a = await readAnalysis(request, FIXTURE_PROJECT_NUMBER);
         const events = a?.stems?.cymbals?.events_pga || [];
-        // All-FILTERED: every event with prominence <= 8300
-        // should be FILTERED.
-        const allFiltered = events.every(
-          (e) => (e.prominence ?? 0) <= 8300 ? e.status === "FILTERED" : true,
-        );
-        return allFiltered;
+        if (events.length === 0) return false;
+        const kept = events.filter((e) => e.status === "KEPT").length;
+        // 2026-06-20: the decay_col_min / attack_rise layered
+        // filters are skipped when not configured for the stem,
+        // so prominence alone gates KEPT. With prominence=8300,
+        // the dataset admits ~13 events.
+        return kept > 0 && kept <= 20;
       },
       {
         deadlineMs: 15_000,
         intervalMs: 500,
-        message: "cymbals sidecar did not re-filter to all-FILTERED after restore",
+        message: "cymbals sidecar did not re-filter to prominence-8300 KEPT set after restore",
       },
     );
 
