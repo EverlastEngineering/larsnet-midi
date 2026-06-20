@@ -130,12 +130,30 @@ def calculate_energy_envelope(
                 energy[i] = np.max(envelope[start:end])
     
     elif method == 'spectral':
+        # === CLEANUP-START: method='spectral' branch (no live callers) ===
         # Spectral flux - better for detecting timbral changes
-        energy = librosa.onset.onset_strength(
-            y=audio,
-            sr=sr,
-            hop_length=hop_length
+        # DEAD (2026-06-20): no live caller passes method='spectral'.
+        #   The PGA pipeline (processing_shell_percentile_gated) only
+        #   passes 'peak_hold' (default) or 'rms' (user-overridden).
+        #   Tests test_detector_exhaustive.py only exercise 'rms'.
+        #   Phase 7 will hard-delete this branch.
+#         energy = librosa.onset.onset_strength(
+#             y=audio,
+#             sr=sr,
+#             hop_length=hop_length
+#         )
+        # === CLEANUP-END ===
+        # Defensive: if method='spectral' is somehow reached, fall
+        # back to 'rms' rather than crashing. This is a safety net
+        # for any in-flight midiconfig.yaml that still has
+        # energy_method: 'spectral' (the audit confirmed no current
+        # project does, but old configs in user_files/* might).
+        import warnings
+        warnings.warn(
+            "energy_method='spectral' is deprecated (no live callers); "
+            "falling back to 'rms'. Update midiconfig.yaml to 'peak_hold' or 'rms'."
         )
+        energy = librosa.feature.rms(y=audio, hop_length=hop_length)[0]
     else:
         # Defensive: unknown method falls back to rms. This prevents
         # crashes when a misconfigured energy_method (e.g. 'percentile_gated'
