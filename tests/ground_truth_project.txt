@@ -1,0 +1,5 @@
+4
+# Ground-truth project number (2_funk_80_beat_4-4_4.aif).
+# Written by scripts/register_ground_truth_project.py on
+# every run. Used by tests/test_ground_truth_e2e.py to
+# locate the registered project without re-registering.
