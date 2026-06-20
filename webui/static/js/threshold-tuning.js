@@ -891,9 +891,9 @@ function onClusterFeatureChange(e) {
 function onHihatClassificationToggle(e) {
     const enabled = e.target.checked;
     const stemType = waveformActiveStem || 'hihat';
-    
+
     hihatClassificationEnabled[stemType] = enabled;
-    
+
     // Show/hide the open/closed classification sliders
     const sliderKeys = ['open_decay_slope_max'];
     sliderKeys.forEach(key => {
@@ -902,7 +902,19 @@ function onHihatClassificationToggle(e) {
             sliderRow.style.display = enabled ? '' : 'none';
         }
     });
-    
+
+    // 2026-06-19: notify the waveform (and any other consumer
+    // of the per-event classification color) that the toggle
+    // state changed. The waveform listens for this event and
+    // re-renders so the per-classification color overlay
+    // appears/disappears in lockstep with the toggle.
+    // The event is dispatched on the window so other modules
+    // (advanced-midi.js, future export pipelines) can listen
+    // without depending on the threshold-tuning module.
+    window.dispatchEvent(new CustomEvent('larsnet:classification-toggle', {
+        detail: { stem: stemType, enabled },
+    }));
+
     // Re-run classification
     scheduleReclassify();
 }

@@ -65,6 +65,26 @@ const CLASSIFICATION_COLORS = [
 const HIHAT_OPEN_COLOR = '#f97316';   // Orange - open hi-hat
 const HIHAT_CLOSED_COLOR = '#06b6d4';  // Cyan - closed hi-hat
 
+// 2026-06-19: per-stem classification color map. The key is
+// the classification label as it appears on each event:
+// - hihat: 'open' / 'closed' (set by hihat_state)
+// - toms, snare, cymbals: integer string like '0', '1', '2'
+//   (set by event.classification, from k-means cluster id)
+// The map is the single source of truth for "what color is
+// which classification". getEventColor() consults it after
+// checking that the per-stem classification toggle is on.
+const STEM_CLASSIFICATION_COLORS = {
+    hihat: {
+        open: HIHAT_OPEN_COLOR,
+        closed: HIHAT_CLOSED_COLOR,
+    },
+    // Other stems fall back to the legacy CLASSIFICATION_COLORS
+    // palette (0..3) when their classification toggle is on.
+    // They don't get a stem-specific override here because the
+    // hihat stem is the only one with semantic labels
+    // ('open' / 'closed'); the others use generic cluster ids.
+};
+
 const STEM_ORDER = ['kick', 'snare', 'toms', 'hihat', 'cymbals'];
 
 // Padding for each canvas panel (in CSS pixels)
@@ -80,6 +100,18 @@ let waveformHoverEvent = null;
 let waveformShowSensitive = false;
 let waveformTuningEvents = null;
 let waveformTuningActive = false;
+
+// 2026-06-19: per-stem classification toggle state. Mirrors
+// hihatClassificationEnabled in threshold-tuning.js. The
+// threshold-tuning module dispatches a
+// 'larsnet:classification-toggle' CustomEvent on the window
+// when the user flips the toggle; this map captures that
+// state and is consulted by getEventColor() to decide
+// whether to apply the per-classification color overlay
+// (orange/cyan for hihat open/closed, the legacy cluster
+// palette for other stems). Defaults to true (classification
+// is on) — matches the threshold-tuning default.
+let classificationEnabledByStem = {};
 
 // Dual-canvas references
 let envelopeCanvas = null;
@@ -141,6 +173,30 @@ function hideWaveformLoading() {
     overlay.classList.add('hidden');
     overlay.style.display = 'none';
 }
+
+// 2026-06-19: listen for the per-stem classification toggle.
+// threshold-tuning.js dispatches this event on the window when
+// the user flips the "Open/Closed Classification" toggle (or
+// any future classification toggle). We update the local map
+// and re-render so the per-classification color overlay
+// (orange/cyan for hihat, the cluster palette for other stems)
+// appears or disappears in lockstep with the toggle. The
+// window-level dispatch is a single channel — threshold-tuning
+// is the producer, waveform is one of many potential
+// consumers (advanced-midi.js, future export pipelines, etc.).
+window.addEventListener('larsnet:classification-toggle', (e) => {
+    const { stem, enabled } = e.detail || {};
+    if (!stem) return;
+    classificationEnabledByStem[stem] = !!enabled;
+    // Re-render so the per-event color updates immediately.
+    // The waveform panel is the only canvas that reads the
+    // classification color today; re-rendering it is cheap
+    // (one redraw of the events layer) and keeps the legend
+    // in sync with the visible event colors.
+    if (waveformActiveStem === stem && typeof renderWaveform === 'function') {
+        renderWaveform();
+    }
+});
 
 // ─── Public API ──────────────────────────────────────────────────────────
 
@@ -1071,10 +1127,23 @@ function getEventColor(event, spectralOverlayActive) {
     if (status === 'FILTERED') return WAVEFORM_COLORS.markerFiltered;
     if (status === 'REVERB_CONTINUATION') return WAVEFORM_COLORS.markerReverbCont;
     if (status !== 'KEPT') return WAVEFORM_COLORS.markerUnknown;
-    // Hihat open/closed is a hit-type identity, but only relevant for
-    // the hihat stem. Kept as a per-stem override.
-    if (event.hihat_state === 'open') return HIHAT_OPEN_COLOR;
-    if (event.hihat_state === 'closed') return HIHAT_CLOSED_COLOR;
+    // 2026-06-19: per-stem classification color overlay. Gated
+    // on the per-stem toggle (default true). When the user
+    // flips the "Open/Closed Classification" toggle off, every
+    // KEPT event falls through to the default green (or its
+    // method-based color) so the per-classification color
+    // disappears. The toggle is dispatched by
+    // threshold-tuning.js via a 'larsnet:classification-toggle'
+    // window event; classificationEnabledByStem is updated by
+    // the listener above. The default true (== 'on') matches
+    // the threshold-tuning default.
+    const classEnabled = classificationEnabledByStem[waveformActiveStem] !== false;
+    if (classEnabled) {
+        // Hihat open/closed is a hit-type identity, but only relevant for
+        // the hihat stem. Kept as a per-stem override.
+        if (event.hihat_state === 'open') return HIHAT_OPEN_COLOR;
+        if (event.hihat_state === 'closed') return HIHAT_CLOSED_COLOR;
+    }
     // Spectral-detected events get the dedicated magenta so the user
     // can A/B-compare energy (green) vs spectral (magenta) candidates
     // at a glance. Gated by the overlay flag so single-mode projects
@@ -1095,8 +1164,16 @@ function getEventColor(event, spectralOverlayActive) {
     if (event.method === 'percentile_gated') {
         return WAVEFORM_COLORS.markerPga;
     }
-    // Fall back to classification index colors, then to default green.
-    if (event.classification != null && CLASSIFICATION_COLORS[event.classification]) {
+    // 2026-06-19: gate the per-classification color overlay on
+    // the toggle (same flag as the hihat open/closed branch
+    // above). When the toggle is off, every KEPT event falls
+    // through to the default green (or its method-based color)
+    // regardless of classification value. The hihat branch is
+    // already gated above; this is the catch-all for other
+    // stems' cluster-id classifications.
+    if (classEnabled
+        && event.classification != null
+        && CLASSIFICATION_COLORS[event.classification]) {
         return CLASSIFICATION_COLORS[event.classification];
     }
     return WAVEFORM_COLORS.markerKept;
@@ -1207,8 +1284,16 @@ function updateLegendBar(stemData, displayEvents, pgaEvents, spectralOverlayActi
         }
     }
 
-    // For hihat stem, show open/closed legend instead of classification colors
-    if (isHihat && (hihatOpenGroups.open > 0 || hihatOpenGroups.closed > 0)) {
+    // 2026-06-19: gate the per-classification legend on the
+    // toggle. When the toggle is off, the per-classification
+    // legend entries (open/closed for hihat, Type N for other
+    // stems) are not surfaced — instead a single "Kept (N)"
+    // entry appears so the user can still see the event count
+    // but doesn't see colors that aren't actually being
+    // applied to the events on the canvas. Same default-on
+    // behavior as getEventColor() above.
+    const classEnabled = classificationEnabledByStem[waveformActiveStem] !== false;
+    if (classEnabled && isHihat && (hihatOpenGroups.open > 0 || hihatOpenGroups.closed > 0)) {
         if (hihatOpenGroups.open > 0) {
             items.push({ color: HIHAT_OPEN_COLOR, label: `🔓 Open (${hihatOpenGroups.open})` });
         }
@@ -1217,8 +1302,11 @@ function updateLegendBar(stemData, displayEvents, pgaEvents, spectralOverlayActi
         }
     } else {
         const classKeys = Object.keys(classGroups).map(Number).sort();
-        if (classKeys.length <= 1) {
-            // Single classification (or no data) — show simple "Kept (N)"
+        if (classKeys.length <= 1 || !classEnabled) {
+            // Single classification (or no data) — show simple "Kept (N)".
+            // 2026-06-19: also reached when the classification
+            // toggle is off; the user sees event count but not
+            // a per-classification breakdown.
             if (keptEvents.length > 0) {
                 const cls = classKeys.length === 1 ? classKeys[0] : 0;
                 items.push({
