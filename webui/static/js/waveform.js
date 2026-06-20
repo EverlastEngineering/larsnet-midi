@@ -26,7 +26,6 @@ const WAVEFORM_COLORS = {
     envelopeFillRight: 'rgba(139, 92, 246, 0.25)',
     thresholdLine: 'rgba(251, 191, 36, 0.7)',   // amber dashed
     markerKept: '#10b981',       // green  (energy-detected events)
-    markerSpectral: '#ec4899',   // magenta (spectral-detected events, method='spectral')
     markerPga: '#8b5cf6',        // violet (percentile-gated broad-attack, method='percentile_gated')
     markerFiltered: '#ef4444',   // red
     markerReverbCont: '#f59e0b', // orange/amber
@@ -425,18 +424,6 @@ function drawWaveform() {
         ? waveformTuningEvents
         : configuredEvents;
 
-    // Compute the "spectral A/B overlay" flag once per render and pass
-    // it down. The flag is true ONLY when the active event list mixes
-    // spectral-detected events with non-spectral ones — that is, when
-    // a single project has both kinds visible at once (detection_method
-    // = 'both' is the production path that produces this state). When
-    // the list is pure-energy (detection_method='energy') or
-    // pure-spectral (detection_method='spectral'), the flag is false
-    // and every event falls through to its existing color, satisfying
-    // the "no regression" requirement for the single-mode projects
-    // that the spec calls out.
-    const spectralOverlayActive = hasMixedDetectionMethods(displayEvents);
-
     // Full time range (for zoom reference). PGA events are
     // included in the range so the auto-zoom covers them when the
     // user has no other events to anchor the timeline. Without this,
@@ -454,10 +441,10 @@ function drawWaveform() {
     drawEnvelopePanel(envelope, tMin, tMax, stemData, configuredEvents, sensitiveEvents);
 
     // Draw events panel
-    drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, pgaEvents, tMin, tMax, stemData, spectralOverlayActive);
+    drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, pgaEvents, tMin, tMax, stemData);
 
     // Update legend bar (HTML, outside canvas)
-    updateLegendBar(stemData, displayEvents, pgaEvents, spectralOverlayActive);
+    updateLegendBar(stemData, displayEvents, pgaEvents);
 
     // Draw crosshair on both panels
     if (waveformMouseX != null) {
@@ -553,7 +540,7 @@ function drawEnvelopeAxis(ctx, PAD, plotH) {
 
 // ─── Events Panel ────────────────────────────────────────────────────────
 
-function drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, pgaEvents, tMin, tMax, stemData, spectralOverlayActive) {
+function drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, pgaEvents, tMin, tMax, stemData) {
     const canvas = eventsCanvas;
     const ctx = eventsCtx;
     const dpr = window.devicePixelRatio || 1;
@@ -585,10 +572,7 @@ function drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, pgaEv
 
     // Sensitive events (background layer, tuning mode only)
     if (waveformTuningActive && waveformShowSensitive && sensitiveEvents.length > 0) {
-        // Spectral overlay flag is always false here: sensitive
-        // events are a tuning-only background layer and never carry
-        // method='spectral', so they always use markerSensitive.
-        drawEventBars(ctx, sensitiveEvents, timeToX, PAD, plotW, plotH, true, false);
+        drawEventBars(ctx, sensitiveEvents, timeToX, PAD, plotW, plotH, true);
     }
 
     // When tuning is closed, only draw KEPT events (hide red/orange).
@@ -596,7 +580,7 @@ function drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, pgaEv
     const eventsToRender = waveformTuningActive
         ? displayEvents
         : displayEvents.filter(e => e.status === 'KEPT');
-    drawEventBars(ctx, eventsToRender, timeToX, PAD, plotW, plotH, false, spectralOverlayActive);
+    drawEventBars(ctx, eventsToRender, timeToX, PAD, plotW, plotH, false);
 
     // PGA events layer (2026-06-10). The third complementary
     // detector — always drawn last so it sits on top of the
@@ -634,14 +618,8 @@ function drawVelocityAxis(ctx, PAD, plotW, plotH) {
 /**
  * Draw event markers as amplitude bars.
  * Height is proportional to velocity (0-127). Color-coded by status.
- *
- * ``spectralOverlayActive`` controls whether events with
- * ``method='spectral'`` are rendered in the dedicated magenta. When
- * false (single-mode projects: pure energy or pure spectral), the
- * helper falls through to the legacy color path so the rendering is
- * bit-for-bit identical to the pre-change behavior.
  */
-function drawEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer, spectralOverlayActive) {
+function drawEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer) {
     const barWidth = isSensitiveLayer ? 1.5 : 3;
 
     for (const event of events) {
@@ -664,7 +642,7 @@ function drawEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer
 
         const color = isSensitiveLayer
             ? WAVEFORM_COLORS.markerSensitive
-            : getEventColor(event, spectralOverlayActive);
+            : getEventColor(event);
 
         // Bar height from velocity (0-127)
         // When velocity is missing (sensitive/tuning events),
@@ -1124,51 +1102,30 @@ function getMarkerColor(status, classification, hihatState = null) {
 /**
  * Resolve the waveform bar color for a single event.
  *
- * Detection-method aware: when ``method === 'spectral'`` AND
- * ``spectralOverlayActive`` is true, the event was found by the
- * spectral-transient detector in a project that ALSO has energy
- * candidates, so it gets the magenta ``markerSpectral`` color for
- * the A/B-comparison overlay. When the project is single-mode
- * (detection_method = 'energy' or 'spectral' only), the overlay is
- * disabled and spectral events fall through to the legacy
- * ``getMarkerColor`` path so the rendering is bit-for-bit identical
- * to the pre-change behavior — this is the "no regression" contract
- * from the task spec.
- *
  * Precedence (highest first):
  *   1. FILTERED → red
  *   2. REVERB_CONTINUATION → orange
- *   3. hihat open/closed → dedicated colors
- *   4. method === 'spectral' AND overlay active → magenta
- *   5. classification index → classification palette
+ *   3. hihat open/closed → dedicated colors (when classification
+ *      overlay is enabled)
+ *   4. method === 'percentile_gated' → violet (PGA)
+ *   5. classification index → classification palette (when
+ *      classification overlay is enabled)
  *   6. else → markerKept (green)
  *
  * Steps 1-3 are intentional: filter status and hihat open/closed are
  * visual identities that the user has learned to look for, so they
- * win over the spectral/classification distinction. The spectral
- * method check sits between hihat and classification so a
- * spectral-detected hihat still shows as magenta (A/B comparison is
- * more important than the open/closed hint when both apply).
- *
- * This helper is the single source of truth for the "is this an
- * energy event or a spectral event" decision on the canvas; both
- * the bar renderer and any tooltip / legend code should call it
- * instead of branching on ``event.method`` ad-hoc.
+ * win over the classification distinction.
  *
  * Args:
  *   event: A single event dict (the same shape as items in
  *          ``events_configured``). Must have a ``status`` field
  *          and may have ``method``, ``classification``,
  *          ``hihat_state``, etc.
- *   spectralOverlayActive: When true, ``method='spectral'`` events
- *          take the magenta color. When false (the default for
- *          single-mode projects), the helper falls through to the
- *          legacy color path.
  *
  * Returns:
  *   A CSS color string. Always present, never null.
  */
-function getEventColor(event, spectralOverlayActive) {
+function getEventColor(event) {
     if (!event) return WAVEFORM_COLORS.markerUnknown;
     const status = event.status;
     // Non-KEPT statuses win immediately so the user can always spot
@@ -1192,16 +1149,6 @@ function getEventColor(event, spectralOverlayActive) {
         // the hihat stem. Kept as a per-stem override.
         if (event.hihat_state === 'open') return HIHAT_OPEN_COLOR;
         if (event.hihat_state === 'closed') return HIHAT_CLOSED_COLOR;
-    }
-    // Spectral-detected events get the dedicated magenta so the user
-    // can A/B-compare energy (green) vs spectral (magenta) candidates
-    // at a glance. Gated by the overlay flag so single-mode projects
-    // (pure spectral, where every event would otherwise turn
-    // magenta) keep their original color. The overlay is only
-    // active when the active event list mixes both methods — see
-    // hasMixedDetectionMethods().
-    if (spectralOverlayActive && event.method === 'spectral') {
-        return WAVEFORM_COLORS.markerSpectral;
     }
     // Percentile-gated broad-attack events get the dedicated violet
     // (2026-06-10). PGA is a THIRD complementary detector; it runs
@@ -1228,45 +1175,9 @@ function getEventColor(event, spectralOverlayActive) {
     return WAVEFORM_COLORS.markerKept;
 }
 
-/**
- * Decide whether the spectral A/B overlay should be active for the
- * given event list.
- *
- * The overlay is the new magenta treatment for ``method='spectral'``
- * events; it is ONLY active when the event list genuinely mixes
- * spectral-detected events with non-spectral ones. That is the
- * production case for ``detection_method='both'`` (energy wins
- * collisions after a 12ms dedup; spectral survivors are tagged
- * ``method='spectral'`` and end up next to energy events in the
- * same list). For single-mode projects — ``detection_method='energy'``
- * (no spectral tag anywhere) or ``detection_method='spectral'``
- * (every event has the spectral tag) — the function returns false
- * and the rendering is bit-for-bit identical to the pre-change
- * behavior.
- *
- * The "at least one of each kind" check uses the full event list
- * (not just KEPT ones) so that a tuning session that contains both
- * kinds still gets the overlay.
- */
-function hasMixedDetectionMethods(events) {
-    if (!Array.isArray(events) || events.length === 0) return false;
-    let hasSpectral = false;
-    let hasNonSpectral = false;
-    for (const e of events) {
-        if (!e) continue;
-        if (e.method === 'spectral') {
-            hasSpectral = true;
-        } else {
-            hasNonSpectral = true;
-        }
-        if (hasSpectral && hasNonSpectral) return true;
-    }
-    return false;
-}
-
 // ─── Legend Bar (HTML, outside canvas) ────────────────────────────────────
 
-function updateLegendBar(stemData, displayEvents, pgaEvents, spectralOverlayActive) {
+function updateLegendBar(stemData, displayEvents, pgaEvents) {
     // Tuning indicator
     const tuningLabel = document.getElementById('waveform-tuning-label');
     if (tuningLabel) {
@@ -1284,19 +1195,6 @@ function updateLegendBar(stemData, displayEvents, pgaEvents, spectralOverlayActi
     const filteredCount = events.filter(e => e.status === 'FILTERED').length;
     const reverbCount = events.filter(e => e.status === 'REVERB_CONTINUATION').length;
     const sensitiveCount = (stemData.events_sensitive || []).length;
-    // Spectral-survivor count: KEPT events whose method='spectral' tag
-    // was stamped by the pipeline (detection_method='spectral' or
-    // 'both' with the event surviving the 12ms dedup window). Energy
-    // events that happen to use a spectral-flux envelope will still
-    // carry method='spectral_flux' or 'rms', not 'spectral' — only
-    // _run_spectral_detection survivors get the bare 'spectral' tag.
-    // Only surfaced in the legend when the spectral overlay is
-    // actually active (i.e. we are in the mixed-methods case);
-    // otherwise the magenta would be lying about what the user is
-    // actually seeing on the canvas.
-    const spectralKeptCount = spectralOverlayActive
-        ? keptEvents.filter(e => e.method === 'spectral').length
-        : 0;
 
     const items = [];
 
@@ -1307,12 +1205,6 @@ function updateLegendBar(stemData, displayEvents, pgaEvents, spectralOverlayActi
     const isHihat = waveformActiveStem === 'hihat';
 
     for (const e of keptEvents) {
-        // Spectral-survivor events are surfaced separately as a
-        // "Spectral" legend entry so the user can see at a glance how
-        // many events were found by the spectral detector. Skip them
-        // in the per-classification / hihat grouping so they don't
-        // double-count.
-        if (e.method === 'spectral') continue;
         // PGA events (method='percentile_gated') are surfaced as a
         // single "PGA (N)" legend entry below; skip them in the
         // per-classification grouping so the user's "Type 1/2/3"
@@ -1378,21 +1270,6 @@ function updateLegendBar(stemData, displayEvents, pgaEvents, spectralOverlayActi
                 items.push({ color, label: `Type ${cls + 1} (${classGroups[cls]})` });
             }
         }
-    }
-
-    // Show the spectral-detected events as their own legend entry so
-    // the magenta bars on the canvas have an explanation. Only show
-    // the entry when the overlay is actually active AND at least one
-    // event carries method='spectral' — otherwise the legend stays
-    // clean (no magenta on canvas → no "Spectral" entry). The
-    // energy/spectral mapping is documented in the bar-renderer
-    // comment; this entry is the user-facing mirror.
-    if (spectralOverlayActive && spectralKeptCount > 0) {
-        items.push({
-            color: WAVEFORM_COLORS.markerSpectral,
-            label: `Spectral (${spectralKeptCount})`,
-            title: "Magenta = spectral-detected candidate (method='spectral'); green = energy-detected",
-        });
     }
 
     // PGA legend entry (2026-06-10). The third complementary

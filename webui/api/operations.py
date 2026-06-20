@@ -410,8 +410,8 @@ def rebuild_midi():
             "honor_overrides": true,            # optional: default true
             "config_overrides": {               # optional: bug D
                 "filtering.reverb_continuation_attack_threshold": 0.3,
-                "kick.geomean_threshold": 600,
-                "hihat.open_geomean_min": 200
+                "kick.pga_min_prominence": 4000,
+                "hihat.open_decay_slope_max": 2.5
             }
         }
 
@@ -498,8 +498,8 @@ def reclassify():
             "project_number": 1,
             "stem_type": "hihat",
             "config_overrides": {
-                "open_geomean_min": 300,
-                "open_sustain_ms": 120
+                "hihat.open_decay_slope_max": 2.5,
+                "snare.expected_clusters": 2
             }
         }
 
