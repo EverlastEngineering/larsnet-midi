@@ -237,10 +237,6 @@ def _process_stems_to_midi(
                 stem_type,
                 drum_mapping,
                 config,
-                onset_threshold=onset_threshold,
-                onset_delta=onset_delta,
-                onset_wait=onset_wait,
-                hop_length=hop_length,
                 min_velocity=min_velocity,
                 max_velocity=max_velocity,
                 max_duration=max_duration

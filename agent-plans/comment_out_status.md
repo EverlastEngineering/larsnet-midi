@@ -5,10 +5,18 @@ This file tracks every block of code that has been wrapped in
 during the comment-out pass. After verification, Phase 7 will
 hard-delete each entry and update its row.
 
+**Important context** (2026-06-20): the original Phase 1 plan was to
+wrap the entire `processing_shell.py` dead surface with the markers
+AND comment each inner line. After Phase 1A.1 + 1A.2 (commits
+9a75da4 + Phase 1A.2 commit), the wrapped blocks are correctly
+commented out so Python's parser ignores them. Phase 1A.2 also
+unwrapped `_load_and_validate_audio` because it turned out to be
+LIVE (called by `processing_shell_percentile_gated.process_percentile_gated`).
+
 | Status | File | Lines | Reason | Marker commit | Delete commit |
 |---|---|---|---|---|---|
-| PENDING | stems_to_midi/processing_shell.py | 57-157 | `_load_and_validate_audio` — only called from unreachable tail | | |
-| PENDING | stems_to_midi/processing_shell.py | 159-212 | `_configure_onset_detection` — only called from unreachable tail | | |
+| DONE | stems_to_midi/processing_shell.py | 137-194 | `_configure_onset_detection` — only called from unreachable tail | 9a75da4 | Phase 7 |
+| DONE | stems_to_midi/processing_shell.py | 195-277 | `_detect_tom_pitches` — never called | 9a75da4 | Phase 7 |
 | PENDING | stems_to_midi/processing_shell.py | 214-292 | `_detect_tom_pitches` — never called | | |
 | PENDING | stems_to_midi/processing_shell.py | 294-404 | `_detect_cymbal_pitches` — never called | | |
 | PENDING | stems_to_midi/processing_shell.py | 406-484 | `_detect_snare_pitches` — never called | | |

@@ -323,10 +323,6 @@ class TestStemsToMidi:
             stem_type='kick',
             drum_mapping=drum_mapping,
             config=config,
-            onset_threshold=onset_threshold,
-            onset_delta=onset_delta,
-            onset_wait=onset_wait,
-            hop_length=hop_length,
             min_velocity=40,
             max_velocity=127
         )
@@ -377,10 +373,6 @@ class TestStemsToMidi:
                     stem_type=stem_type,
                     drum_mapping=drum_mapping,
                     config=config,
-                    onset_threshold=onset_threshold,
-                    onset_delta=onset_delta,
-                    onset_wait=onset_wait,
-                    hop_length=hop_length,
                     min_velocity=40,
                     max_velocity=127
                 )
@@ -439,10 +431,6 @@ class TestVideoRendering:
             stem_type='kick',
             drum_mapping=drum_mapping,
             config=config,
-            onset_threshold=onset_threshold,
-            onset_delta=onset_delta,
-            onset_wait=onset_wait,
-            hop_length=hop_length,
             min_velocity=40,
             max_velocity=127
         )
@@ -490,10 +478,6 @@ class TestVideoRendering:
             stem_type='kick',
             drum_mapping=drum_mapping,
             config=config,
-            onset_threshold=onset_threshold,
-            onset_delta=onset_delta,
-            onset_wait=onset_wait,
-            hop_length=hop_length,
             min_velocity=40,
             max_velocity=127
         )
@@ -559,10 +543,6 @@ class TestFullPipeline:
                     stem_type=stem_type,
                     drum_mapping=drum_mapping,
                     config=config,
-                    onset_threshold=onset_threshold,
-                    onset_delta=onset_delta,
-                    onset_wait=onset_wait,
-                    hop_length=hop_length,
                     min_velocity=40,
                     max_velocity=127
                 )

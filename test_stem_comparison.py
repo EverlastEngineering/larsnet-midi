@@ -46,10 +46,6 @@ def process_single_stem(project_path: Path, stem_type: str, use_librosa: bool):
         stem_type=stem_type,
         drum_mapping=drum_mapping,
         config=config,
-        onset_threshold=onset_threshold,
-        onset_delta=onset_delta,
-        onset_wait=onset_wait,
-        hop_length=hop_length
     )
     
     events = result['events']
