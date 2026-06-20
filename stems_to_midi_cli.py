@@ -168,20 +168,23 @@ def _process_stems_to_midi(
     if not stem_files:
         raise RuntimeError(f"No WAV files found in {stems_source}")
 
-    # Pull all onset / midi parameters from config (single source of truth).
-    onset_threshold = config['onset_detection']['threshold']
-    onset_delta = config['onset_detection']['delta']
-    onset_wait = config['onset_detection']['wait']
-    hop_length = config['onset_detection']['hop_length']
+    # Pull live MIDI output parameters from config.
+    # 2026-06-20: the legacy onset_threshold / onset_delta / onset_wait /
+    # hop_length prints were removed along with those YAML keys (they
+    # were the energy/spectral detector's tuning knobs — PGA has
+    # pga_min_prominence instead, see onset_detection.pga_min_prominence).
+    # The CLI's "Settings:" block now shows only the LIVE knobs.
     min_velocity = config['midi'].get('min_velocity', 80)
     max_velocity = config['midi'].get('max_velocity', 110)
     tempo = config['midi'].get('default_tempo') or config['midi'].get('tempo')
 
     print("Settings:")
-    print(f"  Onset threshold: {onset_threshold}")
-    print(f"  Onset delta: {onset_delta}")
-    print(f"  Onset wait: {onset_wait}")
-    print(f"  Hop length: {hop_length}")
+    pga_min_prom = (
+        config.get('onset_detection', {}).get('pga_min_prominence')
+        or config.get('toms', {}).get('pga_min_prominence')
+        or 'unset'
+    )
+    print(f"  PGA min prominence: {pga_min_prom}")
     print(f"  Velocity range: {min_velocity}-{max_velocity}")
     print(f"  Tempo: {tempo} BPM")
     if max_duration is not None:
