@@ -96,7 +96,27 @@ let waveformAnalysisData = null;
 let waveformEnvelopeCache = {};
 let waveformActiveStem = null;
 let waveformHoverEvent = null;
-let waveformShowSensitive = false;
+// 2026-06-22: repurposed from "Show sensitive" (the gray energy-detector
+// overlay layer is gone — the user removed the feature). The checkbox
+// now controls visibility of FILTERED events on the waveform and is
+// persisted across page reloads via localStorage. Default is unchecked
+// so the canvas shows only KEPT events on first load (matches the
+// pre-refactor behavior when the Tune panel was closed).
+const WAVEFORM_SHOW_FILTERED_KEY = 'larsnet:waveform:showFiltered';
+function readShowFilteredFromStorage() {
+    try {
+        return localStorage.getItem(WAVEFORM_SHOW_FILTERED_KEY) === 'true';
+    } catch (e) {
+        // localStorage can throw in private-browsing mode in some browsers.
+        return false;
+    }
+}
+function writeShowFilteredToStorage(value) {
+    try {
+        localStorage.setItem(WAVEFORM_SHOW_FILTERED_KEY, value ? 'true' : 'false');
+    } catch (e) { /* private mode etc. — silently ignore */ }
+}
+let waveformShowFiltered = readShowFilteredFromStorage();
 let waveformTuningEvents = null;
 let waveformTuningActive = false;
 
@@ -282,12 +302,17 @@ async function initWaveformViewer(project) {
     setupCanvasInteraction(envelopeCanvas);
     setupCanvasInteraction(eventsCanvas);
 
-    // Sensitive toggle
-    const sensitiveToggle = document.getElementById('waveform-sensitive-toggle');
-    if (sensitiveToggle) {
-        sensitiveToggle.checked = waveformShowSensitive;
-        sensitiveToggle.onchange = () => {
-            waveformShowSensitive = sensitiveToggle.checked;
+    // 2026-06-22: Show Filtered toggle (repurposed from "Show
+    // sensitive"). Visibility of FILTERED events on the waveform
+    // is now purely user-controlled and independent of the Tune
+    // panel state. Persisted in localStorage so the preference
+    // sticks across page reloads.
+    const filteredToggle = document.getElementById('waveform-filtered-toggle');
+    if (filteredToggle) {
+        filteredToggle.checked = waveformShowFiltered;
+        filteredToggle.onchange = () => {
+            waveformShowFiltered = filteredToggle.checked;
+            writeShowFilteredToStorage(waveformShowFiltered);
             drawWaveform();
         };
     }
@@ -334,12 +359,19 @@ async function selectStem(stemType) {
         tab.classList.toggle('waveform-tab-inactive', !isActive);
     });
 
-    const sensitiveContainer = document.getElementById('waveform-sensitive-container');
-    if (sensitiveContainer) {
+    // 2026-06-22: Show the "Show Filtered" container whenever the
+    // active stem has any events that could be hidden (i.e. any
+    // events_configured or events_pga entry — every entry has a
+    // status of KEPT or FILTERED). The container is purely
+    // cosmetic; the checkbox works regardless of the stem. We
+    // used to gate on events_sensitive, which the new feature
+    // ignores.
+    const filteredContainer = document.getElementById('waveform-filtered-container');
+    if (filteredContainer) {
         const stemData = waveformAnalysisData.stems[stemType];
-        const hasSensitive = (stemData.events_sensitive && stemData.events_sensitive.length > 0) ||
-                             (stemData.events_pga && stemData.events_pga.length > 0);
-        sensitiveContainer.classList.toggle('hidden', !hasSensitive);
+        const hasEvents = (stemData.events_configured && stemData.events_configured.length > 0) ||
+                          (stemData.events_pga && stemData.events_pga.length > 0);
+        filteredContainer.classList.toggle('hidden', !hasEvents);
     }
 
     // Load envelope data
@@ -570,14 +602,20 @@ function drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, pgaEv
     // Velocity scale labels on left axis
     drawVelocityAxis(ctx, PAD, plotW, plotH);
 
-    // Sensitive events (background layer, tuning mode only)
-    if (waveformTuningActive && waveformShowSensitive && sensitiveEvents.length > 0) {
-        drawEventBars(ctx, sensitiveEvents, timeToX, PAD, plotW, plotH, true);
-    }
+    // 2026-06-22: gray "Sensitive" overlay layer removed. The
+    // checkbox is repurposed for FILTERED visibility (handled
+    // by the eventsToRender filter below), and the gray
+    // energy-detector onsets layer is dead UI.
 
-    // When tuning is closed, only draw KEPT events (hide red/orange).
-    // When tuning is open, draw all events (KEPT + FILTERED + REVERB_CONTINUATION).
-    const eventsToRender = waveformTuningActive
+    // 2026-06-22: FILTERED visibility is now controlled by the
+    // "Show Filtered" checkbox (waveformShowFiltered), NOT by
+    // the Tune panel. When the checkbox is checked, all events
+    // (KEPT + FILTERED + REVERB_CONTINUATION) are drawn; when
+    // unchecked, only KEPT events are drawn. The user can
+    // toggle this independently of the panel — useful when
+    // the sheer number of filtered events across a song is
+    // making the KEPT events hard to see.
+    const eventsToRender = waveformShowFiltered
         ? displayEvents
         : displayEvents.filter(e => e.status === 'KEPT');
     drawEventBars(ctx, eventsToRender, timeToX, PAD, plotW, plotH, false);
@@ -742,8 +780,11 @@ function drawPgaEventBars(ctx, events, timeToX, PAD, plotW, plotH) {
     for (const event of events) {
         if (event.time == null) continue;
         const isFiltered = event.status === 'FILTERED';
-        // Hide FILTERED events when the analysis panel is closed
-        if (isFiltered && typeof tuningPanelOpen !== 'undefined' && !tuningPanelOpen) {
+        // 2026-06-22: FILTERED PGA events are gated on the
+        // "Show Filtered" checkbox (waveformShowFiltered), not
+        // on the Tune panel. Mirrors the eventsToRender filter
+        // in drawEventsPanel.
+        if (isFiltered && !waveformShowFiltered) {
             continue;
         }
         const x = timeToX(event.time);
@@ -1194,7 +1235,8 @@ function updateLegendBar(stemData, displayEvents, pgaEvents) {
     const keptEvents = events.filter(e => e.status === 'KEPT');
     const filteredCount = events.filter(e => e.status === 'FILTERED').length;
     const reverbCount = events.filter(e => e.status === 'REVERB_CONTINUATION').length;
-    const sensitiveCount = (stemData.events_sensitive || []).length;
+    // 2026-06-22: sensitiveCount removed (the gray "Sensitive (N)"
+    // legend entry and the gray overlay layer are both gone).
 
     const items = [];
 
@@ -1289,13 +1331,20 @@ function updateLegendBar(stemData, displayEvents, pgaEvents) {
         });
     }
 
-    // Show filtered/reverb/sensitive counts only when tuning is active
-    if (waveformTuningActive) {
-        if (filteredCount > 0) items.push({ color: WAVEFORM_COLORS.markerFiltered, label: `Filtered (${filteredCount})` });
-        if (reverbCount > 0) items.push({ color: WAVEFORM_COLORS.markerReverbCont, label: `Reverb cont. (${reverbCount})` });
+    // 2026-06-22: "Filtered (N)" legend entry is now gated on
+    // the user-controlled "Show Filtered" checkbox, NOT on the
+    // Tune panel. The count only makes sense when the red
+    // filtered bars are actually drawn — otherwise the legend
+    // would dangle and confuse ("where are the red bars?").
+    // "Reverb cont. (N)" stays unconditionally visible (those
+    // events are always drawn faded, regardless of the panel
+    // or the filtered toggle). The "Sensitive (N)" gray entry
+    // is removed entirely — the gray overlay layer is dead UI.
+    if (filteredCount > 0 && waveformShowFiltered) {
+        items.push({ color: WAVEFORM_COLORS.markerFiltered, label: `Filtered (${filteredCount})` });
     }
-    if (waveformTuningActive && waveformShowSensitive && sensitiveCount > 0) {
-        items.push({ color: '#9ca3af', label: `Sensitive (${sensitiveCount})` });
+    if (reverbCount > 0) {
+        items.push({ color: WAVEFORM_COLORS.markerReverbCont, label: `Reverb cont. (${reverbCount})` });
     }
 
     container.innerHTML = items.map(item =>
@@ -1565,7 +1614,14 @@ function drawTooltip(event, W, H) {
         // in the sidecar so the user can see them faded
         // when the analysis panel is open.
         if (event.status != null) {
-            const statusTag = event.status === 'FILTERED' ? ' (faded — hidden when panel closed)' : '';
+            // 2026-06-22: FILTERED visibility is controlled by
+            // the "Show Filtered" checkbox, not the panel.
+            // Reflect current visibility in the tooltip.
+            const statusTag = event.status === 'FILTERED'
+                ? (waveformShowFiltered
+                    ? ' (faded — toggle "Show Filtered" to hide)'
+                    : ' (hidden — toggle "Show Filtered" to reveal)')
+                : '';
             lines.push(`Status: ${event.status}${statusTag}`);
         }
         if (event.midi_velocity != null) lines.push(`MIDI velocity: ${event.midi_velocity} (PGA envelope → [min, max] from settings)`);
@@ -1696,12 +1752,12 @@ function onCanvasMouseMove(e) {
             : configuredEvents;
         // PGA events participate in hover hit-testing (2026-06-10)
         // — clicking near a violet marker surfaces its info in
-        // the tooltip. The events are KEPT-only and never carry a
-        // velocity, so they show up in the hover state but
-        // otherwise behave like the other event types.
-        const allEvents = (!waveformTuningActive && waveformShowSensitive)
-            ? displayEvents.concat(sensitiveEvents).concat(pgaEvents)
-            : displayEvents.concat(pgaEvents);
+        // 2026-06-22: the sensitive-events pool is no longer
+        // included in the hover hit-test — the gray overlay
+        // that drew them is gone, so hovering an empty area
+        // would yield confusing tooltips. PGA events stay
+        // (they're always drawn as violet bars).
+        const allEvents = displayEvents.concat(pgaEvents);
 
         let closest = null;
         let closestDist = Infinity;
