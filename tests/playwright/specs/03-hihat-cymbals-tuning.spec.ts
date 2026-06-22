@@ -22,9 +22,10 @@
  *         runs applyTuningFilter immediately (RAF-debounced) and
  *         the kept/filtered counts in the panel header update.
  *      5. Live reclassify (classification sliders only) — dragging
- *         the slider runs scheduleReclassify (500ms-debounced) and
- *         per-event classification fields (hihat_state,
- *         classification) merge into the displayed events.
+ *         the slider runs reapplyClientSideClassification (RAF,
+ *         synchronous value-compare against per-event fields like
+ *         decay_slope_db) and per-event classification fields
+ *         (hihat_state, note) update on the displayed events.
  *      6. Live color — the per-event color overlay reflects the new
  *         classification on the very next draw (orange/cyan for
  *         hihat open/closed, generic CLASSIFICATION_COLORS for
@@ -73,6 +74,10 @@
  *          events_pga); it also wrote dotted-path overrides
  *          literally into the per-stem dict instead of walking
  *          the path. — covered by assertion 5 (live reclassify).
+ *          2026-06-22: R2 is structurally fixed by removing
+ *          /api/reclassify entirely; classification now runs in
+ *          JS. The assertion stays as a regression guard against
+ *          re-introducing a server round-trip.
  *      R3. _classification_thresholds_changed (rebuild_core.py)
  *          watched only the legacy keys. Save & Rebuild persisted
  *          the new threshold but classify_notes ran with
@@ -147,12 +152,14 @@ const HIHAT_SLOPE_DEFAULT = 0.7;
 // non-trivial change to check.
 const NEW_HIHAT_SLOPE = 5.5;
 
-// How long to wait for the debounced reclassify to land after a
-// slider drag. The debounce in scheduleReclassify is 500ms; the
-// server-side reclassify of project 6's 2396 hihat events takes
-// ~150ms; the JS merge + drawWaveform is sub-50ms. 1500ms gives
-// 2x headroom on a busy machine.
-const RECLASSIFY_WAIT_MS = 1500;
+// 2026-06-22: As of the client-side classification refactor, the
+// open/closed threshold applies entirely in JS — the sidecar already
+// carries `decay_slope_db` on every hihat event and
+// applyHihatDecaySlopeClassification is a synchronous value-compare.
+// No debounce, no network call, no /api/reclassify round-trip. The
+// RAF + drawWaveform + legend re-render takes <50ms; this constant
+// is now just a defensive upper bound for the assertion (5) wait.
+const RECLASSIFY_WAIT_MS = 250;
 
 // ─── YAML helpers ─────────────────────────────────────────────────────────
 
@@ -373,23 +380,31 @@ test("hihat open/closed slider end-to-end + cymbals close-panel display", async 
     // (3, cont.) Save button visible — slider differs from configured.
     await expect(saveBtn).toBeVisible();
 
-    // (5) Live reclassify fires. Pre-fix: the endpoint returned
-    //     {events: []} (events_configured empty for PGA-only hihat),
-    //     so the merge did nothing. Post-fix: events_pga fallback
-    //     + dotted-path override walking produces a real set.
+    // (5) Live reclassify fires. As of 2026-06-22 the
+    //     reclassification is purely client-side:
+    //     applyHihatDecaySlopeClassification runs synchronously
+    //     in the RAF callback in onSliderInput (no debounce, no
+    //     network call). Pre-2026-06-22 this assertion was the
+    //     canary for the events_configured / events_pga fallback
+    //     bug + the dotted-path override bug — both of which
+    //     were server-side, both of which are now structurally
+    //     impossible. The test stays as a regression: if a
+    //     future change re-introduces a server round-trip or
+    //     reverts to events_configured-only reads, this assertion
+    //     catches it.
     //
-    // The legend always shows open/closed counts when classification
-    // is on — getEventsForStem falls back to events_pga when
-    // events_configured is empty (which is the case for hihat).
-    // The fill() at step (3) already triggered the drag — the
-    // reclassify is RAF-debounced (classification branch +
-    // scheduleReclassify 500ms timer). Wait for it to land then
-    // assert the AFTER distribution shifted in the expected
-    // direction: at slope=0.7 (the pre-test value), very few
-    // events have decay_slope_db < 0.7 so most surviving hihats
-    // are "closed". At slope=5.5 (the dragged value), the
-    // threshold rises — events that were closed at 0.7 (slope
-    // in [0.7, 5.5]) flip to "open". The OPEN count rises; the
+    // The legend always shows open/closed counts when
+    // classification is on — getEventsForStem falls back to
+    // events_pga when events_configured is empty (which is the
+    // case for hihat). The fill() at step (3) already triggered
+    // the drag; the RAF + drawWaveform + legend re-render lands
+    // in <50ms. Wait a defensive 250ms then assert the AFTER
+    // distribution shifted in the expected direction: at
+    // slope=0.7 (the pre-test value), very few events have
+    // decay_slope_db < 0.7 so most surviving hihats are
+    // "closed". At slope=5.5 (the dragged value), the threshold
+    // rises — events that were closed at 0.7 (slope in
+    // [0.7, 5.5]) flip to "open". The OPEN count rises; the
     // CLOSED count falls.
     await page.waitForTimeout(RECLASSIFY_WAIT_MS);
     const openClosedAfter = await readOpenClosedCounts(page);

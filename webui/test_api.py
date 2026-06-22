@@ -900,7 +900,6 @@ class TestRouteRegistration:
             ('/api/cleanup', 'POST'),
             ('/api/stems-to-midi', 'POST'),
             ('/api/rebuild-midi', 'POST'),
-            ('/api/reclassify', 'POST'),
             ('/api/render-video', 'POST'),
             ('/api/jobs', 'GET'),
             ('/api/jobs/job-1', 'GET'),

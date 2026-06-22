@@ -321,14 +321,11 @@ class LarsNetAPI {
         });
     }
 
-    async reclassify(projectNumber, stemType, configOverrides = {}) {
-        return await this.post('/reclassify', {
-            project_number: projectNumber,
-            stem_type: stemType,
-            config_overrides: configOverrides
-        });
-    }
-    
+    // 2026-06-22: reclassify() removed. The Tune panel now
+    // re-classifies events client-side; only Save & Reconvert
+    // touches the server (rebuildMidi above). See
+    // threshold-tuning.js::reapplyClientSideClassification.
+
     async renderVideo(projectNumber, options = {}) {
         return await this.post('/render-video', {
             project_number: projectNumber,

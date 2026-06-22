@@ -109,25 +109,12 @@ let tuningConfig = {};
 /** Animation frame ID for debounced re-filtering */
 let tuningRafId = null;
 
-/** Timeout ID for debounced reclassify API calls */
-let reclassifyTimeoutId = null;
-
-/** Whether a reclassify request is in flight */
-let reclassifyInFlight = false;
-
 /**
  * Cached deep-copy of events_configured for the active stem.
  * Created once when entering tuning mode (or switching stems).
  * applyTuningFilter modifies status in-place on these — no re-copying.
  */
 let tuningBaseEvents = null;
-
-/**
- * Cached classification results from the last reclassify call, keyed by time.
- * Format: { timeKey: { classification, note, hihat_state } }
- * Re-applied after each filter pass to avoid losing note colors.
- */
-let lastClassification = null;
 
 // ─── Per-Stem Configuration ──────────────────────────────────────────────
 
@@ -263,11 +250,11 @@ async function toggleTuningPanel() {
         // render shows correct values (not a flash of stale fallback
         // defaults). 2026-06-15.
         //
-        // Do NOT call applyTuningFilter() / scheduleReclassify()
-        // here. The user wants the Kept count to stay at the
-        // sidecar's value until they actually drag a slider — not
-        // jump to the live-tuned count the moment Tune opens. The
-        // first slider input handler kicks the filter pass off
+        // Do NOT call applyTuningFilter() here. The user wants
+        // the Kept count to stay at the sidecar's value until they
+        // actually drag a slider — not jump to the live-tuned count
+        // the moment Tune opens. The first slider input handler
+        // kicks the filter pass off
         // naturally. 2026-06-15.
         if (waveformActiveStem) {
             await loadTuningConfig(waveformActiveStem);
@@ -278,13 +265,12 @@ async function toggleTuningPanel() {
         panel.classList.add('hidden');
         if (btn) btn.classList.remove('tuning-btn-active');
 
-        // Cancel any pending reclassify
-        if (reclassifyTimeoutId) { clearTimeout(reclassifyTimeoutId); reclassifyTimeoutId = null; }
+        // Cancel any pending RAF
+        if (tuningRafId) cancelAnimationFrame(tuningRafId);
 
         // Clear cluster UI and caches
         hideClusterCards();
         tuningBaseEvents = null;
-        lastClassification = null;
 
         // Clear tuning overlay — revert to configured display
         waveformTuningEvents = null;
@@ -306,11 +292,10 @@ async function toggleTuningPanel() {
  */
 async function onTuningStemChanged(stemType) {
     if (!tuningPanelOpen) return;
-    // Cancel any pending reclassify from the previous stem
-    if (reclassifyTimeoutId) { clearTimeout(reclassifyTimeoutId); reclassifyTimeoutId = null; }
+    // Cancel any pending RAF from the previous stem
+    if (tuningRafId) cancelAnimationFrame(tuningRafId);
     hideClusterCards();
     tuningBaseEvents = null;
-    lastClassification = null;
     // Fetch the new stem's live yaml config before rebuilding
     // sliders. Same rationale as toggleTuningPanel: avoid a flash
     // of fallback defaults between stem switches. 2026-06-15.
@@ -329,19 +314,18 @@ async function onTuningStemChanged(stemType) {
 function resetTuningSliders() {
     if (!waveformActiveStem || !waveformAnalysisData) return;
 
-    // Cancel any pending reclassify
-    if (reclassifyTimeoutId) { clearTimeout(reclassifyTimeoutId); reclassifyTimeoutId = null; }
+    // Cancel any pending RAF
+    if (tuningRafId) cancelAnimationFrame(tuningRafId);
 
     // Clear stored values so buildSlidersForStem reads from logic block
     delete tuningSliderValues[waveformActiveStem];
     delete clusterNoteOverrides[waveformActiveStem];
-    lastClassification = null;
     tuningBaseEvents = null;
     hideClusterCards();
     buildSlidersForStem(waveformActiveStem);
     initTuningBaseEvents(waveformActiveStem);
     applyTuningFilter();
-    scheduleReclassify();
+    reapplyClientSideClassification(waveformActiveStem);
     updateTuningSaveButton();
 }
 
@@ -738,39 +722,40 @@ function onSliderInput(e) {
     updateTuningSaveButton();
 
     if (isClassification) {
-        // 2026-06-19: classification sliders MUST also enter
-        // tuning mode (applyTuningFilter → waveformTuningEvents =
-        // tuningBaseEvents from events_pga). Without this, the
-        // reclassify merge at doReclassify:1050 hits the empty
-        // `events_configured` for PGA-only stems (hihat, toms,
-        // snare), so hihat_state / classification updates have
-        // no array to land in. The visible symptom: dragging
-        // the open/closed slider triggers a server round-trip
-        // but the displayed events keep their old labels (or no
-        // labels at all) until the user Saves & Reconverts.
-        // The filter pipeline here is a no-op for classification
-        // sliders (no prominence/min_decay_col_min/attack_rise
-        // changes), but its side effect — populating
-        // waveformTuningEvents — is exactly what the reclassify
-        // merge needs.
+        // 2026-06-22: classification sliders re-classify entirely
+        // client-side — no /api/reclassify round-trip. The sidecar
+        // already carries per-event data (e.g. `decay_slope_db` for
+        // hihat) needed to relabel KEPT events against the new
+        // threshold. applyTuningFilter() runs first to refresh
+        // waveformTuningEvents (it rebuilds it from tuningBaseEvents
+        // and re-applies filter passes), then the new classifier
+        // mutates hihat_state / note in place, and the legend +
+        // event-count update + redraw pick up the new labels.
         if (tuningRafId) cancelAnimationFrame(tuningRafId);
         tuningRafId = requestAnimationFrame(() => {
             applyTuningFilter();
             tuningRafId = null;
-            scheduleReclassify();
+            reapplyClientSideClassification(waveformActiveStem);
+            if (waveformAnalysisData) {
+                const stemData = waveformAnalysisData.stems?.[waveformActiveStem];
+                if (stemData) updateEventCounts(stemData);
+            }
+            drawWaveform();
         });
     } else {
-        // Filtering slider — local filter first. Reclassify only if we have
-        // prior classification results to re-apply (stems with sub-type
-        // clustering like snare/hihat). For PGA-only toms, lastClassification
-        // is null so reclassify is skipped.
+        // Filtering slider — local filter + (if the stem has
+        // classification data) re-apply classification. No server
+        // round-trip in either branch as of 2026-06-22.
         if (tuningRafId) cancelAnimationFrame(tuningRafId);
         tuningRafId = requestAnimationFrame(() => {
             applyTuningFilter();
             tuningRafId = null;
-            if (lastClassification) {
-                scheduleReclassify();
+            reapplyClientSideClassification(waveformActiveStem);
+            if (waveformAnalysisData) {
+                const stemData = waveformAnalysisData.stems?.[waveformActiveStem];
+                if (stemData) updateEventCounts(stemData);
             }
+            drawWaveform();
         });
     }
 }
@@ -851,9 +836,12 @@ function onToggleInput(e) {
     tuningRafId = requestAnimationFrame(() => {
         applyTuningFilter();
         tuningRafId = null;
-        if (lastClassification) {
-            scheduleReclassify();
+        reapplyClientSideClassification(waveformActiveStem);
+        if (waveformAnalysisData) {
+            const stemData = waveformAnalysisData.stems?.[waveformActiveStem];
+            if (stemData) updateEventCounts(stemData);
         }
+        drawWaveform();
     });
 }
 
@@ -898,14 +886,23 @@ function onHihatClassificationToggle(e) {
         detail: { stem: stemType, enabled },
     }));
 
-    // Re-run classification
-    scheduleReclassify();
+    // 2026-06-22: re-run classification client-side. The toggle
+    // just controls legend visibility — but if any KEPT events
+    // were relabeled by a previous slider drag, the legend
+    // counts need a re-render to reflect the current
+    // hihat_state. Mirrors the new RAF pipeline in onSliderInput.
+    if (tuningRafId) cancelAnimationFrame(tuningRafId);
+    tuningRafId = requestAnimationFrame(() => {
+        applyTuningFilter();
+        tuningRafId = null;
+        reapplyClientSideClassification(stemType);
+        if (waveformAnalysisData) {
+            const stemData = waveformAnalysisData.stems?.[stemType];
+            if (stemData) updateEventCounts(stemData);
+        }
+        drawWaveform();
+    });
 }
-
-/**
- * Keys that are classification parameters (sent as config_overrides to reclassify).
- */
-const CLASSIFICATION_KEYS = new Set(['open_decay_slope_max', 'expected_clusters', 'cluster_feature']);
 
 /**
  * Per-stem note assignment overrides from cluster dropdowns.
@@ -949,102 +946,13 @@ const STEM_NOTE_CHOICES = {
 };
 
 /**
- * Schedule a debounced reclassify API call (500ms).
- * Collects classification slider overrides and calls the server.
+ * 2026-06-22: scheduleReclassify and doReclassify were removed. The
+ * server-side `/api/reclassify` round-trip is gone; classification
+ * sliders re-classify in place via reapplyClientSideClassification
+ * (no debounce, no network call). Save & Reconvert still calls the
+ * server (rebuild-midi) so the new threshold is persisted to YAML
+ * and stamped into the sidecar.
  */
-function scheduleReclassify() {
-    if (reclassifyTimeoutId) clearTimeout(reclassifyTimeoutId);
-    reclassifyTimeoutId = setTimeout(() => {
-        reclassifyTimeoutId = null;
-        doReclassify();
-    }, 500);
-}
-
-/**
- * Call the reclassify API and merge results into displayed events.
- * Renders cluster info cards when the API returns cluster metadata.
- */
-async function doReclassify() {
-    if (!currentProject || !waveformActiveStem || !waveformAnalysisData) return;
-    if (reclassifyInFlight) return; // Skip if already in flight
-
-    const stemType = waveformActiveStem;
-    const stored = tuningSliderValues[stemType] || {};
-
-    // Build config overrides from classification slider values.
-    // 2026-06-19: keys are written as `${stemType}.${key}` (dotted
-    // path) so the server-side reclassify endpoint walks the path
-    // correctly. Without the prefix the override would land at
-    // config['open_decay_slope_max'] (top level) and silently be
-    // ignored by classify_hihat_notes, which reads from
-    // config['hihat']['open_decay_slope_max'].
-    const configOverrides = {};
-    for (const key of CLASSIFICATION_KEYS) {
-        if (stored[key] != null) {
-            configOverrides[`${stemType}.${key}`] = stored[key];
-        }
-    }
-
-    reclassifyInFlight = true;
-    try {
-        const result = await api.reclassify(currentProject.number, stemType, configOverrides);
-        if (!result || !result.events) return;
-
-        // Build a time-keyed lookup and cache for reapplication after filter passes
-        const classificationByTime = {};
-        const noteOverrides = clusterNoteOverrides[stemType] || {};
-
-        for (const ev of result.events) {
-            if (ev.time != null) {
-                const timeKey = ev.time.toFixed(4);
-                // Apply note override if set in dropdown
-                const overrideNote = ev.classification != null ? noteOverrides[ev.classification] : undefined;
-                classificationByTime[timeKey] = {
-                    classification: ev.classification,
-                    note: overrideNote != null ? overrideNote : ev.note,
-                    hihat_state: ev.hihat_state,
-                };
-            }
-        }
-
-        // Cache for reapplication after future filter passes
-        lastClassification = classificationByTime;
-
-        // Merge into the displayed events (tuning or configured)
-        const displayEvents = waveformTuningEvents || getEventsForStem(waveformAnalysisData.stems[stemType]);
-        for (const event of displayEvents) {
-            if (event.status !== 'KEPT' || event.time == null) continue;
-            const timeKey = event.time.toFixed(4);
-            const cls = classificationByTime[timeKey];
-            if (cls) {
-                if (cls.hihat_state != null) event.hihat_state = cls.hihat_state;
-                if (cls.classification != null) event.classification = cls.classification;
-                if (cls.note != null) event.note = cls.note;
-            }
-        }
-
-        // Render cluster info cards if available
-        if (result.cluster_info && result.cluster_info.length > 1) {
-            renderClusterCards(stemType, result.cluster_info);
-        } else {
-            hideClusterCards();
-        }
-
-        // Update collapsible section height after content changes
-        requestAnimationFrame(() => {
-            if (typeof updateCollapsibleHeights === 'function') {
-                updateCollapsibleHeights();
-            }
-        });
-
-        // Re-render with updated colors
-        drawWaveform();
-    } catch (err) {
-        console.warn('Reclassify failed:', err.message);
-    } finally {
-        reclassifyInFlight = false;
-    }
-}
 
 /**
  * Render cluster info cards in the tuning panel.
@@ -1130,15 +1038,6 @@ function onClusterNoteChange(e) {
     // Store the override
     if (!clusterNoteOverrides[stemType]) clusterNoteOverrides[stemType] = {};
     clusterNoteOverrides[stemType][classification] = newNote;
-
-    // Update the classification cache so filter re-application preserves the override
-    if (lastClassification) {
-        for (const entry of Object.values(lastClassification)) {
-            if (entry.classification === classification) {
-                entry.note = newNote;
-            }
-        }
-    }
 
     // Re-map displayed events immediately (no server round-trip)
     const displayEvents = waveformTuningEvents || getEventsForStem(waveformAnalysisData?.stems?.[stemType]);
@@ -1377,7 +1276,6 @@ async function saveTuningAndReconvert() {
                 waveformTuningEvents = null;
                 waveformTuningActive = false;
                 tuningBaseEvents = null;
-                lastClassification = null;
                 delete tuningSliderValues[stemType];
                 delete clusterNoteOverrides[stemType];
                 hideClusterCards();
@@ -1403,7 +1301,6 @@ async function saveTuningAndReconvert() {
         waveformTuningEvents = null;
         waveformTuningActive = false;
         tuningBaseEvents = null;
-        lastClassification = null;
         if (typeof hideClusterCards === 'function') hideClusterCards();
 
         if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Reconverting…';
@@ -1449,24 +1346,6 @@ function initTuningBaseEvents(stemType) {
     }
     // Deep-copy once — these are reused across filter passes
     tuningBaseEvents = configuredEvents.map(e => ({ ...e }));
-}
-
-/**
- * Re-apply cached classification results to the current tuning events.
- * Called after each filter pass to preserve note colors across slider drags.
- */
-function reapplyClassification(events) {
-    if (!lastClassification) return;
-    for (const event of events) {
-        if (event.status !== 'KEPT' || event.time == null) continue;
-        const timeKey = event.time.toFixed(4);
-        const cls = lastClassification[timeKey];
-        if (cls) {
-            if (cls.classification != null) event.classification = cls.classification;
-            if (cls.note != null) event.note = cls.note;
-            if (cls.hihat_state != null) event.hihat_state = cls.hihat_state;
-        }
-    }
 }
 
 /**
@@ -1554,6 +1433,57 @@ function applyPgaProminenceFilter(events, threshold, disabledIds) {
         }
     }
     return [kept, filtered];
+}
+
+/**
+ * 2026-06-22: Apply client-side classification to the active stem's
+ * tuning events. Mirrors the per-stem branches in
+ * applyHihatDecaySlopeClassification (hihat) and any future
+ * classification sliders — each slider is a single value-compare on
+ * a per-event field that's already in the sidecar. No network call.
+ *
+ * Called after every slider drag (in onSliderInput's RAF) and from
+ * onHihatClassificationToggle when the open/closed overlay is
+ * toggled. Safe to call when no classification slider is configured
+ * for the stem (no-op for kick/cymbals).
+ */
+function reapplyClientSideClassification(stemType) {
+    if (!stemType || !waveformTuningEvents) return;
+    const stored = tuningSliderValues[stemType] || {};
+    if (stemType === 'hihat') {
+        const slopeMax = stored.open_decay_slope_max;
+        if (slopeMax != null) {
+            applyHihatDecaySlopeClassification(waveformTuningEvents, slopeMax);
+        }
+    }
+}
+
+/**
+ * 2026-06-22: Apply hihat open/closed classification to KEPT events.
+ * Mirrors classify_hihat_notes in
+ * stems_to_midi/note_classification_core.py — slope < threshold → open,
+ * slope >= threshold → closed. Operates entirely client-side: the sidecar
+ * already carries `decay_slope_db` on every hihat event (written by
+ * _serialize_onset_events in stems_to_midi/midi.py), so no server
+ * round-trip is needed. The Save & Reconvert path still re-applies
+ * classification server-side and stamps the result into the sidecar.
+ *
+ * Events without a numeric `decay_slope_db` are left as-is (defensive —
+ * older sidecars may lack the field; the server-side classify_hihat_notes
+ * falls back to the geomean+sustain path for those).
+ *
+ * Mutates the events array in place. Updates `hihat_state` and `note`
+ * (GM 42 = closed, 46 = open) so legend counts and bar colors reflect
+ * the new threshold without waiting for a reclassify round-trip.
+ */
+function applyHihatDecaySlopeClassification(events, slopeMax) {
+    for (const ev of events) {
+        if (ev.status !== 'KEPT') continue;
+        const slope = ev.decay_slope_db;
+        if (slope == null) continue;
+        ev.hihat_state = slope < slopeMax ? 'open' : 'closed';
+        ev.note = ev.hihat_state === 'open' ? 46 : 42;
+    }
 }
 
 /**
@@ -1912,8 +1842,12 @@ function applyTuningFilter() {
         }
     }
 
-    // Re-apply any cached classification data (note colors, types)
-    reapplyClassification(tuningBaseEvents);
+    // Re-apply classification after the filter chain. As of
+    // 2026-06-22 this is client-side only — no /api/reclassify
+    // round-trip. Re-stamps hihat_state / note from the live slider
+    // values onto every KEPT event. The pass is a no-op for stems
+    // that have no classification slider (kick, cymbals, etc.).
+    reapplyClientSideClassification(stemType);
 
     // Set tuning state for waveform.js
     waveformTuningEvents = tuningBaseEvents;
