@@ -169,7 +169,7 @@ const STEM_SLIDER_CONFIGS = {
         // only fires when decay_slope_db is missing (older
         // sidecars from before 2026-06-19), so users never need
         // to tune it.
-        { key: 'open_decay_slope_max', label: '🔓 Open/Closed: Decay Slope', min: 0, max: 10, step: 0.1, fallback: 2.0, unit: 'dB/f', classification: true }
+        { key: 'open_decay_slope_max', label: '🔓 Open/Closed: Decay Slope', min: 0, max: 10, step: 0.1, decimals: 2, fallback: 2.0, unit: 'dB/f', classification: true }
     ],
     cymbals: [
         // 2026-06-20: expected_clusters slider removed (Phase 3
@@ -511,7 +511,7 @@ function buildSlidersForStem(stemType) {
             <div class="${rowClass}" data-slider-key="${slider.key}" data-depends-on="${slider.dependsOn || ''}"${hidden}>
                 <div class="flex items-center justify-between mb-1">
                     <label class="text-xs text-gray-300">${slider.label}${defaultLabel}</label>
-                    <span class="text-xs text-larsnet-primary font-mono" id="tuning-val-${slider.key}">${formatSliderValue(currentVal)}${unitLabel}</span>
+                    <span class="text-xs text-larsnet-primary font-mono" id="tuning-val-${slider.key}">${formatSliderValue(currentVal, slider.decimals)}${unitLabel}</span>
                 </div>
                 <input type="range"
                        id="tuning-slider-${slider.key}"
@@ -522,7 +522,8 @@ function buildSlidersForStem(stemType) {
                        value="${currentVal}"${disabledAttr}
                        data-key="${slider.key}"
                        data-unit="${slider.unit || ''}"
-                       data-classification="${slider.classification ? 'true' : 'false'}">
+                       data-classification="${slider.classification ? 'true' : 'false'}"
+                       data-decimals="${slider.decimals != null ? slider.decimals : ''}">
             </div>`;
     }).join('');
 
@@ -584,7 +585,7 @@ function buildSlidersForStem(stemType) {
 /**
  * Format a slider value for display.
  */
-function formatSliderValue(val) {
+function formatSliderValue(val, decimals) {
     if (val == null) return '—';
     // 2026-06-10: the band_max_ratio_max slider uses 0 as the
     // "Off / Disabled" sentinel (the filter is a no-op at 0).
@@ -593,6 +594,13 @@ function formatSliderValue(val) {
     // because the slider's visible value alone doesn't reveal
     // whether the filter is on or off.
     if (val === 0) return 'Off';
+    // 2026-06-22: if the caller passes an explicit `decimals`
+    // (from the slider config), honor it. The hihat
+    // open_decay_slope_max slider passes `decimals: 2` so the
+    // UI preview shows e.g. "1.55" instead of "1.5" or "2".
+    if (Number.isInteger(decimals) && decimals >= 0) {
+        return val.toFixed(decimals);
+    }
     if (Number.isInteger(val) || val >= 10) return Math.round(val).toString();
     if (val >= 1) return val.toFixed(1);
     return val.toFixed(2);
@@ -706,6 +714,15 @@ function onSliderInput(e) {
     const unit = e.target.dataset.unit || '';
     const val = parseFloat(e.target.value);
     const isClassification = e.target.dataset.classification === 'true';
+    // 2026-06-22: per-slider decimal precision (e.g. hihat
+    // open_decay_slope_max uses 2 decimals so 1.55 displays
+    // as "1.55", not "1.5"). Falls back to undefined when the
+    // slider config didn't set one — formatSliderValue's
+    // default branches then apply.
+    const decimalsAttr = e.target.dataset.decimals;
+    const decimals = decimalsAttr === '' || decimalsAttr == null
+        ? undefined
+        : Number(decimalsAttr);
 
     // Update stored value
     if (waveformActiveStem) {
@@ -716,7 +733,7 @@ function onSliderInput(e) {
     // Update numeric display
     const unitLabel = unit ? ` <span class="text-gray-500">${unit}</span>` : '';
     const display = document.getElementById(`tuning-val-${key}`);
-    if (display) display.innerHTML = `${formatSliderValue(val)}${unitLabel}`;
+    if (display) display.innerHTML = `${formatSliderValue(val, decimals)}${unitLabel}`;
 
     // Update Save button visibility
     updateTuningSaveButton();

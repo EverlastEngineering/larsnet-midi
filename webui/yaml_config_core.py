@@ -394,7 +394,19 @@ class YAMLConfigEngine:
         if isinstance(old_value, bool):
             current[final_key] = bool(new_value)
         elif isinstance(old_value, int):
-            current[final_key] = int(new_value)
+            # 2026-06-22: if the new value is a float with non-zero
+            # fractional digits, promote the field to float. The
+            # type-preservation rule above would otherwise coerce
+            # e.g. 1.55 → 1 when the YAML previously held an int
+            # (e.g. `open_decay_slope_max: 2` from an older save).
+            # This was the source of the silent precision drop
+            # after Save & Reconvert on the hihat decay-slope
+            # slider — the user dragged to 1.55, the display
+            # showed 1.55, but the YAML got written as 1.
+            if isinstance(new_value, float) and not new_value.is_integer():
+                current[final_key] = float(new_value)
+            else:
+                current[final_key] = int(new_value)
         elif isinstance(old_value, float):
             current[final_key] = float(new_value)
         else:
