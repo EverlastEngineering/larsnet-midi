@@ -119,6 +119,7 @@ __all__ = [
     '_resolve_pga_abs_envelope_threshold',
     '_resolve_pga_detector_param',
     'PGAEventBuildError',
+    'apply_pga_min_envelope_value',
 ]
 
 
@@ -1355,6 +1356,37 @@ def apply_attack_rise_max_filter(
     )
 
 
+def apply_pga_min_envelope_value(
+    events: List[Dict[str, Any]],
+    threshold: float,
+    disabled_ids: Optional[Set[Any]] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Re-tag PGA events with status='FILTERED' based on
+    the envelope_value diagnostic (2026-06-17).
+
+    Registry-driven wrapper (filter kind=min_value).
+    Reads the filter spec from
+    ``stems_to_midi/filter_registry.json`` under the
+    ``pga_min_envelope_value`` entry; the predicate is evaluated by
+    the shared :func:`evaluate_filter` in
+    :mod:`stems_to_midi.filter_kinds`. Mirrors the
+    pattern of :func:`apply_pga_prominence_filter`,
+    :func:`apply_pga_decay_col_min_filter`, and
+    :func:`apply_attack_rise_max_filter` — same
+    `_apply_pga_filter` helper.
+
+    Returns ``(kept, filtered)``. Layered composition:
+    pass the events that PASSED the previous filter,
+    not the full events list — otherwise this filter
+    overwrites the previous filter's FILTERED status
+    with KEPT (the 2026-06-17 composition bug).
+    """
+    return _apply_pga_filter(
+        events, find_filter('pga_min_envelope_value'), threshold, disabled_ids,
+    )
+
+
+
 def build_pga_events(
     audio_mono: np.ndarray,
     sr: int,
@@ -1547,6 +1579,23 @@ def _build_pga_events_with_filter(
     )
 
     raw = detect_pga_events(audio_mono, sr, config, stem_type=stem_type)
+    # 2026-06-22: envelope_value filter (Pass 0.4). Sister
+    # to the prominence filter but uses the linear
+    # envelope_value at the peak frame (set by
+    # detect_pga_events on every event) instead of the
+    # scipy prominence. Runs BEFORE the prominence
+    # filter so low-energy FPs are dropped first, then
+    # the relative-prominence comparison culls the
+    # remaining noise. Same per-stem > global > default
+    # resolution pattern.
+    envelope_value_threshold = _resolve_pga_detector_param(
+        config, 'pga_min_envelope_value', 1000.0, stem_type,
+    )
+    envelope_value_threshold = float(envelope_value_threshold)
+    events_kept, envelope_value_filtered = apply_pga_min_envelope_value(
+        raw, envelope_value_threshold,
+    )
+    events_filtered = list(envelope_value_filtered)
     # Apply the PGA prominence filter (existing behavior).
     # 2026-06-15: per-stem override (toms.pga_min_prominence)
     # wins over the global onset_detection.pga_min_prominence.
@@ -1557,9 +1606,10 @@ def _build_pga_events_with_filter(
         config, 'pga_min_prominence', 1000.0, stem_type,
     )
     prom_threshold = float(pga_min_prominence)
-    events_kept, events_filtered = apply_pga_prominence_filter(
-        raw, prom_threshold,
+    events_kept, prom_filtered = apply_pga_prominence_filter(
+        events_kept, prom_threshold,
     )
+    events_filtered = events_filtered + prom_filtered
     # 2026-06-15: apply the decay_col_min filter on top of the
     # prominence filter. Same per-stem > global > default
     # resolution pattern. Default -80.0 dB matches the empirical
@@ -1599,6 +1649,7 @@ def _build_pga_events_with_filter(
     # processed under.
     for ev in raw:
         pga_filter_config = dict(ev.get('pga_filter_config', {}))
+        pga_filter_config['pga_min_envelope_value'] = envelope_value_threshold
         pga_filter_config['pga_min_prominence'] = prom_threshold
         pga_filter_config['min_decay_col_min_db'] = decay_col_min_threshold
         pga_filter_config['attack_rise_max_ms'] = attack_rise_threshold

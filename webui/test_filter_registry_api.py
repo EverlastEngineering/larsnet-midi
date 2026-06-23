@@ -45,12 +45,13 @@ class TestFilterSchemaEndpoint:
         data = client.get('/api/filters/schema').get_json()
         assert 'filters' in data
         assert isinstance(data['filters'], list)
-        # 2026-06-19: the registry has 3 entries (the Python
-        # pipeline applies all three as a layered PGA chain)
-        # but only pga_min_prominence is exposed in the WebUI.
-        # min_decay_col_min_db and attack_rise_max_ms are
-        # marked `expose_in_webui: false` in the registry.
-        assert len(data['filters']) == 3
+        # 2026-06-22: the registry has 4 entries. The Python
+        # pipeline applies all four as a layered PGA chain
+        # (envelope_value -> prominence -> decay_col_min ->
+        # attack_rise_max). All four are WebUI-exposed as of
+        # 2026-06-22 (envelope_value was added to the WebUI
+        # for all 5 stems).
+        assert len(data['filters']) == 4
 
     def test_pga_min_prominence_in_registry(self, client):
         data = client.get('/api/filters/schema').get_json()
@@ -175,15 +176,21 @@ class TestFiltersForStemEndpoint:
         ids = [f['id'] for f in data['filters']]
         assert 'geomean_threshold' not in ids
 
-    def test_only_pga_min_prominence_per_stem(self, client):
-        # 2026-06-19: the only WebUI-exposed filter for any
-        # stem is pga_min_prominence. Each per-stem endpoint
-        # returns exactly one filter.
+    def test_pga_min_prominence_and_envelope_value_per_stem(self, client):
+        # 2026-06-22: the WebUI-exposed filters for any stem
+        # are pga_min_prominence and pga_min_envelope_value
+        # (the latter was added for all 5 stems 2026-06-22).
+        # min_decay_col_min_db and attack_rise_max_ms are
+        # hidden in the WebUI (expose_in_webui: false).
+        # Each per-stem endpoint returns both PGA filters
+        # in registry order (envelope_value first, then
+        # prominence — matches the WebUI panel order).
         for stem in ('toms', 'snare', 'hihat', 'kick', 'cymbals'):
             data = client.get(f'/api/filters/stem/{stem}').get_json()
             ids = [f['id'] for f in data]
-            assert ids == ['pga_min_prominence'], (
-                f"stem {stem} returned {ids}, expected ['pga_min_prominence']"
+            assert ids == ['pga_min_envelope_value', 'pga_min_prominence'], (
+                f"stem {stem} returned {ids}, expected "
+                f"['pga_min_envelope_value', 'pga_min_prominence']"
             )
 
     def test_returns_list_not_dict(self, client):

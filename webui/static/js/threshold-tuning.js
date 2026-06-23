@@ -1667,6 +1667,88 @@ function applyAttackRiseMaxFilter(events, threshold, disabledIds) {
  * After filtering, re-applies cached classification so note colors persist
  * across slider drags.
  */
+/**
+ * applyPgaMinEnvelopeValue — added by .github/skills/add-filter
+ * (pga_min_envelope_value, min_value).
+ *
+ * Registry-driven wrapper: reads the filter spec from
+ * the loaded registry and calls the shared
+ * `evaluateFilter` from filter_kinds.js. The hard-coded
+ * fallback below mirrors the old behavior so the panel
+ * still works when the registry API is down.
+ *
+ * Composition: pass the events that PASSED the
+ * previous filter (NOT tuningBaseEvents). Otherwise this
+ * filter overwrites the previous filter's FILTERED
+ * status with KEPT (the 2026-06-17 composition bug).
+ *
+ * Returns [kept, filtered] (mirrors the Python
+ * `_apply_pga_filter`).
+ */
+/**
+ * applyPgaMinEnvelopeValue — added by .github/skills/add-filter
+ * (pga_min_envelope_value, min_value).
+ *
+ * Registry-driven wrapper: reads the filter spec from
+ * the loaded registry and calls the shared
+ * `evaluateFilter` from filter_kinds.js. The hard-coded
+ * fallback below mirrors the old behavior so the panel
+ * still works when the registry API is down.
+ *
+ * Composition: pass the events that PASSED the
+ * previous filter (NOT tuningBaseEvents). Otherwise this
+ * filter overwrites the previous filter's FILTERED
+ * status with KEPT (the 2026-06-17 composition bug).
+ *
+ * Returns [kept, filtered] (mirrors the Python
+ * `_apply_pga_filter`).
+ */
+function applyPgaMinEnvelopeValue(events, threshold, disabledIds) {
+    const registry = _filterRegistryCache;
+    const spec = registry
+        ? findFilter(registry, 'pga_min_envelope_value')
+        : null;
+    const disabled = disabledIds || new Set();
+    const kept = [];
+    const filtered = [];
+    for (const ev of events) {
+        const evId = ev.id != null ? ev.id : ev.time;
+        const isDisabled = disabled.has(evId);
+
+        if (isDisabled) {
+            ev.status = 'FILTERED';
+            ev.filter_reason = 'manually disabled via WebUI';
+            filtered.push(ev);
+        } else if (spec) {
+            // Registry-driven evaluation.
+            const result = evaluateFilter(spec, ev, threshold);
+            if (result === false) {
+                ev.status = 'FILTERED';
+                ev.filter_reason = buildFilterReason(spec, ev, threshold);
+                filtered.push(ev);
+            } else {
+                ev.status = 'KEPT';
+                delete ev.filter_reason;
+                kept.push(ev);
+            }
+        } else {
+            // Fallback: registry not loaded.
+            const value = ev.envelope_value;
+            // The exact predicate depends on the kind.
+            // Update the predicate here for the kind.
+            ev.status = 'KEPT';
+            delete ev.filter_reason;
+            kept.push(ev);
+        }
+        // Update pga_filter_config so the tooltip shows the live threshold.
+        if (ev.pga_filter_config) {
+            ev.pga_filter_config.pga_min_envelope_value = threshold;
+        }
+    }
+    return [kept, filtered];
+}
+
+
 function applyTuningFilter() {
     if (!waveformActiveStem || !waveformAnalysisData) return;
 
@@ -1740,13 +1822,34 @@ function applyTuningFilter() {
     if (isPgaOnlyStem) {
         let pgaKept = tuningBaseEvents;
         let pgaFiltered = [];
+        // Pass 0.4: pga_min_envelope_value filter
+        // (2026-06-22, sister to pga_min_prominence). Drops
+        // events whose linear envelope_value is below the
+        // threshold. Sister to prominence: envelope_value
+        // measures the absolute height of the peak in the
+        // broadband contrast envelope, prominence measures
+        // the peak's vertical distance to the local
+        // contour. Pass BEFORE prominence in the chain so
+        // low-energy noise events are dropped first, then
+        // prominence culls the relative-low ones. The WebUI
+        // panel order also shows envelope_value above
+        // prominence (new filter first), matching this
+        // chain order.
+        const envelopeValueThreshold = params.pga_min_envelope_value;
+        if (envelopeValueThreshold != null) {
+            const [kept0, filtered0] = applyPgaMinEnvelopeValue(
+                tuningBaseEvents, envelopeValueThreshold
+            );
+            pgaKept = kept0;
+            pgaFiltered = filtered0;
+        }
         const pgaThreshold = params.pga_min_prominence;
         if (pgaThreshold != null) {
             const [kept1, filtered1] = applyPgaProminenceFilter(
-                tuningBaseEvents, pgaThreshold
+                pgaKept, pgaThreshold
             );
             pgaKept = kept1;
-            pgaFiltered = filtered1;
+            pgaFiltered = pgaFiltered.concat(filtered1);
         }
         // Pass 0.5: decay_col_min filter on the KEPT
         // events from Pass 0. Layered on top of the

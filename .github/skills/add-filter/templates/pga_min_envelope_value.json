@@ -1,0 +1,26 @@
+{
+  "id": "pga_min_envelope_value",
+  "label": "PGA Min Envelope Value",
+  "description": "Filter PGA events with envelope_value (linear broadband contrast envelope value at the peak frame, computed by the percentile-gated detector's find_peaks call) below the threshold. The envelope_value is a per-event diagnostic stamped on every event alongside prominence; it tracks the absolute height of the peak in the contrast-summed attack envelope, while prominence tracks the peak's vertical distance to the local contour line. Sister filter to pga_min_prominence: envelope_value drops events whose peak didn't reach a minimum absolute level (catches the very-low-energy FPs that the prominence filter sometimes misses on the rising edge of a strike), while prominence drops events whose peak is short relative to its immediate neighbors. Both are useful; envelope_value is a better 'is this a real strike at all' test, prominence is a better 'is this a clean isolated strike' test. Default 1000 catches the floor — real toms / snare / hihat / cymbals strikes produce envelope_value in the 5000-15000 range on the calibrated projects, FPs and low-energy noise are typically < 3000. Set to 0 to disable.",
+  "kind": "min_value",
+  "field": "envelope_value",
+  "default": 1000,
+  "min": 0,
+  "max": 50000,
+  "step": 100,
+  "unit": "",
+  "ui_control": "slider",
+  "applies_to_stems": ["toms", "snare", "hihat", "kick", "cymbals"],
+  "yaml_paths": {
+    "global": ["onset_detection", "pga_min_envelope_value"],
+    "per_stem": {
+      "toms": ["toms", "pga_min_envelope_value"],
+      "snare": ["snare", "pga_min_envelope_value"],
+      "hihat": ["hihat", "pga_min_envelope_value"],
+      "kick": ["kick", "pga_min_envelope_value"],
+      "cymbals": ["cymbals", "pga_min_envelope_value"]
+    }
+  },
+  "reason_template": "below pga_min_envelope_value ({value} < {threshold})",
+  "value_format": "int"
+}

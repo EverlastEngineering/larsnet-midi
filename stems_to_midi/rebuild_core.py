@@ -223,6 +223,23 @@ def rebuild_events_from_analysis(
         # Optional second + third PGA passes — only when the user
         # has configured thresholds. Mirrors the WebUI panel
         # behavior: no slider exposed → no filter applied.
+        # 2026-06-22: envelope_value filter (Pass 0.4) runs
+        # BEFORE prominence in the chain. envelope_value
+        # measures the absolute height of the peak in the
+        # broadband contrast envelope, prominence measures
+        # the peak's vertical distance to the local contour.
+        # envelope_value is the "is this a real strike at
+        # all" test; prominence is the "is this a clean
+        # isolated strike" test. Running envelope_value
+        # first culls low-energy FPs before the more
+        # expensive relative comparison.
+        stem_envelope_value = config.get(stem_type, {}).get('pga_min_envelope_value')
+        global_envelope_value = config.get('onset_detection', {}).get('pga_min_envelope_value')
+        envelope_value_threshold = (
+            float(stem_envelope_value) if stem_envelope_value is not None
+            else float(global_envelope_value) if global_envelope_value is not None
+            else None
+        )
         stem_col_min = config.get(stem_type, {}).get('min_decay_col_min_db')
         global_col_min = config.get('onset_detection', {}).get('min_decay_col_min_db')
         col_min_threshold = (
@@ -242,11 +259,32 @@ def rebuild_events_from_analysis(
             apply_pga_prominence_filter,
             apply_pga_decay_col_min_filter,
             apply_attack_rise_max_filter,
+            apply_pga_min_envelope_value,
         )
-        pga_kept, pga_filtered = apply_pga_prominence_filter(
-            raw_pga_events,
+        # Pass 0.4: envelope_value filter. Runs first in
+        # the chain (before prominence) so low-energy
+        # FPs are dropped before the relative-prominence
+        # comparison. Mirrors the JS applyTuningFilter
+        # chain order.
+        if envelope_value_threshold is not None:
+            pga_kept, envelope_value_filtered = apply_pga_min_envelope_value(
+                raw_pga_events,
+                envelope_value_threshold,
+            )
+            pga_filtered = envelope_value_filtered
+        else:
+            pga_kept = list(raw_pga_events)
+            pga_filtered = []
+        # Pass 0.5: prominence filter. Layered on the
+        # kept list from Pass 0.4 (envelope_value), not
+        # the raw events — otherwise this filter would
+        # overwrite envelope_value's FILTERED status
+        # with KEPT (the 2026-06-17 composition bug).
+        pga_kept, prominence_filtered = apply_pga_prominence_filter(
+            pga_kept,
             pga_threshold,
         )
+        pga_filtered = pga_filtered + prominence_filtered
         if col_min_threshold is not None:
             pga_kept, col_min_filtered = apply_pga_decay_col_min_filter(
                 pga_kept,
@@ -277,6 +315,7 @@ def rebuild_events_from_analysis(
                 if (
                     'min_decay_col_min_db' not in existing_reason
                     and 'attack_rise_max_ms' not in existing_reason
+                    and 'pga_min_envelope_value' not in existing_reason
                 ):
                     prom = ev.get('prominence')
                     ev['filter_reason'] = (
@@ -286,6 +325,8 @@ def rebuild_events_from_analysis(
             # Reflect the active filter thresholds in the sidecar
             ev['pga_filter_config'] = dict(ev.get('pga_filter_config', {}))
             ev['pga_filter_config']['pga_min_prominence'] = pga_threshold
+            if envelope_value_threshold is not None:
+                ev['pga_filter_config']['pga_min_envelope_value'] = envelope_value_threshold
             if col_min_threshold is not None:
                 ev['pga_filter_config']['min_decay_col_min_db'] = col_min_threshold
             if attack_rise_threshold is not None:

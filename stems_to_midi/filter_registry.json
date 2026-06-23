@@ -16,24 +16,100 @@
   },
   "filters": [
     {
+      "id": "pga_min_envelope_value",
+      "label": "PGA Min Envelope Value",
+      "description": "Filter PGA events with envelope_value (linear broadband contrast envelope value at the peak frame, computed by the percentile-gated detector's find_peaks call) below the threshold. The envelope_value is a per-event diagnostic stamped on every event alongside prominence; it tracks the absolute height of the peak in the contrast-summed attack envelope, while prominence tracks the peak's vertical distance to the local contour line. Sister filter to pga_min_prominence: envelope_value drops events whose peak didn't reach a minimum absolute level (catches the very-low-energy FPs that the prominence filter sometimes misses on the rising edge of a strike), while prominence drops events whose peak is short relative to its immediate neighbors. Both are useful; envelope_value is a better 'is this a real strike at all' test, prominence is a better 'is this a clean isolated strike' test. Default 1000 catches the floor \u2014 real toms / snare / hihat / cymbals strikes produce envelope_value in the 5000-15000 range on the calibrated projects, FPs and low-energy noise are typically < 3000. Set to 0 to disable.",
+      "default": 1000,
+      "min": 0,
+      "max": 50000,
+      "step": 100,
+      "unit": "",
+      "ui_control": "slider",
+      "applies_to_stems": [
+        "toms",
+        "snare",
+        "hihat",
+        "kick",
+        "cymbals"
+      ],
+      "yaml_paths": {
+        "global": [
+          "onset_detection",
+          "pga_min_envelope_value"
+        ],
+        "per_stem": {
+          "toms": [
+            "toms",
+            "pga_min_envelope_value"
+          ],
+          "snare": [
+            "snare",
+            "pga_min_envelope_value"
+          ],
+          "hihat": [
+            "hihat",
+            "pga_min_envelope_value"
+          ],
+          "kick": [
+            "kick",
+            "pga_min_envelope_value"
+          ],
+          "cymbals": [
+            "cymbals",
+            "pga_min_envelope_value"
+          ]
+        }
+      },
+      "filter": {
+        "kind": "min_value",
+        "field": "envelope_value",
+        "reason_template": "below pga_min_envelope_value ({value} < {threshold})",
+        "value_format": "int"
+      }
+    },
+    {
       "id": "pga_min_prominence",
       "label": "PGA Min Prominence",
-      "description": "Filter PGA events with prominence (scipy find_peaks prominence on the broadband contrast-summed envelope) below the threshold. Catches noise events with no real attack. As of 2026-06-19 this is the only WebUI-exposed PGA filter — the slider is rendered for all five stems (toms, snare, hihat, kick, cymbals).",
+      "description": "Filter PGA events with prominence (scipy find_peaks prominence on the broadband contrast-summed envelope) below the threshold. Catches noise events with no real attack. As of 2026-06-19 this is the only WebUI-exposed PGA filter \u2014 the slider is rendered for all five stems (toms, snare, hihat, kick, cymbals).",
       "default": 1000,
       "min": 0,
       "max": 10000,
       "step": 100,
       "unit": "",
       "ui_control": "slider",
-      "applies_to_stems": ["toms", "snare", "hihat", "kick", "cymbals"],
+      "applies_to_stems": [
+        "toms",
+        "snare",
+        "hihat",
+        "kick",
+        "cymbals"
+      ],
       "yaml_paths": {
-        "global": ["onset_detection", "pga_min_prominence"],
+        "global": [
+          "onset_detection",
+          "pga_min_prominence"
+        ],
         "per_stem": {
-          "toms": ["toms", "pga_min_prominence"],
-          "snare": ["snare", "pga_min_prominence"],
-          "hihat": ["hihat", "pga_min_prominence"],
-          "kick": ["kick", "pga_min_prominence"],
-          "cymbals": ["cymbals", "pga_min_prominence"]
+          "toms": [
+            "toms",
+            "pga_min_prominence"
+          ],
+          "snare": [
+            "snare",
+            "pga_min_prominence"
+          ],
+          "hihat": [
+            "hihat",
+            "pga_min_prominence"
+          ],
+          "kick": [
+            "kick",
+            "pga_min_prominence"
+          ],
+          "cymbals": [
+            "cymbals",
+            "pga_min_prominence"
+          ]
         }
       },
       "filter": {
@@ -53,13 +129,25 @@
       "step": 0.5,
       "unit": "dB",
       "ui_control": "slider",
-      "applies_to_stems": ["toms", "snare"],
+      "applies_to_stems": [
+        "toms",
+        "snare"
+      ],
       "expose_in_webui": false,
       "yaml_paths": {
-        "global": ["onset_detection", "min_decay_col_min_db"],
+        "global": [
+          "onset_detection",
+          "min_decay_col_min_db"
+        ],
         "per_stem": {
-          "toms": ["toms", "min_decay_col_min_db"],
-          "snare": ["snare", "min_decay_col_min_db"]
+          "toms": [
+            "toms",
+            "min_decay_col_min_db"
+          ],
+          "snare": [
+            "snare",
+            "min_decay_col_min_db"
+          ]
         }
       },
       "filter": {
@@ -72,20 +160,32 @@
     {
       "id": "attack_rise_max_ms",
       "label": "Attack Rise Max (ms)",
-      "description": "Filter PGA events with attack_rise_ms above the threshold. Catches wire-tail / step-back FPs that the prominence + decay_col_min filters miss — these have real-looking attack but the high-res STFT detects they 'step back' to a previous attack, producing an unusually long 10-90% rise time. Empirically (project 6, Taylor Swift toms): all real hits have attack_rise < 20ms; FPs cluster at 100-500ms. 2026-06-19: the WebUI no longer exposes a slider for this filter (did not perform well in practice — the previous-hit ringing made the rise walk stretch across hits; the 2026-06-18 fix bounds the walk to the previous event but the filter still has edge cases). The Python pipeline still applies it as part of the layered PGA filter chain. Set `expose_in_webui: true` to re-enable the slider.",
+      "description": "Filter PGA events with attack_rise_ms above the threshold. Catches wire-tail / step-back FPs that the prominence + decay_col_min filters miss \u2014 these have real-looking attack but the high-res STFT detects they 'step back' to a previous attack, producing an unusually long 10-90% rise time. Empirically (project 6, Taylor Swift toms): all real hits have attack_rise < 20ms; FPs cluster at 100-500ms. 2026-06-19: the WebUI no longer exposes a slider for this filter (did not perform well in practice \u2014 the previous-hit ringing made the rise walk stretch across hits; the 2026-06-18 fix bounds the walk to the previous event but the filter still has edge cases). The Python pipeline still applies it as part of the layered PGA filter chain. Set `expose_in_webui: true` to re-enable the slider.",
       "default": 20.0,
       "min": 0.0,
       "max": 500.0,
       "step": 1.0,
       "unit": "ms",
       "ui_control": "slider",
-      "applies_to_stems": ["toms", "snare"],
+      "applies_to_stems": [
+        "toms",
+        "snare"
+      ],
       "expose_in_webui": false,
       "yaml_paths": {
-        "global": ["onset_detection", "attack_rise_max_ms"],
+        "global": [
+          "onset_detection",
+          "attack_rise_max_ms"
+        ],
         "per_stem": {
-          "toms": ["toms", "attack_rise_max_ms"],
-          "snare": ["snare", "attack_rise_max_ms"]
+          "toms": [
+            "toms",
+            "attack_rise_max_ms"
+          ],
+          "snare": [
+            "snare",
+            "attack_rise_max_ms"
+          ]
         }
       },
       "filter": {

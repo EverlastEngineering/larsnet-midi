@@ -47,6 +47,7 @@ if str(_PKG_PARENT) not in sys.path:
     sys.path.insert(0, str(_PKG_PARENT))
 
 from stems_to_midi.pga_event_builder import (  # noqa: E402
+    apply_pga_min_envelope_value,
     build_pga_events,
     _build_pga_events_with_filter,
     apply_pga_decay_col_min_filter,
@@ -1359,3 +1360,111 @@ class TestPostFilterFeatureRecompute:
                     f"to event at t={ev.get('time')} "
                     f"(status={ev.get('status')})"
                 )
+
+
+class TestPgaMinEnvelopeValue:
+    """``apply_pga_min_envelope_value`` (2026-06-22) — sister
+    function to ``apply_pga_prominence_filter``. Same contract
+    (registry-driven, kind=min_value), different diagnostic
+    field (``envelope_value`` instead of ``prominence``).
+
+    envelope_value is the linear broadband contrast envelope
+    value at the peak frame, stamped on every event by
+    ``detect_pga_events``. Real toms/snare/hihat/cymbals
+    strikes produce envelope_value in the 5000-15000 range
+    on calibrated projects; FPs and low-energy noise are
+    typically < 3000. The filter is the "is this a real
+    strike at all" test (sister to prominence's "is this a
+    clean isolated strike" test).
+
+    All four tests are pure unit tests on synthetic event
+    dicts (no audio round-trip) so they run in milliseconds.
+    """
+
+    def test_drops_low_envelope_events(self):
+        """An event with ``envelope_value`` below the
+        threshold is tagged FILTERED with a reason naming
+        the configured threshold. An event above the
+        threshold is KEPT and has no filter_reason."""
+        events = [
+            {'time': 0.5, 'envelope_value': 11000.0},
+            {'time': 1.0, 'envelope_value': 500.0},
+            {'time': 1.5, 'envelope_value': 12000.0},
+        ]
+        kept, filtered = apply_pga_min_envelope_value(events, 1000.0)
+        # 11000 >= 1000: KEPT
+        # 500 < 1000: FILTERED
+        # 12000 >= 1000: KEPT
+        assert len(kept) == 2
+        assert len(filtered) == 1
+        kept_times = sorted(e['time'] for e in kept)
+        filtered_times = sorted(e['time'] for e in filtered)
+        assert kept_times == [0.5, 1.5]
+        assert filtered_times == [1.0]
+        ev = filtered[0]
+        assert ev['status'] == 'FILTERED'
+        assert 'pga_min_envelope_value' in ev['filter_reason']
+        assert '500' in ev['filter_reason']
+        assert '1000' in ev['filter_reason']
+        for ev in kept:
+            assert ev['status'] == 'KEPT'
+            assert 'filter_reason' not in ev
+
+    def test_skips_none_values(self):
+        """An event with no ``envelope_value`` field cannot
+        be filtered by the threshold — it has no value to
+        compare. Same pattern as
+        ``apply_pga_prominence_filter`` for events with no
+        ``prominence`` field. The event is tagged
+        ``status='KEPT'`` (it survived the filter because
+        the filter could not act on it) but it has no
+        ``filter_reason``."""
+        events = [
+            {'time': 0.5, 'envelope_value': 5000.0},
+            {'time': 1.0},  # no envelope_value field
+            {'time': 1.5, 'envelope_value': 200.0},
+        ]
+        kept, filtered = apply_pga_min_envelope_value(events, 1000.0)
+        # 5000 >= 1000: KEPT
+        # 1.0 (no field): KEPT (cannot be filtered)
+        # 200 < 1000: FILTERED
+        assert len(kept) == 2
+        assert len(filtered) == 1
+        # The event with no field is in kept, tagged KEPT,
+        # and has no filter_reason (the filter did not act
+        # on it).
+        none_event = next(e for e in kept if e['time'] == 1.0)
+        assert none_event['status'] == 'KEPT'
+        assert 'filter_reason' not in none_event
+        # Sanity: the 200 event is the only filtered one.
+        assert filtered[0]['time'] == 1.5
+
+    def test_disabled_ids_overrides_threshold(self):
+        """An event in ``disabled_ids`` is FILTERED even when
+        its envelope_value would pass the threshold. The
+        ``disabled_ids`` short-circuit (per the WebUI
+        manual-toggle contract) wins over the threshold."""
+        events = [
+            {'time': 0.5, 'envelope_value': 11000.0, 'id': 'a'},
+            {'time': 1.0, 'envelope_value': 12000.0, 'id': 'b'},
+        ]
+        kept, filtered = apply_pga_min_envelope_value(
+            events, 1000.0, disabled_ids={'b'},
+        )
+        assert len(kept) == 1
+        assert len(filtered) == 1
+        assert kept[0]['time'] == 0.5
+        assert filtered[0]['time'] == 1.0
+        assert filtered[0]['status'] == 'FILTERED'
+        assert 'manually disabled' in filtered[0]['filter_reason']
+
+    def test_threshold_zero_disables_filter(self):
+        """A threshold of 0 with kind=min_value is a no-op
+        (every non-negative envelope_value passes)."""
+        events = [
+            {'time': 0.5, 'envelope_value': 0.0},
+            {'time': 1.0, 'envelope_value': 5000.0},
+        ]
+        kept, filtered = apply_pga_min_envelope_value(events, 0.0)
+        assert len(kept) == 2
+        assert len(filtered) == 0

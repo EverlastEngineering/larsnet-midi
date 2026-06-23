@@ -119,7 +119,10 @@ onset_detection:
 #   reverb_continuation_attack_threshold. The only per-stem detection
 #   tuning surface now is the PGA prominence / decay-col-min / attack-rise
 #   filter chain (see .github/skills/add-filter).
-
+  # 2026-06-17: global pga_min_envelope_value. Per-stem overrides
+# (e.g., toms.pga_min_envelope_value) win over this value. See
+# stems_to_midi/filter_registry.json for the full spec.
+  pga_min_envelope_value: 1000
 kick:
   # Kick drum (bass drum) settings
   midi_note: 36
@@ -137,6 +140,12 @@ kick:
   attack_freq_min: 1500
   attack_freq_max: 5000
 
+# 2026-06-17: per-stem override of the global
+# onset_detection.pga_min_envelope_value. See
+# stems_to_midi/filter_registry.json for the full spec.
+# Default: 1000. See filter_kinds.md for the
+# kind=min_value semantics.
+  pga_min_envelope_value: 1000
 snare:
   # MIDI note mappings (General MIDI standard)
   midi_note: 38
@@ -156,6 +165,12 @@ snare:
   wire_freq_min: 2000
   wire_freq_max: 8000
 
+# 2026-06-17: per-stem override of the global
+# onset_detection.pga_min_envelope_value. See
+# stems_to_midi/filter_registry.json for the full spec.
+# Default: 1000. See filter_kinds.md for the
+# kind=min_value semantics.
+  pga_min_envelope_value: 1000
 toms:
   # Tom drums settings
   midi_note_low: 45
@@ -209,6 +224,12 @@ toms:
   # 500ms to effectively disable.
   attack_rise_max_ms: 20.0
 
+# 2026-06-17: per-stem override of the global
+# onset_detection.pga_min_envelope_value. See
+# stems_to_midi/filter_registry.json for the full spec.
+# Default: 1000. See filter_kinds.md for the
+# kind=min_value semantics.
+  pga_min_envelope_value: 1000
 hihat:
   # MIDI note mappings (General MIDI standard)
   midi_note_closed: 42       # F#1 - Closed hi-hat
@@ -240,6 +261,12 @@ hihat:
   sizzle_freq_min: 6000
   sizzle_freq_max: 12000
 
+# 2026-06-17: per-stem override of the global
+# onset_detection.pga_min_envelope_value. See
+# stems_to_midi/filter_registry.json for the full spec.
+# Default: 1000. See filter_kinds.md for the
+# kind=min_value semantics.
+  pga_min_envelope_value: 1000
 cymbals:
   # MIDI note mappings (General MIDI standard)
   midi_note: 57              # Default: Crash 2 (right) for backward compatibility
@@ -261,6 +288,13 @@ cymbals:
 # tuning surface (see .github/skills/add-filter).
 
 # MIDI Output Settings
+
+# 2026-06-17: per-stem override of the global
+# onset_detection.pga_min_envelope_value. See
+# stems_to_midi/filter_registry.json for the full spec.
+# Default: 1000. See filter_kinds.md for the
+# kind=min_value semantics.
+  pga_min_envelope_value: 1000
 midi:
   min_velocity: 80           # Minimum MIDI velocity (1-127)
   max_velocity: 110          # Maximum MIDI velocity

@@ -357,6 +357,11 @@ def get_project_tuning_config(project_number, stem_type):
                 if stem_cfg.get('attack_rise_max_ms') is not None
                 else onset_cfg.get('attack_rise_max_ms', 20.0)
             ),
+            'pga_min_envelope_value': (
+                stem_cfg.get('pga_min_envelope_value')
+                if stem_cfg.get('pga_min_envelope_value') is not None
+                else onset_cfg.get('pga_min_envelope_value', 1000)
+            ),
 
             # Hihat open/closed classification (2026-06-19).
             'open_decay_slope_max': stem_cfg.get('open_decay_slope_max', 2.0),
