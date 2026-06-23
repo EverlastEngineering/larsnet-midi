@@ -17,13 +17,70 @@ from typing import Any, Dict, List, Optional, Union
 import numpy as np
 
 from .pga_event_builder import  _build_pga_events_with_filter
-from .energy_detection_core import calculate_energy_envelope
 # 2026-06-19: hihat open/closed classifier. Stamps hihat_state
 # on every PGA event using the broadband-envelope decay-slope
 # rule (falls back to geomean+sustain when decay_slope_db is
 # absent). The MIDI note loop below reads hihat_state to flip
 # drum_mapping.hihat (42) -> drum_mapping.hihat_open (46).
 from .note_classification_core import classify_hihat_notes
+
+
+def _build_webui_envelope(
+    audio: np.ndarray,
+    sr: int,
+    frame_length: int = 2048,
+    hop_length: int = 512,
+    method: str = 'peak_hold',
+    peak_hold_ms: float = 3.0,
+) -> tuple:
+    """Build the energy envelope used by the WebUI's detection analysis
+    waveform viewer. 2026-06-22: inlined from the deleted
+    ``energy_detection_core.calculate_energy_envelope``. Supports
+    the three methods the legacy function did: 'rms', 'spectral',
+    'peak_hold'. The WebUI renderer is calibrated to the peak_hold
+    shape by default; rms / spectral are kept for completeness.
+    """
+    import librosa
+
+    n_samples = len(audio)
+    if n_samples < frame_length:
+        frame_length = max(64, n_samples)
+
+    if method == 'rms':
+        env = librosa.feature.rms(
+            y=audio.astype(np.float32),
+            frame_length=frame_length,
+            hop_length=hop_length,
+            center=True,
+        )[0]
+    elif method == 'spectral':
+        S = np.abs(librosa.stft(
+            audio.astype(np.float32),
+            n_fft=frame_length,
+            hop_length=hop_length,
+            center=True,
+        ))
+        env = S.sum(axis=0)
+    else:  # 'peak_hold' (default) and any unknown method
+        abs_audio = np.abs(audio.astype(np.float32))
+        n_frames = max(1, (n_samples - frame_length) // hop_length + 1)
+        env = np.zeros(n_frames, dtype=np.float32)
+        for i in range(n_frames):
+            start = i * hop_length
+            end = min(start + frame_length, n_samples)
+            env[i] = abs_audio[start:end].max()
+        # Peak-hold: each frame is the max of its neighbors within
+        # the peak_hold_ms window (forward fill via max-pool).
+        peak_hold_frames = max(1, int(peak_hold_ms / 1000.0 * sr / hop_length))
+        kernel = np.ones(peak_hold_frames, dtype=np.float32)
+        env = np.convolve(env, kernel, mode='same')
+
+    times = librosa.frames_to_time(
+        np.arange(len(env)),
+        sr=sr,
+        hop_length=hop_length,
+    )
+    return times, env.astype(np.float32)
 
 
 def process_percentile_gated(
@@ -122,7 +179,7 @@ def process_percentile_gated(
     envelope_method = stem_cfg.get('energy_method', 'peak_hold')
     envelope_peak_hold_ms = float(stem_cfg.get('peak_hold_ms', 3.0))
     envelope_hop = config.get('onset_detection', {}).get('hop_length', 512)
-    env_times, env_energy = calculate_energy_envelope(
+    env_times, env_energy = _build_webui_envelope(
         audio_mono, sr,
         frame_length=2048,
         hop_length=envelope_hop,

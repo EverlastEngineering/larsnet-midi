@@ -12,7 +12,6 @@ import soundfile as sf
 from stems_to_midi.config import load_config, DrumMapping
 from stems_to_midi.processing_shell import process_stem_to_midi
 from stems_to_midi.midi import create_midi_file, read_midi_notes, save_envelope_data, load_envelope_data
-from stems_to_midi.analysis_core import estimate_velocity
 
 
 # ============================================================================
@@ -194,40 +193,6 @@ class TestConfiguration:
 
 
 # ============================================================================
-# ONSET DETECTION TESTS
-# ============================================================================
-
-class TestVelocityEstimation:
-    """Test MIDI velocity calculation."""
-    
-    def test_estimate_velocity_range(self):
-        """Test velocity is in valid MIDI range."""
-        velocities = [estimate_velocity(s) for s in np.linspace(0, 1, 20)]
-        
-        assert all(1 <= v <= 127 for v in velocities)
-    
-    def test_estimate_velocity_min_max(self):
-        """Test min and max velocity parameters."""
-        min_vel = 50
-        max_vel = 100
-        
-        v_min = estimate_velocity(0.0, min_vel, max_vel)
-        v_max = estimate_velocity(1.0, min_vel, max_vel)
-        
-        assert v_min == min_vel
-        assert v_max == max_vel
-    
-    def test_estimate_velocity_monotonic(self):
-        """Test velocity increases with strength."""
-        strengths = np.linspace(0, 1, 10)
-        velocities = [estimate_velocity(s) for s in strengths]
-        
-        # Check monotonically increasing
-        for i in range(len(velocities) - 1):
-            assert velocities[i] <= velocities[i+1]
-
-
-# ============================================================================
 # TOM PITCH DETECTION TESTS
 # ============================================================================
 
@@ -396,50 +361,6 @@ class TestRegression:
         
         # For now, just check the config loads
         assert 'cymbals' in config
-
-
-class TestGetSpectralConfigWithStrength:
-    """Test get_spectral_config_for_stem includes min_strength_threshold."""
-    
-    def test_hihat_has_strength_threshold(self, sample_config):
-        """Test hihat config includes strength threshold."""
-        from stems_to_midi.analysis_core import get_spectral_config_for_stem
-        
-        config = sample_config.copy()
-        config['hihat'] = {
-            'geomean_threshold': 20.0,
-            'min_strength_threshold': 0.1,
-            'body_freq_min': 500,
-            'body_freq_max': 2000,
-            'sizzle_freq_min': 6000,
-            'sizzle_freq_max': 12000
-        }
-        
-        spectral_config = get_spectral_config_for_stem('hihat', config)
-        
-        assert 'min_strength_threshold' in spectral_config
-        assert spectral_config['min_strength_threshold'] == 0.1
-    
-    def test_strength_threshold_optional(self, sample_config):
-        """Test strength threshold is optional."""
-        from stems_to_midi.analysis_core import get_spectral_config_for_stem
-        
-        config = sample_config.copy()
-        config['kick'] = {
-            'geomean_threshold': 70.0,
-            'fundamental_freq_min': 40,
-            'fundamental_freq_max': 80,
-            'body_freq_min': 80,
-            'body_freq_max': 150,
-            'attack_freq_min': 2000,
-            'attack_freq_max': 6000
-            # Deliberately omit min_strength_threshold
-        }
-        
-        spectral_config = get_spectral_config_for_stem('kick', config)
-        
-        # Should have None if not specified
-        assert spectral_config.get('min_strength_threshold') is None
 
 
 class TestEnvelopePersistence:

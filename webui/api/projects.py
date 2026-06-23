@@ -307,32 +307,26 @@ def get_project_tuning_config(project_number, stem_type):
 
         # Lazy import — config loader pulls in the yaml stack and we
         # don't want to pay for it on every unrelated API call.
+        # 2026-06-22: dropped the get_spectral_config_for_stem import
+        # — the legacy geomean/sustain/strength bundle was deleted
+        # along with analysis_core.spectral_utils. The WebUI now
+        # reads the per-stem values directly from the config dict
+        # (same per-stem > global resolution the rebuild path uses).
         from stems_to_midi.config import load_config
-        from stems_to_midi.analysis_core.spectral_utils import (
-            get_spectral_config_for_stem,
-        )
 
         config = load_config(config_path)
 
-        # Per-stem resolution: get_spectral_config_for_stem reads the
-        # geomean / sustain / strength / onset_events_enabled bundle
-        # for the given stem, with per-stem keys winning over the
-        # global [filtering] section. This is the same function the
-        # rebuild path uses, so the values the WebUI shows match the
-        # values the server will apply on Save & Reconvert.
-        spectral_cfg = get_spectral_config_for_stem(stem_type, config)
         stem_cfg = config.get(stem_type, {}) or {}
         filtering_cfg = config.get('filtering', {}) or {}
         onset_cfg = config.get('onset_detection', {}) or {}
 
+        # PGA-only tuning surface. The legacy geomean/sustain/strength
+        # / onset_events_enabled / filter_mode keys are dead — the
+        # energy/spectral pipeline was deleted in the 2026-06-22
+        # legacy-code-removal pass. The WebUI surface mirrors what
+        # the rebuild path actually applies, so the slider values
+        # match what the server reads on Save & Reconvert.
         resolved = {
-            # Spectral filter bundle (geomean / sustain / strength /
-            # onset_events_enabled / filter_mode) — per-stem resolved.
-            'geomean_threshold': spectral_cfg.get('geomean_threshold'),
-            'min_sustain_ms': spectral_cfg.get('min_sustain_ms'),
-            'min_strength_threshold': spectral_cfg.get('min_strength_threshold'),
-            'onset_events_enabled': spectral_cfg.get('onset_events_enabled'),
-
             # Global filtering threshold (lives in [filtering], not
             # per-stem). Default matches the global config default.
             'reverb_continuation_attack_threshold': filtering_cfg.get(
@@ -342,7 +336,7 @@ def get_project_tuning_config(project_number, stem_type):
             # Toms PGA prominence: per-stem key (toms.pga_min_prominence)
             # wins over the global onset_detection key. The WebUI
             # slider reads this directly; the rebuild path resolves
-            # the same way (see rebuild_core._refilter_stem_pga).
+            # the same way.
             'pga_min_prominence': (
                 stem_cfg.get('pga_min_prominence')
                 if stem_cfg.get('pga_min_prominence') is not None
@@ -350,24 +344,14 @@ def get_project_tuning_config(project_number, stem_type):
             ),
             # 2026-06-15: Toms decay_col_min filter (sister to
             # pga_min_prominence). Same per-stem > global > default
-            # resolution pattern. The WebUI slider reads this
-            # directly; the rebuild path resolves the same way
-            # (see rebuild_core._refilter_stem_pga). Default
-            # -80.0 dB matches the cut between the empirical
-            # clusters (real strikes -60 to -84 dB, noise pops
-            # -84 to -90 dB). See filter_registry.json.
+            # resolution pattern.
             'min_decay_col_min_db': (
                 stem_cfg.get('min_decay_col_min_db')
                 if stem_cfg.get('min_decay_col_min_db') is not None
                 else onset_cfg.get('min_decay_col_min_db', -80.0)
             ),
             # 2026-06-17: Toms attack_rise_max_ms filter (third
-            # PGA pass). Catches wire-tail / step-back FPs
-            # that pass prominence + decay_col_min but have
-            # an unusually long 10-90% rise time. Default
-            # 20.0 ms is the empirical cut (project 6: real
-            # strikes 11-18 ms, FPs 100-500 ms). See
-            # filter_registry.json.
+            # PGA pass). Catches wire-tail / step-back FPs.
             'attack_rise_max_ms': (
                 stem_cfg.get('attack_rise_max_ms')
                 if stem_cfg.get('attack_rise_max_ms') is not None
@@ -375,13 +359,6 @@ def get_project_tuning_config(project_number, stem_type):
             ),
 
             # Hihat open/closed classification (2026-06-19).
-            # The slope rule (open_decay_slope_max) is the only active
-            # classifier on current sidecars; classify_hihat_notes
-            # falls back to open_geomean_min/open_sustain_ms only when
-            # decay_slope_db is missing (older sidecars). Exposing
-            # just the slope threshold matches what the WebUI slider
-            # shows; the legacy keys are read by the Python fallback
-            # path but no longer surfaced here.
             'open_decay_slope_max': stem_cfg.get('open_decay_slope_max', 2.0),
 
             # Cluster assignment (k-means, used by snare/toms/cymbals).
