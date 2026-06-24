@@ -410,6 +410,90 @@ def _detect_percentile_gated_broad_attacks_impl(
         db_rise_threshold=db_rise_threshold,
     )
 
+    # === DEBUG HELPER (2026-06-24) ============================================
+    # Call this from the Python Debug Console at any breakpoint after the
+    # envelope is computed (i.e., anywhere from step 5 onward). It closes
+    # over `envelope` and `times` so you only need to pass the frame range.
+    #
+    #   >>> show_envelope_window(29200, 29300)
+    #
+    # Prints frame index, time in ms, envelope value, and Δ1/Δ2/Δ5/Δ10
+    # rolling deltas — same columns as the inline debug scripts we've been
+    # pasting into the console, but parameterized so you don't have to
+    # re-edit the slice range each run.
+    def show_envelope_window(start, end):
+        """Print envelope + rolling deltas for frames [start, end] (inclusive).
+
+        Uses closure over `envelope` and `times`. Slices are clipped to the
+        valid frame range, so passing values past the array end is safe.
+        """
+        n = len(envelope)
+        start = max(0, int(start))
+        end = min(n - 1, int(end))
+        if end < start:
+            print(f"show_envelope_window: empty range [{start}, {end}]")
+            return
+
+        def rolling_delta(arr, n):
+            if n == 0:
+                return arr.copy()
+            out = np.zeros_like(arr)
+            out[n:] = arr[n:] - arr[:-n]
+            return out
+
+        window = envelope[start:end + 1]
+        d1  = rolling_delta(window, 1)
+        d2  = rolling_delta(window, 2)
+        d5  = rolling_delta(window, 5)
+        d10 = rolling_delta(window, 10)
+
+        for f, v, a, b, c, e in zip(range(start, end + 1), window, d1, d2, d5, d10):
+            t_ms = times[f] * 1000.0
+            print(f"frame {f:>5}  t={t_ms:8.2f}ms  V={float(v):>8.1f}   "
+                  f"Δ1 {float(a):+8.1f}   Δ2 {float(b):+8.1f}   "
+                  f"Δ5 {float(c):+8.1f}   Δ10 {float(e):+8.1f}")
+
+    def envelope_after_rise(start, max_lookahead=10):
+        """Walk forward from `start` until the envelope first stops rising.
+
+        For an onset detected via Δ2 (or any backward-looking rate metric),
+        the envelope value AT the peak frame is the value *before* the
+        strike has finished building up. This helper walks forward and
+        returns the envelope value at the frame immediately preceding the
+        first negative Δ1 — i.e., the local maximum reached during the
+        rise, which is the strike's actual peak amplitude.
+
+        Returns ``(peak_frame, envelope_value)``:
+          - ``peak_frame``: the frame where the rise topped out — the
+            frame whose Δ1 to the next frame is the first negative one
+            (or equivalently, the last frame of strictly-rising envelope).
+            If the envelope never stops rising within ``max_lookahead``
+            frames, returns ``start + max_lookahead``.
+          - ``envelope_value``: ``envelope[peak_frame]`` — the strike's
+            actual peak amplitude.
+
+        Args:
+            start: frame index to begin walking from (typically the Δ2 peak).
+            max_lookahead: maximum frames to walk before giving up.
+
+        Usage from the debug console:
+            >>> envelope_after_rise(29242)
+            (29249, 23685.3)   # strike peaked 7 frames later at 23685.3
+        """
+        n = len(envelope)
+        s = max(0, int(start))
+        if s >= n - 1:
+            return s, float(envelope[s])
+        last_rising = s
+        end = min(n - 1, s + int(max_lookahead))
+        for i in range(s + 1, end + 1):
+            if envelope[i] <= envelope[i - 1]:
+                # First non-rising frame; the rise ended at i-1.
+                break
+            last_rising = i
+        return last_rising, float(envelope[last_rising])
+    # === END DEBUG HELPER =====================================================
+
     # Step 5: peak-pick. Two thresholds — an envelope minimum and
     # a minimum-frame NMS. The envelope minimum defaults to
     # ``q3 + 2.5 * IQR`` of the envelope itself (a standard
@@ -420,12 +504,29 @@ def _detect_percentile_gated_broad_attacks_impl(
     # hard-coded constants. Override with ``abs_envelope_threshold``
     # for full control.
     if abs_envelope_threshold is None:
-        q1, q3 = np.percentile(envelope, [25, 75])
-        iqr = q3 - q1
-        abs_envelope_threshold = q3 + 2.5 * iqr
+        height=np.float64(np.percentile(envelope, 70))
+    else:
+        height = abs_envelope_threshold
+    # EXPERIMENT 2026-06-24: peak-pick on Δ5 of the envelope (rate
+    # of change over 5 frames) instead of the envelope itself.
+    # Δ5 = envelope[t] − envelope[t−5]. A 5-frame window smooths
+    # single-frame jitter and emphasizes sustained rises over
+    # instantaneous spikes. An "onset" is a rapid rise, not a high
+    # amplitude — peaks in Δ5 correspond to attack transients;
+    # envelope peaks can be ring peaks or amplitude maxima, which
+    # are not the same thing. Everything downstream (sub-frame
+    # refinement, post-filters, sidecar) still uses envelope as
+    # the source of truth — only the peak DETECTION step changes.
+    # To revert to Δ2: change all three ``5``s in the next two
+    # lines back to ``2``. To revert to envelope-based detection:
+    # change `delta_envelope` back to `envelope` in the
+    # find_peaks call below.
+    delta_envelope = np.zeros_like(envelope)
+    delta_envelope[5:] = envelope[5:] - envelope[:-5]
+    height=np.float64(np.percentile(delta_envelope, 85))
     peaks, props = find_peaks(
-        envelope,
-        height=abs_envelope_threshold,
+        delta_envelope,
+        height=height,
         distance=nms_min_frames,
         prominence=0,  # require any prominence > 0 — kills pure plateau/flat-top FPs
     )
@@ -447,17 +548,47 @@ def _detect_percentile_gated_broad_attacks_impl(
         widths, width_heights, left_ips, right_ips = peak_widths(
             envelope, peaks, rel_height=0.9,
         )
+        # EXPERIMENT 2026-06-24: per-peak rise correction. For
+        # each Δ2-detected peak, walk forward in the envelope to
+        # find the frame just before the first negative Δ1 — the
+        # strike's actual peak amplitude. Δ2 detection fires 1-7
+        # frames BEFORE the envelope finishes building up, so
+        # envelope[peak] understates the strike. Storing both
+        # values lets downstream consumers (velocity, sidecar)
+        # use the corrected amplitude without recomputing.
+        rise_results = [envelope_after_rise(int(p), max_lookahead=10)
+                        for p in peaks]
+        envelope_peak_frames = np.array([r[0] for r in rise_results],
+                                        dtype=np.intp)
+        envelope_peak_values = np.array([r[1] for r in rise_results])
     else:
         widths = np.array([])
         width_heights = np.array([])
         left_ips = np.array([])
         right_ips = np.array([])
+        envelope_peak_frames = np.array([], dtype=np.intp)
+        envelope_peak_values = np.array([], dtype=float)
 
     # Step 6: sub-frame refinement + Hann-bias correction.
     event_times = [
         _refine_peak_time(p, envelope, times, strike_offset_sec)
         for p in peaks
     ]
+
+    # EXPERIMENT 2026-06-24: substitute post-buildup amplitude at each
+    # peak frame. Δ2 detection fires 1-7 frames BEFORE the envelope
+    # finishes building up, so envelope[peaks[i]] understates the
+    # strike's amplitude. Writing the corrected value back into
+    # envelope[peaks] so any downstream code that reads
+    # envelope[peaks[i]] (pga_event_builder's ``envelope_value``
+    # field, sidecar serialization, velocity calculation) gets the
+    # strike's actual peak amplitude without code changes
+    # elsewhere. The diagnostic fields ``envelope_peak_frames`` /
+    # ``envelope_peak_values`` below still record what the
+    # substitution was, so the correction is auditable from the
+    # sidecar.
+    if len(peaks) > 0:
+        envelope[peaks] = envelope_peak_values
 
     debug = {
         'freqs': freqs,
@@ -490,6 +621,17 @@ def _detect_percentile_gated_broad_attacks_impl(
         'peak_width_heights': width_heights,
         'peak_left_ips': left_ips,
         'peak_right_ips': right_ips,
+        # Per-peak rise-corrected amplitude (2026-06-24
+        # experiment). ``peaks`` are indices into delta_envelope
+        # (the Δ2-detected onsets); ``envelope_peak_frames[i]``
+        # is the frame just BEFORE the first negative Δ1 after
+        # peaks[i], and ``envelope_peak_values[i]`` is the
+        # envelope value there — the strike's actual peak
+        # amplitude. Compare against envelope[peaks[i]] to see
+        # the build-up lag for each event. Empty arrays when
+        # ``peaks`` is empty.
+        'envelope_peak_frames': envelope_peak_frames,
+        'envelope_peak_values': envelope_peak_values,
         # Noise-gate summary (2026-06-15) — exposed for the
         # end-of-detect summary print and future WebUI
         # surfacing. gate_db is the post-cap gate value
