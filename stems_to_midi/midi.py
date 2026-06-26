@@ -514,6 +514,22 @@ def _serialize_pga_events(pga_events: list) -> list:
             'hihat_state': ev.get('hihat_state'),
             'onset_crossed': ev.get('onset_crossed'),
             'onset_cross_ms': _round_value(ev.get('onset_cross_ms'), 2),
+            # 2026-06-26: per-event Δ1/Δ2/Δ5 stability ratios
+            # + combined warble score. Computed in
+            # percentile_gated_detector.py and surfaced into
+            # pga_onset_data by detect_pga_events; this
+            # serializer is the canonical place that defines
+            # the sidecar's per-event field set, so they
+            # belong here too. -1.0 sentinel preserved as-is
+            # (means "undefined" — no forward window or zero
+            # peak). Used by the WebUI's warble-robustness
+            # filter (real hits have positive combined_score,
+            # warble FPs have negative). Rounded to 4 dp
+            # to match prominence / iqr_threshold.
+            'delta1_stability': _round_value(ev.get('delta1_stability'), 4),
+            'delta2_stability': _round_value(ev.get('delta2_stability'), 4),
+            'delta5_stability': _round_value(ev.get('delta5_stability'), 4),
+            'combined_score': _round_value(ev.get('combined_score'), 4),
         })
     return out
 

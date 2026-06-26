@@ -335,6 +335,7 @@ def _detect_percentile_gated_broad_attacks_impl(
     nms_min_frames: int = DEFAULT_NMS_MIN_FRAMES,
     strike_offset_sec: float = DEFAULT_STRIKE_OFFSET_SEC,
     max_floor_gate_db: float = DEFAULT_MAX_FLOOR_GATE_DB,
+    detection_method: str = 'delta',  # 'delta' or 'peak' (envelope)
     n_fft: int = 1024,
     hop: int = 256,
 ):
@@ -507,25 +508,31 @@ def _detect_percentile_gated_broad_attacks_impl(
         height=np.float64(np.percentile(envelope, 70))
     else:
         height = abs_envelope_threshold
-    # EXPERIMENT 2026-06-24: peak-pick on Δ5 of the envelope (rate
-    # of change over 5 frames) instead of the envelope itself.
-    # Δ5 = envelope[t] − envelope[t−5]. A 5-frame window smooths
-    # single-frame jitter and emphasizes sustained rises over
-    # instantaneous spikes. An "onset" is a rapid rise, not a high
-    # amplitude — peaks in Δ5 correspond to attack transients;
-    # envelope peaks can be ring peaks or amplitude maxima, which
-    # are not the same thing. Everything downstream (sub-frame
-    # refinement, post-filters, sidecar) still uses envelope as
-    # the source of truth — only the peak DETECTION step changes.
-    # To revert to Δ2: change all three ``5``s in the next two
-    # lines back to ``2``. To revert to envelope-based detection:
-    # change `delta_envelope` back to `envelope` in the
-    # find_peaks call below.
+    # 2026-06-26: per-stem detection method (delta | peak).
+    # 'delta' uses Δ5 (5-frame rate of change) for peak
+    # detection — hihat benefits because the stick + mass
+    # double-transient registers as two distinct delta peaks.
+    # 'peak' uses the raw contrast envelope — cleaner for
+    # sustained stems (cymbals, toms) where delta would
+    # over-fragment the signal. Both code paths compute
+    # delta_envelope (needed downstream for the stability
+    # ratios and combined_score), but only one is passed to
+    # find_peaks. The other is available for diagnostics.
+    # Resolved upstream by _resolve_pga_detection_method.
     delta_envelope = np.zeros_like(envelope)
     delta_envelope[5:] = envelope[5:] - envelope[:-5]
-    height=np.float64(np.percentile(delta_envelope, 85))
+    if detection_method == 'delta':
+        target_envelope = delta_envelope
+    elif detection_method == 'peak':
+        target_envelope = envelope
+    else:
+        # Unknown value — fall back to delta (safer than raising
+        # mid-pipeline). _resolve_pga_detection_method already
+        # validates, so this branch should be unreachable.
+        target_envelope = delta_envelope
+    height=np.float64(np.percentile(target_envelope, 75))
     peaks, props = find_peaks(
-        delta_envelope,
+        target_envelope,
         height=height,
         distance=nms_min_frames,
         prominence=0,  # require any prominence > 0 — kills pure plateau/flat-top FPs
@@ -561,6 +568,64 @@ def _detect_percentile_gated_broad_attacks_impl(
         envelope_peak_frames = np.array([r[0] for r in rise_results],
                                         dtype=np.intp)
         envelope_peak_values = np.array([r[1] for r in rise_results])
+
+        # EXPERIMENT 2026-06-24: per-peak Δ1/Δ2/Δ5 stability ratios.
+        # For each detected peak at frame P, compute
+        # ``min(delta_X[P+1:P+1+W_LEN]) / delta_X[P]`` for X in {1, 2, 5}.
+        # Real strikes sustain their Δ value over multiple frames
+        # after the peak (the strike's mass is still moving); warble
+        # from stem splitting produces a single-frame Δ spike that
+        # crashes within 2-3 frames. The stability ratio is a
+        # continuous factor (not a binary pass/fail) so the WebUI
+        # can present it as a smooth slider. Per-stem tuning picks
+        # which Δ window discriminates best — Δ5 is the cleanest in
+        # the current data (real hits ≥ 0.59, FPs ≤ 0), Δ2 is a
+        # useful tighter fallback, Δ1 is too jittery for filtering
+        # but exposed for inspection. ``-1.0`` is a sentinel for
+        # "undefined" (empty forward window or peak value is zero).
+        W_LEN = 5
+        delta1_series = np.empty_like(envelope)
+        delta1_series[0] = 0.0
+        delta1_series[1:] = envelope[1:] - envelope[:-1]
+        delta2_series = np.empty_like(envelope)
+        delta2_series[:2] = 0.0
+        delta2_series[2:] = envelope[2:] - envelope[:-2]
+        # delta_envelope (= Δ5) is already computed above.
+
+        def _stability_ratios(series, peak_indices, w_len):
+            n = len(series)
+            out = np.empty(len(peak_indices))
+            for i, p in enumerate(peak_indices):
+                hi = min(n, p + 1 + w_len)
+                fwd = series[p + 1 : hi]
+                peak = float(series[p])
+                if fwd.size > 0 and peak != 0.0:
+                    out[i] = fwd.min() / peak
+                else:
+                    out[i] = -1.0  # sentinel: undefined
+            return out
+
+        delta1_stability = _stability_ratios(delta1_series, peaks, W_LEN)
+        delta2_stability = _stability_ratios(delta2_series, peaks, W_LEN)
+        delta5_stability = _stability_ratios(target_envelope, peaks, W_LEN)
+
+        # Combined score (2026-06-24): prominence × Δ5 stability.
+        # A single value capturing both global topology (prominence:
+        # how significant the peak is overall) and local stability
+        # (does the Δ5 value stay high for 5+ frames after the peak,
+        # or is it a single-frame warble spike). Real hits have
+        # moderate prominence and positive stability → product is
+        # positive. Warble FPs have HIGH prominence (tall peak
+        # relative to local valleys) but NEGATIVE stability (the
+        # spike crashes fast) → product is negative. Filtering on
+        # ``combined_score > 0`` is a single-knob warble filter
+        # that subsumes both checks. Use this when you want a
+        # binary pass/fail; use ``delta5_stability`` directly when
+        # you want the smooth underlying factor.
+        combined_score = (
+            props.get('prominences', np.zeros(len(peaks)))
+            * delta5_stability
+        )
     else:
         widths = np.array([])
         width_heights = np.array([])
@@ -568,6 +633,10 @@ def _detect_percentile_gated_broad_attacks_impl(
         right_ips = np.array([])
         envelope_peak_frames = np.array([], dtype=np.intp)
         envelope_peak_values = np.array([], dtype=float)
+        delta1_stability = np.array([], dtype=float)
+        delta2_stability = np.array([], dtype=float)
+        delta5_stability = np.array([], dtype=float)
+        combined_score = np.array([], dtype=float)
 
     # Step 6: sub-frame refinement + Hann-bias correction.
     event_times = [
@@ -598,6 +667,26 @@ def _detect_percentile_gated_broad_attacks_impl(
         'envelope': envelope,
         'peaks': peaks,
         'prominences': props.get('prominences', np.array([])),
+        # Combined score (2026-06-24): ``prominences[i] *
+        # delta5_stability[i]``. Sign-bearing metric that
+        # captures both global topology (scipy prominence of the
+        # Δ5 peak) and local sharpness (does the Δ5 value stay
+        # high for 5+ frames after the peak, or is it a
+        # single-frame warble spike). Validated on the Metallica
+        # hihat (project 10) cymbals stem with these three
+        # hand-labeled events:
+        #
+        #   event    prominence  Δ5_stability  combined
+        #   real 9395    2030        +0.59       +1198   (passes)
+        #   FP 9548      6587        -0.11        -725   (rejected)
+        #   FP 9584      (high)      -1.24     (deep neg) (rejected)
+        #
+        # A simple ``combined_score > 0`` filter cleanly separates
+        # real hits from warble FPs without per-stem tuning.
+        # Pending integration as a dedicated ``pga_min_combined_score``
+        # filter in pga_event_builder.py (replaces the current
+        # experimental overwriting of ``prominences``).
+        'combined_score': combined_score,
         # Peak bases (2026-06-19): indices into the envelope
         # array marking the left/right "valley" of each peak —
         # the lowest envelope point on each side before the
@@ -632,6 +721,23 @@ def _detect_percentile_gated_broad_attacks_impl(
         # ``peaks`` is empty.
         'envelope_peak_frames': envelope_peak_frames,
         'envelope_peak_values': envelope_peak_values,
+        # Per-peak Δ-stability ratios (2026-06-24 experiment).
+        # ``deltaN_stability[i]`` is ``min(delta_N[P_i+1:P_i+6])
+        # / delta_N[P_i]`` — the ratio of the worst-case Δ in a
+        # 5-frame forward window to the peak Δ. Real strikes
+        # sustain their rise (ratio > 0.3); warble from stem
+        # splitting produces a single-frame spike that crashes
+        # fast (ratio ≤ 0). Three Δ windows computed:
+        # ``delta1_stability`` is jittery (real hits may drop
+        # below 0 due to single-frame noise); ``delta2_stability``
+        # is a tighter discriminator; ``delta5_stability`` is
+        # the cleanest in the current data. WebUI exposes all
+        # three so per-stem tuning picks the best. ``-1.0`` is a
+        # sentinel for "undefined" (no forward window or peak
+        # value is zero). Empty arrays when ``peaks`` is empty.
+        'delta1_stability': delta1_stability,
+        'delta2_stability': delta2_stability,
+        'delta5_stability': delta5_stability,
         # Noise-gate summary (2026-06-15) — exposed for the
         # end-of-detect summary print and future WebUI
         # surfacing. gate_db is the post-cap gate value

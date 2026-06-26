@@ -418,6 +418,72 @@ def _resolve_pga_detector_param(
     return default
 
 
+def _resolve_pga_detection_method(
+    config: Dict[str, Any],
+    stem_type: Optional[str] = None,
+) -> str:
+    """Resolve the PGA detection method (delta | peak) with
+    per-stem > global > default precedence. (2026-06-26)
+
+    Args:
+        config: Project config dict.
+        stem_type: If provided, ONLY this stem's section is
+            checked. If ``None`` (e.g. from a test that doesn't
+            know which stem is being processed), all known
+            PGA stems are walked and the first non-None value
+            wins. Production callers should always pass
+            ``stem_type``.
+
+    Returns:
+        ``'delta'`` or ``'peak'`` — case-insensitive. ``'delta'``
+        uses the 5-frame rate-of-change signal (Δ5) for
+        peak detection; ``'peak'`` uses the raw contrast
+        envelope. Defaults to ``'delta'`` (matches the most
+        recent experiment code state; hihat specifically
+        benefits from delta because the hihat strike's
+        "stick + mass" double-transient registers as two
+        delta peaks but one envelope peak).
+
+    Precedence:
+        1. ``<stem_type>.pga_detection_method`` — per-stem
+        2. ``onset_detection.pga_detection_method`` — global
+        3. ``'delta'`` — default
+
+    Unknown values fall through to the default rather than
+    raising — this way a typo in midiconfig.yaml degrades
+    gracefully to delta (the safer fallback) rather than
+    crashing the whole pipeline.
+    """
+    VALID = ('delta', 'peak')
+
+    def _normalize(v):
+        if v is None:
+            return None
+        s = str(v).strip().lower()
+        return s if s in VALID else None
+
+    onset_cfg = config.get('onset_detection', {}) or {}
+    # 1. Per-stem override
+    if stem_type is not None:
+        raw = (config.get(stem_type, {}) or {}).get('pga_detection_method')
+        v = _normalize(raw)
+        if v is not None:
+            return v
+    else:
+        # Walk all known PGA stems
+        for stem_name in ('hihat', 'cymbals', 'snare', 'kick', 'toms'):
+            raw = (config.get(stem_name, {}) or {}).get('pga_detection_method')
+            v = _normalize(raw)
+            if v is not None:
+                return v
+    # 2. Global override
+    v = _normalize(onset_cfg.get('pga_detection_method'))
+    if v is not None:
+        return v
+    # 3. Default
+    return 'delta'
+
+
 def _empty_result(debug: Optional[Dict[str, Any]] = None) -> Tuple[List[Dict], List[Dict], Dict[str, Any]]:
     """Uniform return shape for the no-events / error paths so
     downstream code can destructure without an ``if``."""
@@ -561,6 +627,15 @@ def detect_pga_events(
     strike_offset_sec = _resolve_pga_detector_param(
         config, 'pga_strike_offset_sec', DEFAULT_STRIKE_OFFSET_SEC, stem_type,
     )
+    # 2026-06-26: per-stem detection method (delta | peak).
+    # 'delta' uses the 5-frame rate-of-change signal for peak
+    # detection (hihat benefits from this; the stick + mass
+    # double-transient registers as two distinct delta peaks).
+    # 'peak' uses the raw contrast envelope (the original
+    # behavior; cleaner for sustained stems like cymbals
+    # and toms where delta would over-fragment the signal).
+    # Resolved per-stem > global > 'delta' default.
+    detection_method = _resolve_pga_detection_method(config, stem_type)
     pga_event_times, _pga_debug = detect_percentile_gated_broad_attacks(
         audio_mono, sr,
         broad_freq_min_hz=broad_freq_min_hz,
@@ -570,6 +645,7 @@ def detect_pga_events(
         nms_min_frames=nms_min_frames,
         strike_offset_sec=strike_offset_sec,
         max_floor_gate_db=max_floor_gate_db,
+        detection_method=detection_method,
     )
 
     _env = _pga_debug.get('envelope') if _pga_debug else None
@@ -590,6 +666,24 @@ def detect_pga_events(
     # compute the per-event attack/decay frame split.
     _lips = _pga_debug.get('peak_left_ips') if _pga_debug else None
     _rips = _pga_debug.get('peak_right_ips') if _pga_debug else None
+    # 2026-06-26: per-event Δ1/Δ2/Δ5 stability + combined score
+    # (sign-bearing warble filter). These were computed in
+    # percentile_gated_detector.py but were only in the debug
+    # dict, never surfaced in the sidecar. The WebUI's
+    # warble-robustness filter needs them on each event; this
+    # is the canonical place to copy them from the per-peak
+    # debug arrays to the per-event dicts that the sidecar
+    # serializes. All three ratios share the same definitions
+    # and thresholds as in the detector (see the comments
+    # there). -1.0 is a sentinel for "undefined" (no forward
+    # window or zero peak). Empty arrays when ``peaks`` is
+    # empty (no events detected) — all KEPT events still get
+    # values, so the sidecar's per-event array will be the
+    # same length as ``pga_onset_data``.
+    _d1s = _pga_debug.get('delta1_stability') if _pga_debug else None
+    _d2s = _pga_debug.get('delta2_stability') if _pga_debug else None
+    _d5s = _pga_debug.get('delta5_stability') if _pga_debug else None
+    _cs  = _pga_debug.get('combined_score') if _pga_debug else None
 
     # Step 2: Build per-event diagnostic dicts. The IQR threshold
     # is recomputed here for symmetry with the algorithm — see
@@ -654,33 +748,71 @@ def detect_pga_events(
                 ev['decay_frames'] = ri - float(p)
                 ev['attack_ms'] = (float(p) - li) * _pga_hop_ms
                 ev['decay_ms'] = (ri - float(p)) * _pga_hop_ms
+        # 2026-06-26: per-event stability + combined score.
+        # Same index alignment as ``prominences`` above: i is
+        # the index into pga_onset_data, which corresponds to
+        # the same index into the debug arrays (sorted in the
+        # same order as pga_event_times). Defensive bounds
+        # checks because the arrays can be empty if there are
+        # no peaks.
+        if _d1s is not None and i < len(_d1s):
+            ev['delta1_stability'] = float(_d1s[i])
+        if _d2s is not None and i < len(_d2s):
+            ev['delta2_stability'] = float(_d2s[i])
+        if _d5s is not None and i < len(_d5s):
+            ev['delta5_stability'] = float(_d5s[i])
+        if _cs is not None and i < len(_cs):
+            ev['combined_score'] = float(_cs[i])
         if _abs_thr is not None:
             ev['iqr_threshold'] = float(_abs_thr)
         pga_onset_data.append(ev)
 
-    # Step 3: MIDI velocity mapping. Linear envelope-value →
+    # Step 3: MIDI velocity mapping. Linear prominence →
     # ``[min_velocity, max_velocity]`` from config. Per-file,
-    # data-driven — no magic numbers. Equal envelope values
+    # data-driven — no magic numbers. Equal prominence values
     # collapse to min_velocity.
+    #
+    # 2026-06-26: switched from ``envelope_value`` to
+    # ``prominence`` (Δ5 prominence — see
+    # percentile_gated_detector.find_peaks target=delta_envelope)
+    # as the velocity basis. Rationale: with the prominence
+    # filter at ~2600, all KEPT events have envelope_value in
+    # a narrow band (typically 20000-27000), so the data-driven
+    # mapping collapses to a velocity range too narrow for the
+    # WebUI's envelope filter to be effective. Δ5 prominence
+    # has 10x the dynamic range of envelope_value across the
+    # same set of events (a quiet hihat tick has prominence
+    # ~3000; a hard hihat hit has prominence ~25000), so the
+    # data-driven min-max spreads the velocity range out where
+    # envelope can't. Falls back to envelope_value if a single
+    # event has no prominence (shouldn't happen, but defensive).
     midi_min = int(config.get('midi', {}).get('min_velocity', 80))
     midi_max = int(config.get('midi', {}).get('max_velocity', 110))
     if midi_max <= midi_min:
         # Defensive: ensure sane ordering even if the user
         # mis-configured.
         midi_max = midi_min + 1
-    env_vals = [ev.get('envelope_value') for ev in pga_onset_data
-                if ev.get('envelope_value') is not None]
-    if env_vals:
-        env_min = min(env_vals)
-        env_max = max(env_vals)
+    # Collect the velocity basis: prominence if present, else
+    # envelope_value. The two have different units (Δ5 prominence
+    # vs contrast sum) so we never mix them across events.
+    vel_basis = [
+        ev.get('prominence') if ev.get('prominence') is not None
+        else ev.get('envelope_value')
+        for ev in pga_onset_data
+    ]
+    vel_basis = [v for v in vel_basis if v is not None]
+    if vel_basis:
+        vel_min = min(vel_basis)
+        vel_max = max(vel_basis)
     else:
-        env_min, env_max = 0.0, 1.0
+        vel_min, vel_max = 0.0, 1.0
     for ev in pga_onset_data:
-        env = ev.get('envelope_value')
-        if env is None or env_max == env_min:
+        v = (ev.get('prominence') if ev.get('prominence') is not None
+             else ev.get('envelope_value'))
+        if v is None or vel_max == vel_min:
             ev['midi_velocity'] = midi_min
         else:
-            t_norm = (env - env_min) / (env_max - env_min)
+            t_norm = (v - vel_min) / (vel_max - vel_min)
             ev['midi_velocity'] = int(round(midi_min + t_norm * (midi_max - midi_min)))
         # Clamp defensively (MIDI velocity is 1-127).
         ev['midi_velocity'] = max(1, min(127, ev['midi_velocity']))
@@ -1387,125 +1519,125 @@ def apply_pga_min_envelope_value(
 
 
 
-def build_pga_events(
-    audio_mono: np.ndarray,
-    sr: int,
-    config: Dict[str, Any],
-    stem_type: Optional[str] = None,
-) -> Tuple[List[Dict[str, List]], List[Dict], Dict[str, Any]]:
-    """Run the full PGA event pipeline on mono audio and return
-    the kept/filtered partition plus the detector debug dict.
+# def build_pga_events(
+#     audio_mono: np.ndarray,
+#     sr: int,
+#     config: Dict[str, Any],
+#     stem_type: Optional[str] = None,
+# ) -> Tuple[List[Dict[str, List]], List[Dict], Dict[str, Any]]:
+#     """Run the full PGA event pipeline on mono audio and return
+#     the kept/filtered partition plus the detector debug dict.
 
-    Thin wrapper that preserves the original return shape of
-    the pre-refactor function: ``(events_kept, events_filtered,
-    debug_dict)``. Internally it composes :func:`detect_pga_events`
-    (pure) and :func:`apply_pga_prominence_filter` (pure) with
-    the configured ``onset_detection.pga_min_prominence``
-    threshold. The full-conversion call site in
-    ``processing_shell.py:1745`` keeps working unchanged.
+#     Thin wrapper that preserves the original return shape of
+#     the pre-refactor function: ``(events_kept, events_filtered,
+#     debug_dict)``. Internally it composes :func:`detect_pga_events`
+#     (pure) and :func:`apply_pga_prominence_filter` (pure) with
+#     the configured ``onset_detection.pga_min_prominence``
+#     threshold. The full-conversion call site in
+#     ``processing_shell.py:1745`` keeps working unchanged.
 
-    Args:
-        audio_mono: 1-D float array of mono audio samples.
-        sr: Sample rate in Hz.
-        config: Project config dict (the same dict passed to
-            ``process_stem_to_midi``). Reads
-            ``onset_detection.pga_min_prominence`` (default
-            ``1000``) and ``midi.min_velocity`` /
-            ``midi.max_velocity`` (defaults ``80``/``110``).
+#     Args:
+#         audio_mono: 1-D float array of mono audio samples.
+#         sr: Sample rate in Hz.
+#         config: Project config dict (the same dict passed to
+#             ``process_stem_to_midi``). Reads
+#             ``onset_detection.pga_min_prominence`` (default
+#             ``1000``) and ``midi.min_velocity`` /
+#             ``midi.max_velocity`` (defaults ``80``/``110``).
 
-    Returns:
-        ``(events_kept, events_filtered, debug_dict)``:
-          - ``events_kept``: list of event dicts that survived the
-            prominence filter (``status='KEPT'``). MIDI
-            output uses only this list.
-          - ``events_filtered``: list of event dicts that were
-            tagged FILTERED by the prominence filter. Kept in
-            the return value so the WebUI can render them as
-            faded markers; the MIDI serializer skips them.
-          - ``debug_dict``: detector internals — ``freqs``,
-            ``times``, ``s_db``, ``floor``, ``envelope``,
-            ``peaks``, ``prominences`` (same shape as the
-            legacy inline implementation in
-            ``percentile_gated_detector.detect_percentile_gated_broad_attacks``).
-            Exposed here for back-compat with the legacy tests
-            that inspect ``pga_debug``; ``detect_pga_events``
-            itself does not return the debug (it discards the
-            debug after attaching per-event fields, since
-            re-filtering a stored event list does not need it).
+#     Returns:
+#         ``(events_kept, events_filtered, debug_dict)``:
+#           - ``events_kept``: list of event dicts that survived the
+#             prominence filter (``status='KEPT'``). MIDI
+#             output uses only this list.
+#           - ``events_filtered``: list of event dicts that were
+#             tagged FILTERED by the prominence filter. Kept in
+#             the return value so the WebUI can render them as
+#             faded markers; the MIDI serializer skips them.
+#           - ``debug_dict``: detector internals — ``freqs``,
+#             ``times``, ``s_db``, ``floor``, ``envelope``,
+#             ``peaks``, ``prominences`` (same shape as the
+#             legacy inline implementation in
+#             ``percentile_gated_detector.detect_percentile_gated_broad_attacks``).
+#             Exposed here for back-compat with the legacy tests
+#             that inspect ``pga_debug``; ``detect_pga_events``
+#             itself does not return the debug (it discards the
+#             debug after attaching per-event fields, since
+#             re-filtering a stored event list does not need it).
 
-    The function is a pure functional core:
-      - No file I/O.
-      - No mutation of input audio or config.
-      - The returned event dicts are owned by the caller (safe
-        to mutate, extend, or serialize).
-    """
-    if audio_mono is None or len(audio_mono) == 0:
-        return _empty_result()
-    if sr is None or sr <= 0:
-        return _empty_result()
+#     The function is a pure functional core:
+#       - No file I/O.
+#       - No mutation of input audio or config.
+#       - The returned event dicts are owned by the caller (safe
+#         to mutate, extend, or serialize).
+#     """
+#     if audio_mono is None or len(audio_mono) == 0:
+#         return _empty_result()
+#     if sr is None or sr <= 0:
+#         return _empty_result()
 
-    # Re-run the detector to recover the debug dict. The pure
-    # ``detect_pga_events`` discards the debug, but the legacy
-    # ``build_pga_events`` callers (and the existing test
-    # contract) expect it on the return value.
-    # 2026-06-18: pass the max_floor_gate_db cap. See
-    # detect_pga_events for the rationale.
-    max_floor_gate_db = _resolve_max_floor_gate_db(config, stem_type)
-    abs_envelope_threshold = _resolve_pga_abs_envelope_threshold(config, stem_type)
-    broad_freq_min_hz = _resolve_pga_detector_param(
-        config, 'pga_broad_freq_min_hz', DEFAULT_BROAD_FREQ_MIN_HZ, stem_type,
-    )
-    broad_freq_max_hz = _resolve_pga_detector_param(
-        config, 'pga_broad_freq_max_hz', DEFAULT_BROAD_FREQ_MAX_HZ, stem_type,
-    )
-    db_rise_threshold = _resolve_pga_detector_param(
-        config, 'pga_db_rise_threshold', DEFAULT_DB_RISE_THRESHOLD, stem_type,
-    )
-    nms_min_frames = _resolve_pga_detector_param(
-        config, 'pga_nms_min_frames', DEFAULT_NMS_MIN_FRAMES, stem_type,
-    )
-    strike_offset_sec = _resolve_pga_detector_param(
-        config, 'pga_strike_offset_sec', DEFAULT_STRIKE_OFFSET_SEC, stem_type,
-    )
-    _pga_event_times, pga_debug = detect_percentile_gated_broad_attacks(
-        audio_mono, sr,
-        broad_freq_min_hz=broad_freq_min_hz,
-        broad_freq_max_hz=broad_freq_max_hz,
-        db_rise_threshold=db_rise_threshold,
-        abs_envelope_threshold=abs_envelope_threshold,
-        nms_min_frames=nms_min_frames,
-        strike_offset_sec=strike_offset_sec,
-        max_floor_gate_db=max_floor_gate_db,
-    )
+#     # Re-run the detector to recover the debug dict. The pure
+#     # ``detect_pga_events`` discards the debug, but the legacy
+#     # ``build_pga_events`` callers (and the existing test
+#     # contract) expect it on the return value.
+#     # 2026-06-18: pass the max_floor_gate_db cap. See
+#     # detect_pga_events for the rationale.
+#     max_floor_gate_db = _resolve_max_floor_gate_db(config, stem_type)
+#     abs_envelope_threshold = _resolve_pga_abs_envelope_threshold(config, stem_type)
+#     broad_freq_min_hz = _resolve_pga_detector_param(
+#         config, 'pga_broad_freq_min_hz', DEFAULT_BROAD_FREQ_MIN_HZ, stem_type,
+#     )
+#     broad_freq_max_hz = _resolve_pga_detector_param(
+#         config, 'pga_broad_freq_max_hz', DEFAULT_BROAD_FREQ_MAX_HZ, stem_type,
+#     )
+#     db_rise_threshold = _resolve_pga_detector_param(
+#         config, 'pga_db_rise_threshold', DEFAULT_DB_RISE_THRESHOLD, stem_type,
+#     )
+#     nms_min_frames = _resolve_pga_detector_param(
+#         config, 'pga_nms_min_frames', DEFAULT_NMS_MIN_FRAMES, stem_type,
+#     )
+#     strike_offset_sec = _resolve_pga_detector_param(
+#         config, 'pga_strike_offset_sec', DEFAULT_STRIKE_OFFSET_SEC, stem_type,
+#     )
+#     _pga_event_times, pga_debug = detect_percentile_gated_broad_attacks(
+#         audio_mono, sr,
+#         broad_freq_min_hz=broad_freq_min_hz,
+#         broad_freq_max_hz=broad_freq_max_hz,
+#         db_rise_threshold=db_rise_threshold,
+#         abs_envelope_threshold=abs_envelope_threshold,
+#         nms_min_frames=nms_min_frames,
+#         strike_offset_sec=strike_offset_sec,
+#         max_floor_gate_db=max_floor_gate_db,
+#     )
 
-    raw = detect_pga_events(audio_mono, sr, config, stem_type=stem_type)
-    # No filter applied here — all events returned as KEPT.
-    # The sidecar stores the raw all-KEPT list; the WebUI and
-    # rebuild path call apply_pga_prominence_filter separately
-    # with their own threshold. Return shape is preserved
-    # (events_kept=all, events_filtered=[], debug_dict).
-    #
-    # 2026-06-19: feature extraction moved to a post-filter
-    # pass; for the legacy ``build_pga_events`` wrapper there
-    # IS no filter, so the all-KEPT list IS the post-filter
-    # list — we still need to attach features so the
-    # back-compat contract (events_kept carry per-event
-    # feature keys) is preserved.
-    _compute_features_for_filtered_events(
-        raw, audio_mono, sr, config, stem_type,
-    )
-    # 2026-06-19: per-event broadband-envelope walk (open/closed
-    # hihat discriminator). The PGA detector stashed the contrast
-    # envelope on the debug dict; we walk it forward and backward
-    # from each event's peak frame and stamp the slope + pct_at_stop
-    # + onset_cross fields onto every event. The hihat_state
-    # classifier (note_classification_core.classify_hihat_notes)
-    # consumes these at rebuild time — no re-detection needed.
-    _envelope = pga_debug.get('envelope') if pga_debug else None
-    _compute_walk_features_for_filtered_events(
-        raw, _envelope, sr, hop_samples=256,
-    )
-    return raw, [], pga_debug
+#     raw = detect_pga_events(audio_mono, sr, config, stem_type=stem_type)
+#     # No filter applied here — all events returned as KEPT.
+#     # The sidecar stores the raw all-KEPT list; the WebUI and
+#     # rebuild path call apply_pga_prominence_filter separately
+#     # with their own threshold. Return shape is preserved
+#     # (events_kept=all, events_filtered=[], debug_dict).
+#     #
+#     # 2026-06-19: feature extraction moved to a post-filter
+#     # pass; for the legacy ``build_pga_events`` wrapper there
+#     # IS no filter, so the all-KEPT list IS the post-filter
+#     # list — we still need to attach features so the
+#     # back-compat contract (events_kept carry per-event
+#     # feature keys) is preserved.
+#     _compute_features_for_filtered_events(
+#         raw, audio_mono, sr, config, stem_type,
+#     )
+#     # 2026-06-19: per-event broadband-envelope walk (open/closed
+#     # hihat discriminator). The PGA detector stashed the contrast
+#     # envelope on the debug dict; we walk it forward and backward
+#     # from each event's peak frame and stamp the slope + pct_at_stop
+#     # + onset_cross fields onto every event. The hihat_state
+#     # classifier (note_classification_core.classify_hihat_notes)
+#     # consumes these at rebuild time — no re-detection needed.
+#     _envelope = pga_debug.get('envelope') if pga_debug else None
+#     _compute_walk_features_for_filtered_events(
+#         raw, _envelope, sr, hop_samples=256,
+#     )
+#     return raw, [], pga_debug
 
 
 def _build_pga_events_with_filter(
