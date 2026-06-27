@@ -45,18 +45,35 @@ class TestFilterSchemaEndpoint:
         data = client.get('/api/filters/schema').get_json()
         assert 'filters' in data
         assert isinstance(data['filters'], list)
-        # 2026-06-22: the registry has 4 entries. The Python
-        # pipeline applies all four as a layered PGA chain
+        # 2026-06-26: the registry has 5 entries (was 4 before
+        # the combined_score warble filter was added). The Python
+        # pipeline applies all five as a layered PGA chain
         # (envelope_value -> prominence -> decay_col_min ->
-        # attack_rise_max). All four are WebUI-exposed as of
-        # 2026-06-22 (envelope_value was added to the WebUI
-        # for all 5 stems).
-        assert len(data['filters']) == 4
+        # attack_rise_max -> combined_score). All five are
+        # WebUI-exposed (envelope_value and combined_score on
+        # all 5 stems; prominence on toms/snare/kick/cymbals;
+        # decay_col_min and attack_rise hidden).
+        assert len(data['filters']) == 5
 
     def test_pga_min_prominence_in_registry(self, client):
         data = client.get('/api/filters/schema').get_json()
         ids = [f['id'] for f in data['filters']]
         assert 'pga_min_prominence' in ids
+
+    def test_pga_min_combined_score_in_registry(self, client):
+        # 2026-06-26: new warble filter. Sign-bearing
+        # combined_score = prominence × delta5_stability. Default
+        # threshold 0 = perfect precision separator on the
+        # Metallica hihat (project 10): all 528 warble FPs are
+        # below 0, all 225 real hits are above 0.
+        data = client.get('/api/filters/schema').get_json()
+        ids = [f['id'] for f in data['filters']]
+        assert 'pga_min_combined_score' in ids
+        for f in data['filters']:
+            if f['id'] == 'pga_min_combined_score':
+                assert f['filter']['kind'] == 'min_value'
+                assert f['filter']['field'] == 'combined_score'
+                assert f['default'] == 0.0
 
     def test_decay_col_min_still_in_registry_but_hidden(self, client):
         # 2026-06-19: min_decay_col_min_db is still in the
@@ -182,15 +199,21 @@ class TestFiltersForStemEndpoint:
         # (the latter was added for all 5 stems 2026-06-22).
         # min_decay_col_min_db and attack_rise_max_ms are
         # hidden in the WebUI (expose_in_webui: false).
-        # Each per-stem endpoint returns both PGA filters
-        # in registry order (envelope_value first, then
-        # prominence — matches the WebUI panel order).
+        # Each per-stem endpoint returns the WebUI-exposed
+        # PGA filters in registry order: envelope_value first,
+        # then prominence, then combined_score (the new
+        # 2026-06-26 warble filter). Matches the WebUI panel
+        # order: sliders render in registry-declared order.
         for stem in ('toms', 'snare', 'hihat', 'kick', 'cymbals'):
             data = client.get(f'/api/filters/stem/{stem}').get_json()
             ids = [f['id'] for f in data]
-            assert ids == ['pga_min_envelope_value', 'pga_min_prominence'], (
+            assert ids == [
+                'pga_min_envelope_value', 'pga_min_prominence',
+                'pga_min_combined_score',
+            ], (
                 f"stem {stem} returned {ids}, expected "
-                f"['pga_min_envelope_value', 'pga_min_prominence']"
+                f"['pga_min_envelope_value', 'pga_min_prominence', "
+                f"'pga_min_combined_score']"
             )
 
     def test_returns_list_not_dict(self, client):

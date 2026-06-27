@@ -120,6 +120,58 @@
       }
     },
     {
+      "id": "pga_min_combined_score",
+      "label": "PGA Min Combined Score (warble)",
+      "description": "Filter PGA events with combined_score below the threshold. combined_score = prominence (scipy find_peaks prominence on the Δ5 signal) × delta5_stability (min of the next 5 Δ5 values divided by the peak Δ5). Sign-bearing: positive means a real sustained strike, negative means a warble spike (single-frame Δ5 transient from stem-splitter demuxing, no sustained rise). On Metallica hihat (project 10): 100% precision at threshold 0 (all 528 FPs have combined_score ≤ 0, all 225 real hits have combined_score > 0). Default 0 = 'warble separator'; lower (e.g. -100) is more permissive and catches some borderline cases; 0 is the recommended starting point. 2026-06-26: added after data exploration showed combined_score is a perfect discriminator on the cymbals and hihat stems tested so far. Use together with (or in place of) pga_min_envelope_value for stems where the envelope_value filter is killing too many quiet-but-real onsets.",
+      "default": 0.0,
+      "min": -10000.0,
+      "max": 10000.0,
+      "step": 50.0,
+      "unit": "",
+      "ui_control": "slider",
+      "applies_to_stems": [
+        "toms",
+        "snare",
+        "hihat",
+        "kick",
+        "cymbals"
+      ],
+      "yaml_paths": {
+        "global": [
+          "onset_detection",
+          "pga_min_combined_score"
+        ],
+        "per_stem": {
+          "toms": [
+            "toms",
+            "pga_min_combined_score"
+          ],
+          "snare": [
+            "snare",
+            "pga_min_combined_score"
+          ],
+          "hihat": [
+            "hihat",
+            "pga_min_combined_score"
+          ],
+          "kick": [
+            "kick",
+            "pga_min_combined_score"
+          ],
+          "cymbals": [
+            "cymbals",
+            "pga_min_combined_score"
+          ]
+        }
+      },
+      "filter": {
+        "kind": "min_value",
+        "field": "combined_score",
+        "reason_template": "below pga_min_combined_score ({value} < {threshold})",
+        "value_format": "int"
+      }
+    },
+    {
       "id": "min_decay_col_min_db",
       "label": "Min Decay Col-Min (dB)",
       "description": "Filter PGA events with decay_col_min_median_db below the threshold. Catches single-frame noise pops with no sustained ring. Empirically: real toms strikes -60 to -84 dB, noise pops -84 to -90 dB. -80 dB is the safe cut between the two clusters. 2026-06-19: the WebUI no longer exposes a slider for this filter (did not perform well in practice) but the Python pipeline still applies it as part of the layered PGA filter chain. Set `expose_in_webui: true` to re-enable the slider.",

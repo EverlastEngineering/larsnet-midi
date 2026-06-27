@@ -1501,6 +1501,38 @@ def apply_pga_min_envelope_value(
         events, find_filter('pga_min_envelope_value'), threshold, disabled_ids,
     )
 
+
+def apply_pga_min_combined_score(
+    events: List[Dict[str, Any]],
+    threshold: float,
+    disabled_ids: Optional[Set[Any]] = None,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Warble filter (2026-06-26): drop events whose combined_score
+    is below the threshold. combined_score = prominence ×
+    delta5_stability — sign-bearing. Positive means a real
+    sustained strike; negative means a warble spike (single-
+    frame Δ5 transient, no sustained rise). On Metallica hihat
+    (project 10): threshold 0 = 100% precision separator
+    (528 FPs below 0, 225 real hits above 0). Default 0.
+
+    Sister filter to :func:`apply_pga_prominence_filter` and
+    :func:`apply_pga_min_envelope_value`. Same registry-driven
+    pattern (filter kind=min_value, field=combined_score,
+    reason_template etc.). Mirrors the layered composition: pass
+    the events that PASSED the previous filter, not the full
+    list, to avoid overwriting the previous filter's status.
+
+    Use cases:
+      - In place of pga_min_envelope_value for stems where
+        the envelope filter is killing real-but-quiet onsets.
+      - In combination with pga_min_prominence — both can
+        run, since combined_score already includes prominence
+        and the warble dimension adds independent information.
+    """
+    return _apply_pga_filter(
+        events, find_filter('pga_min_combined_score'), threshold, disabled_ids,
+    )
+
 def _build_pga_events_with_filter(
     audio_mono: np.ndarray,
     sr: int,
@@ -1637,6 +1669,20 @@ def _build_pga_events_with_filter(
         events_kept, attack_rise_threshold,
     )
     events_filtered = events_filtered + attack_filtered
+    # 2026-06-26: warble filter. Drops events whose combined_score
+    # (= prominence × delta5_stability) is below the threshold.
+    # Sign-bearing: positive = real sustained strike, negative =
+    # warble spike from stem-splitter demuxing. Default 0 keeps
+    # all positive (real) hits and drops all negative (FP) hits
+    # per the data explored on the cymbals and hihat stems; the
+    # per-stem key is pga_min_combined_score in midiconfig.
+    combined_score_threshold = _resolve_pga_detector_param(
+        config, 'pga_min_combined_score', 0.0, stem_type,
+    )
+    events_kept, cs_filtered = apply_pga_min_combined_score(
+        events_kept, combined_score_threshold,
+    )
+    events_filtered = events_filtered + cs_filtered
     # Record the active thresholds in pga_filter_config so the
     # sidecar tooltip can show what filter the event was
     # processed under.
@@ -1646,6 +1692,7 @@ def _build_pga_events_with_filter(
         pga_filter_config['pga_min_prominence'] = prom_threshold
         pga_filter_config['min_decay_col_min_db'] = decay_col_min_threshold
         pga_filter_config['attack_rise_max_ms'] = attack_rise_threshold
+        pga_filter_config['pga_min_combined_score'] = combined_score_threshold
         ev['pga_filter_config'] = pga_filter_config
     # 2026-06-19: post-filter feature pass. Now that the final
     # KEPT/FILTERED partition is set, compute per-event features
