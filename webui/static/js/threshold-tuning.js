@@ -373,6 +373,30 @@ function buildSlidersForStem(stemType) {
         }
     }
 
+    // 2026-06-26: pga_min_combined_score slider gets its min/max
+    // from the sidecar's events_pga. The registry's static
+    // defaults of -10000/10000 are fallbacks for the no-data
+    // first-load state; with data, we use the actual min/max
+    // of combined_score across all events so the slider's full
+    // resolution is usable within the dataset's range (most
+    // songs are well within ±10000 — hihat is ±8000 — so the
+    // default range makes the slider unusable). Step is
+    // range/2000 for ~2000 increments across the data range.
+    let dataMinCombinedScore = null;
+    let dataMaxCombinedScore = null;
+    const pgaEventsForRange = stemData?.events_pga || [];
+    for (const ev of pgaEventsForRange) {
+        const cs = ev?.combined_score;
+        if (typeof cs === 'number' && Number.isFinite(cs)) {
+            if (dataMinCombinedScore == null || cs < dataMinCombinedScore) {
+                dataMinCombinedScore = cs;
+            }
+            if (dataMaxCombinedScore == null || cs > dataMaxCombinedScore) {
+                dataMaxCombinedScore = cs;
+            }
+        }
+    }
+
     // Get stored values or use defaults
     const stored = tuningSliderValues[stemType] || {};
 
@@ -505,6 +529,30 @@ function buildSlidersForStem(stemType) {
             // step of 0.01 so the user can express very small
             // values when the dataset max is small.
             sliderStep = Math.max(0.01, sliderMax / 1000);
+        }
+        // 2026-06-26: pga_min_combined_score slider uses the
+        // sidecar's combined_score min/max. This is the same
+        // pattern as band_max_ratio_max above — the registry
+        // defaults are -10000/10000 (step 50) which is far
+        // wider than the actual data range. Using the data
+        // range gives the slider's full resolution to the
+        // user. Step is fixed at 1 so 0 is always on a step
+        // boundary (data-derived steps like dataRange/2000
+        // can produce non-integer steps where 0 falls between
+        // grid points and gets snapped to a nonzero value by
+        // the browser — see commit history for the 5.654 bug).
+        if (slider.key === 'pga_min_combined_score'
+            && dataMinCombinedScore != null
+            && dataMaxCombinedScore != null) {
+            sliderMin = Math.floor(dataMinCombinedScore);
+            sliderMax = Math.ceil(dataMaxCombinedScore);
+            // Step = 1 keeps 0 (and all integers) on the step
+            // boundary from any min. The data range might be
+            // tens of thousands of units (e.g. -44268 to 9494
+            // for hihat = 53k increments), but integer step
+            // is the most useful for a warble filter whose
+            // primary decision boundary is value=0.
+            sliderStep = 1;
         }
 
         return `
@@ -1703,6 +1751,55 @@ function applyAttackRiseMaxFilter(events, threshold, disabledIds) {
  * Returns [kept, filtered] (mirrors the Python
  * `_apply_pga_filter`).
  */
+function applyPgaMinCombinedScore(events, threshold, disabledIds) {
+    // 2026-06-26: warble filter. combined_score = prominence ×
+    // delta5_stability (sign-bearing). Sister wrapper to
+    // applyPgaProminenceFilter / applyPgaMinEnvelopeValue —
+    // same registry-driven pattern. The slider's default value
+    // 0.0 is a perfect precision separator on the hihat data
+    // (528 FPs with cs ≤ 0, 225 real hits with cs > 0).
+    const registry = _filterRegistryCache;
+    const spec = registry
+        ? findFilter(registry, 'pga_min_combined_score')
+        : null;
+    const disabled = disabledIds || new Set();
+    const kept = [];
+    const filtered = [];
+    for (const ev of events) {
+        const evId = ev.id != null ? ev.id : ev.time;
+        const isDisabled = disabled.has(evId);
+
+        if (isDisabled) {
+            ev.status = 'FILTERED';
+            ev.filter_reason = 'manually disabled via WebUI';
+            filtered.push(ev);
+        } else if (spec) {
+            // Registry-driven evaluation.
+            const result = evaluateFilter(spec, ev, threshold);
+            if (result === false) {
+                ev.status = 'FILTERED';
+                ev.filter_reason = buildFilterReason(spec, ev, threshold);
+                filtered.push(ev);
+            } else {
+                ev.status = 'KEPT';
+                delete ev.filter_reason;
+                kept.push(ev);
+            }
+        } else {
+            // Fallback: registry not loaded.
+            ev.status = 'KEPT';
+            delete ev.filter_reason;
+            kept.push(ev);
+        }
+        // Update pga_filter_config so the tooltip shows the live threshold.
+        if (ev.pga_filter_config) {
+            ev.pga_filter_config.pga_min_combined_score = threshold;
+        }
+    }
+    return [kept, filtered];
+}
+
+
 function applyPgaMinEnvelopeValue(events, threshold, disabledIds) {
     const registry = _filterRegistryCache;
     const spec = registry
@@ -1877,6 +1974,22 @@ function applyTuningFilter() {
             );
             pgaKept = kept3;
             pgaFiltered = pgaFiltered.concat(filtered3);
+        }
+        // 2026-06-26: warble filter (last in the PGA chain).
+        // combined_score is sign-bearing: positive = real sustained
+        // strike, negative = warble spike from stem-splitter demuxing.
+        // Applied last so its filter_reason is the one that ends
+        // up in the tooltip when the event is actually filtered
+        // by this rule. Mirrors the Python pipeline order in
+        // pga_event_builder._build_pga_events_with_filter and in
+        // rebuild_core._refilter_stem_pga.
+        const combinedScoreThreshold = params.pga_min_combined_score;
+        if (combinedScoreThreshold != null) {
+            const [kept4, filtered4] = applyPgaMinCombinedScore(
+                pgaKept, combinedScoreThreshold
+            );
+            pgaKept = kept4;
+            pgaFiltered = pgaFiltered.concat(filtered4);
         }
     }
 

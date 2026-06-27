@@ -363,6 +363,21 @@ def get_project_tuning_config(project_number, stem_type):
                 else onset_cfg.get('pga_min_envelope_value', 1000)
             ),
 
+            # 2026-06-26: warble filter. combined_score =
+            # prominence × delta5_stability (sign-bearing).
+            # Sign-bearing separator: positive = real
+            # sustained strike, negative = warble spike from
+            # stem-splitter demuxing. Default 0 = perfect
+            # precision separator on the Metallica hihat
+            # (528 FPs with cs ≤ 0, 225 real hits with cs > 0).
+            # Same per-stem > global > default resolution
+            # pattern as the other PGA filters.
+            'pga_min_combined_score': (
+                stem_cfg.get('pga_min_combined_score')
+                if stem_cfg.get('pga_min_combined_score') is not None
+                else onset_cfg.get('pga_min_combined_score', 0.0)
+            ),
+
             # Hihat open/closed classification (2026-06-19).
             'open_decay_slope_max': stem_cfg.get('open_decay_slope_max', 2.0),
 

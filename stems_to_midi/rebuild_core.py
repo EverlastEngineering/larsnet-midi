@@ -260,6 +260,7 @@ def rebuild_events_from_analysis(
             apply_pga_decay_col_min_filter,
             apply_attack_rise_max_filter,
             apply_pga_min_envelope_value,
+            apply_pga_min_combined_score,
         )
         # Pass 0.4: envelope_value filter. Runs first in
         # the chain (before prominence) so low-energy
@@ -297,6 +298,26 @@ def rebuild_events_from_analysis(
                 attack_rise_threshold,
             )
             pga_filtered = pga_filtered + attack_filtered
+        # 2026-06-26: warble filter. Drops events whose
+        # combined_score (prominence × delta5_stability) is
+        # below the threshold. This is the last filter in the
+        # PGA chain because it has a sign-bearing signature:
+        # positive = real sustained strike, negative = warble
+        # spike. Mirrors the Python pipeline chain order
+        # so the server result matches what the user sees in
+        # the tuning panel. Per-stem > global > 0.0 default.
+        stem_combined_score = config.get(stem_type, {}).get('pga_min_combined_score')
+        global_combined_score = config.get('onset_detection', {}).get('pga_min_combined_score')
+        combined_score_threshold = (
+            float(stem_combined_score) if stem_combined_score is not None
+            else float(global_combined_score) if global_combined_score is not None
+            else 0.0
+        )
+        pga_kept, cs_filtered = apply_pga_min_combined_score(
+            pga_kept,
+            combined_score_threshold,
+        )
+        pga_filtered = pga_filtered + cs_filtered
 
         # Apply manual overrides on top of the re-filtered list
         _apply_overrides(pga_kept, stem_overrides)
