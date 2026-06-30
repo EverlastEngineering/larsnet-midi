@@ -23,7 +23,7 @@ Usage:
 
 from pathlib import Path
 import argparse
-from typing import List
+from typing import Dict, List, Optional, Tuple
 import sys
 
 # Import modules (thin orchestration layer)
@@ -299,6 +299,49 @@ def _process_stems_to_midi(
             else:
                 midi_path = midi_dir / f"{base_name}.mid"
 
+            # 2026-06-30: when the user invoked --stems <subset>, the
+            # per-stem loop above only processed those stems. Without
+            # this block, save_analysis_sidecar would overwrite the
+            # existing sidecar with just the re-processed stems,
+            # erasing kick/hihat/toms/cymbals from the sidecar (and
+            # therefore the MIDI — the rebuild step reads the sidecar).
+            #
+            # Load the existing sidecar and merge its non-reprocessed
+            # stems into events_by_stem + analysis_by_stem. Learning
+            # mode is excluded: --learn changes per-event semantics
+            # (velocity=1 for FPs, etc.) so merging the pre-learn
+            # sidecar would corrupt the learning-mode output.
+            if not learning_mode:
+                # 2026-06-30: pass midi_path (the .mid path), NOT
+                # midi_path.with_suffix('.analysis.json'). The loader
+                # applies with_suffix internally — if we pre-apply it,
+                # the loader looks for .analysis.analysis.json which
+                # doesn't exist and returns None. (Caught after the
+                # first attempt with double-debug output.)
+                existing_sidecar = (
+                    load_analysis_sidecar(midi_path) or {}
+                )
+                stems_to_preserve = [
+                    s for s in (existing_sidecar.get('stems') or {}).keys()
+                    if s not in stems_to_process
+                ]
+                if stems_to_preserve:
+                    preserved_midi, preserved_analysis = (
+                        _deserialize_sidecar_stems_for_merge(
+                            existing_sidecar,
+                            stems_to_preserve=stems_to_preserve,
+                            config=config,
+                        )
+                    )
+                    if preserved_midi:
+                        events_by_stem.update(preserved_midi)
+                        print(
+                            f"  Preserving {len(preserved_midi)} non-reprocessed stem(s) "
+                            f"from existing sidecar: {sorted(preserved_midi.keys())}"
+                        )
+                    if preserved_analysis:
+                        analysis_by_stem.update(preserved_analysis)
+
             # Step 1: Save analysis sidecar FIRST (Detection Output Contract v3)
             save_analysis_sidecar(
                 events_by_stem, midi_path, tempo=tempo,
@@ -381,6 +424,134 @@ def _build_argparser() -> argparse.ArgumentParser:
                                 help="Maximum duration in seconds to analyze (for faster learning on long tracks).")
 
     return parser
+
+
+def _deserialize_sidecar_stems_for_merge(
+    existing_sidecar: Dict,
+    stems_to_preserve: List[str],
+    config: Optional[Dict] = None,
+) -> Tuple[Dict[str, List[Dict]], Dict[str, Dict]]:
+    """Build ``(midi_events_by_stem, analysis_by_stem)`` for stems
+    that were NOT re-processed in the current run, so the new
+    sidecar preserves them instead of erasing them.
+
+    2026-06-30: the CLI's ``--stems <subset>`` flag re-runs detection
+    on the requested stems and calls ``save_analysis_sidecar`` with
+    only those stems — erasing the others from the sidecar and the
+    MIDI. The fix is to load the existing sidecar before saving,
+    take its ``events_pga`` for the non-reprocessed stems, and pass
+    it through as both the MIDI events (KEPT subset) and the
+    analysis dict (full events_pga) so the existing save pipeline
+    serializes everything unchanged.
+
+    Pure function. No I/O, no audio, no mutation of inputs.
+
+    Defined BEFORE the ``if __name__ == '__main__':`` block (which
+    sits below this helper) because the ``__main__`` block runs at
+    module-load time when the file is invoked directly. The first
+    attempt put the helper after ``__main__`` and the call from
+    ``_process_stems_to_midi`` failed with NameError because Python
+    had not yet executed the def statement below ``__main__``.
+
+    Args:
+        existing_sidecar: The output of ``load_analysis_sidecar`` —
+            a sidecar-shaped dict with top-level ``version`` /
+            ``tempo_bpm`` / ``stems``. ``stems`` maps stem type to
+            ``{events_pga, events_configured?, logic?, ...}``.
+        stems_to_preserve: Stems whose existing sidecar data should
+            be carried through to the new sidecar. Typically
+            ``[s for s in existing_sidecar['stems'] if s not in stems_to_process]``.
+        config: The current run's config dict. Used to resolve
+            ``<stem>.max_note_duration`` (per-stem wins over global
+            ``midi.max_note_duration``, default 0.5) and
+            ``audio.default_note_duration`` (default 0.1) when
+            reconstructing MIDI events from KEPT events that lack
+            a ``duration_ms`` field (older sidecars pre-2026-06-19).
+
+    Returns:
+        Tuple of:
+          - ``midi_events_by_stem``: ``{stem: [midi_event, ...]}``
+            where each ``midi_event`` has ``time``, ``note``,
+            ``velocity`` (mapped from ``midi_velocity``),
+            ``duration`` (mapped from ``duration_ms`` / 1000,
+            clamped to max_note_duration), and ``hihat_state`` (for
+            hihat only). Only KEPT events are included — the MIDI
+            only carries notes for KEPT events.
+          - ``analysis_by_stem``: ``{stem: {'pga_onset_data': events_pga}}``
+            where ``events_pga`` is the FULL list (KEPT + FILTERED
+            + all per-event diagnostic fields). The re-serialize
+            step in ``save_analysis_sidecar`` handles the rest.
+    """
+    midi_events_by_stem: Dict[str, List[Dict]] = {}
+    analysis_by_stem: Dict[str, Dict] = {}
+
+    if not existing_sidecar:
+        return midi_events_by_stem, analysis_by_stem
+
+    existing_stems = existing_sidecar.get('stems', {}) or {}
+    preserve_set = set(stems_to_preserve or [])
+
+    # Default-duration resolution matches the live pipeline
+    # (process_percentile_gated.py:218-220).
+    global_max_note_duration = (
+        (config or {}).get('midi', {}).get('max_note_duration', 0.5)
+    )
+    default_note_duration = (
+        (config or {}).get('audio', {}).get('default_note_duration', 0.1)
+    )
+
+    for stem_type, stem_data in existing_stems.items():
+        if stem_type not in preserve_set:
+            continue
+
+        events_pga = stem_data.get('events_pga', []) or []
+        if not events_pga:
+            continue
+
+        # Per-stem max_note_duration wins over global default.
+        per_stem_max = (
+            (config or {}).get(stem_type, {}).get('max_note_duration')
+        )
+        max_note_duration = (
+            per_stem_max if per_stem_max is not None
+            else global_max_note_duration
+        )
+
+        midi_events: List[Dict] = []
+        for ev in events_pga:
+            if ev.get('status') != 'KEPT':
+                continue  # MIDI only carries notes for KEPT events
+
+            # Duration: prefer duration_ms; fall back to default_note_duration
+            # for older sidecars that pre-date the 2026-06-19 duration field.
+            raw_duration_ms = ev.get('duration_ms')
+            if raw_duration_ms is None:
+                duration_sec = float(default_note_duration)
+            else:
+                duration_sec = float(raw_duration_ms) / 1000.0
+            duration_sec = min(duration_sec, float(max_note_duration))
+
+            midi_event: Dict = {
+                'time': float(ev['time']),
+                'note': ev.get('note'),
+                'velocity': int(ev.get('midi_velocity', 80)),
+                'duration': float(duration_sec),
+            }
+            # hihat_state only applies to hihat; carry through if present
+            # so the MIDI loop can pick note_open vs default hihat note.
+            if stem_type == 'hihat' and ev.get('hihat_state') is not None:
+                midi_event['hihat_state'] = ev['hihat_state']
+            midi_events.append(midi_event)
+
+        if midi_events:
+            midi_events_by_stem[stem_type] = midi_events
+        # Pass the full events_pga (KEPT + FILTERED) through as
+        # pga_onset_data — save_analysis_sidecar's existing serialization
+        # path consumes this and preserves all per-event fields
+        # (stereo_width, pitch_hz, classification, filter_reason, etc.).
+        analysis_by_stem[stem_type] = {'pga_onset_data': events_pga}
+
+    return midi_events_by_stem, analysis_by_stem
 
 
 if __name__ == '__main__':

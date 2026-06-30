@@ -901,3 +901,32 @@ Three coordinated changes address the silent fallback / missing-context problem:
     - `test_attack_rise_with_prev_boundary_clamps_walk`: explicit valley between hits — confirms rise measures only the new attack's own rise.
 - **Files**: `stems_to_midi/event_features.py` (`compute_attack_rise_ms`, `compute_event_features`), `stems_to_midi/pga_event_builder.py` (`detect_pga_events`), `stems_to_midi/test_event_features.py` (new test class)
 - **Downstream impact**: The `attack_rise_max_ms` filter (2026-06-17, third PGA pass) reads `attack_rise_ms` per event. After this fix, snare events that previously had inflated `attack_rise_ms` (and were falsely FILTERED by the attack_rise ceiling) will get correct, small values and be KEPT — the snare-tail filter will become more permissive in a good way. Conversely, events that previously got a coincidentally-small rise value by landing close to a deep valley may now correctly report a longer rise and get FILTERED — the filter becomes more accurate, not more lenient.
+
+---
+
+## Bug: `--stems <subset>` erases other stems from sidecar and MIDI
+
+- **Status**: Open
+- **Priority**: High
+- **Description**: Running `python stems_to_midi_cli.py 6 --stems snare` re-processes only the snare stem but **overwrites** the entire analysis sidecar (`.analysis.json`) with only the snare stem's data — wiping kick, hihat, toms, cymbals from the sidecar. The MIDI is then rebuilt from the (now-stem-poor) sidecar, so the .mid file also loses those stems. The user must re-run the full conversion (no `--stems` arg) every time they tweak a single stem — making redos expensive on long tracks.
+- **Reproduction**:
+  1. Run a full conversion: `python stems_to_midi_cli.py 6` (no `--stems`) — sidecar gets all 5 stems, MIDI has all 5.
+  2. Tweak a snare-only threshold in midiconfig.yaml (e.g. `snare.pga_min_prominence: 2400`).
+  3. Run `python stems_to_midi_cli.py 6 --stems snare` — sidecar now has only snare, MIDI only has snare. **The 5–10× slower full conversion must be redone for every other stem that wasn't even touched.**
+- **Expected Behavior**: `--stems snare` should re-process ONLY snare and leave kick/hihat/toms/cymbals data in the sidecar/MIDI exactly as they were. Only the stems explicitly named after `--stems` should change.
+- **Actual Behavior**: The CLI builds `events_by_stem` for just `--stems snare` (correct), then calls `save_analysis_sidecar(events_by_stem, ...)` which iterates `events_by_stem.items()` and builds `sidecar_data['stems']` from scratch — any stem not in `events_by_stem` is dropped. The rebuild step that follows reads the new (stem-poor) sidecar and writes a MIDI containing only those stems.
+- **Root Cause**: `stems_to_midi_cli.py::stems_to_midi_for_project` (around lines 245–320) does not consult the existing sidecar before saving the new one. `save_analysis_sidecar` itself is a pure-write function — it has no merge logic. The CLI is the only place that knows the user requested a partial reprocess, and it's not handling that case.
+- **Fix Plan**:
+  - In `stems_to_midi_for_project`, after the per-stem loop and before `save_analysis_sidecar`, load the existing sidecar via `load_analysis_sidecar(midi_path)`. If it exists, for every stem it contains that's NOT in `stems_to_process`:
+    - Take `events_pga` (the list of all event dicts for that stem) from the existing sidecar.
+    - Filter to `status='KEPT'` events, which carry `time`, `note`, `midi_velocity`, `duration_ms`, and `hihat_state` — enough to reconstruct the MIDI events.
+    - Merge into `events_by_stem[stem]` (MIDI events list) and `analysis_by_stem[stem] = {'pga_onset_data': events_pga, ...}` (analysis dict). The re-serialization round-trip is benign (the same `_serialize_pga_events` path runs both for fresh and preserved stems).
+  - Then call `save_analysis_sidecar` with the merged dicts as before. The rebuild + MIDI step consumes the merged sidecar and naturally includes all stems.
+  - `envelope_by_stem` and `contrast_envelope_by_stem` are per-stem `.npz` files (one file per stem, not in the sidecar) — no merge needed; they already survive partial reprocess.
+- **Files**:
+  - `stems_to_midi_cli.py` — `stems_to_midi_for_project`: add load-merge step (≈30 lines)
+  - `stems_to_midi/midi.py` — possibly extract a `_deserialize_pga_for_merging()` helper, or just inline (the format is straightforward — `events_pga` entries are already dicts)
+  - `stems_to_midi/tests/test_pga_stereo_features.py` — or a new `test_stems_subset_preservation.py` — test that running `--stems snare` twice preserves kick/toms/cymbals data in the sidecar (round-trip test with a fixture sidecar)
+- **Downstream impact**: None negative — the only behavior change is that re-running with `--stems` no longer erases other stems. The MIDI file may now change timestamp on disk (because the sidecar content changed), but its note content for non-reprocessed stems is byte-identical to before. Override files (`event_overrides.json`) are unaffected — they're read at rebuild time, not written by this path.
+- **Note**: WebUI's "Reconvert" path likely has the same bug (single-stem changes wiping others from the WebUI sidecar). Out of scope for this fix — file a follow-up issue. Verify by inspecting `webui/api/reconvert.py` or similar.
+
