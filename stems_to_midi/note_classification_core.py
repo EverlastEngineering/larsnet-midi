@@ -621,6 +621,46 @@ def classify_tom_notes(
             event['classification'] = event.get('classification', 0)
         return events
 
+    # 2026-06-30: per-event overrides ALWAYS win. If any event has
+    # the _overridden flag (set by _move_overridden_events when
+    # the user-cycled its state), preserve its classification
+    # even when force_reclassify is True. This avoids the bug
+    # where the cluster-level k-means re-run silently overwrote
+    # the user's per-event override (e.g. "I set this toms event
+    # to cls 2 but it kept reverting to cls 0 on save").
+    if any(e.get('_overridden') for e in events):
+        # Split into overridden and not. Run k-means on the
+        # not-overridden subset; preserve the override on the
+        # overridden subset.
+        not_overridden = [e for e in events if not e.get('_overridden')]
+        overridden = [e for e in events if e.get('_overridden')]
+        # Run k-means on the not-overridden subset (using the
+        # same logic as below but only on this subset).
+        if not_overridden:
+            # Default the new events to a sensible value first,
+            # then run k-means.
+            values, valid_indices, _ = _resolve_cluster_feature(
+                not_overridden, 'toms', config,
+            )
+            if values is not None and len(values) > 0:
+                min_spread = float(toms_config.get(
+                    'min_cluster_spread_ratio', 0.10))
+                if _has_sufficient_spread(values, min_spread):
+                    n_unique = len(np.unique(values))
+                    k = min(expected_clusters, n_unique)
+                    labels = _cluster_values(values, k=k)
+                    for event in not_overridden:
+                        event['classification'] = 1  # default
+                    for idx, vi in enumerate(valid_indices):
+                        not_overridden[vi]['classification'] = int(labels[idx])
+                else:
+                    for event in not_overridden:
+                        event['classification'] = 1
+            else:
+                for event in not_overridden:
+                    event['classification'] = 1
+        return events
+
     if expected_clusters == 1:
         for event in events:
             event['classification'] = 0

@@ -2297,23 +2297,41 @@ function cycleEventOverride(stemType, event) {
     const existing = eventOverrides[stemType][key] || {};
     const currentStatus = existing.status || event.status;
     const currentClass = existing.classification ?? event.classification ?? null;
+    const currentHihatState =
+        existing.hihat_state || event.hihat_state || 'open';
 
-    // Hihat open/closed cycle runs first (per-stem override
-    // independent of the KEPT/FILTERED state).
+    // Hihat: 3-state cycle through FILTERED → open → closed →
+    // FILTERED. (The hihat stem has no per-event classification
+    // override — its identity is the open/closed state, and
+    // the per-event override is the (status, hihat_state) pair.)
     if (stemType === 'hihat' && event.hihat_state) {
-        // Toggle hihat_state. KEPT/FILTERED status doesn't change
-        // here — that's a separate click action.
-        const newHihatState = event.hihat_state === 'open' ? 'closed' : 'open';
-        event.hihat_state = newHihatState;
+        // Determine the next state from the current state. The
+        // current "status" is the override's status (or the
+        // sidecar's natural state if no override). The current
+        // "hihat_state" is the override's hihat_state (or the
+        // event's current hihat_state).
+        let nextStatus;
+        let nextHihatState;
+        if (currentStatus !== 'KEPT') {
+            // Currently FILTERED (or no override). Turn on with
+            // hihat_state='open' as the default.
+            nextStatus = 'KEPT';
+            nextHihatState = 'open';
+        } else if (currentHihatState === 'open') {
+            // Currently KEPT + open. Advance to closed.
+            nextStatus = 'KEPT';
+            nextHihatState = 'closed';
+        } else {
+            // Currently KEPT + closed. Cycle off.
+            nextStatus = 'FILTERED';
+            nextHihatState = event.hihat_state;  // preserve
+        }
+        event.status = nextStatus;
+        event.hihat_state = nextHihatState;
         event._overridden = true;
-        // Persist as a special override (status: 'KEPT' to
-        // keep the record valid; the hihat_state will be
-        // handled in the rebuild path). For now, just store
-        // the existing structure.
         eventOverrides[stemType][key] = {
-            status: currentStatus,
-            ...(currentClass != null ? { classification: currentClass } : {}),
-            hihat_state: newHihatState,
+            status: nextStatus,
+            hihat_state: nextHihatState,
         };
         scheduleOverrideSave();
         drawWaveform();
@@ -2434,6 +2452,14 @@ async function saveEventOverrides() {
 function syncEventOverridesFromServer(cleaned) {
     if (cleaned && typeof cleaned === 'object') {
         eventOverrides = cleaned;
+        // 2026-06-30: also rewrite the window-scoped reference.
+        // `window.eventOverrides = eventOverrides` at module
+        // init captured the OLD dict by reference; reassigning
+        // the local `eventOverrides` binding doesn't update
+        // window. Update both so callers reading
+        // `window.eventOverrides.stem[key]` after a rebuild
+        // see the cleaned state.
+        window.eventOverrides = eventOverrides;
         eventOverridesDirty = false;
         // 2026-06-30: sync from the server means the rebuild
         // has run. The in-memory state now matches the server's

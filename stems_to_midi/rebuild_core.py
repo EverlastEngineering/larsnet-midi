@@ -199,6 +199,7 @@ def _move_overridden_events(
             event['status'] = 'FILTERED'
             if override.get('classification') is not None:
                 event['classification'] = override['classification']
+            event['_overridden'] = True
             new_pga_filtered.append(event)
         else:
             # Filter and override agree (KEPT) or override has
@@ -206,6 +207,7 @@ def _move_overridden_events(
             # classification so the override's class wins.
             if override.get('classification') is not None:
                 event['classification'] = override['classification']
+            event['_overridden'] = True
             new_pga_kept.append(event)
 
     for event in pga_filtered:
@@ -224,6 +226,7 @@ def _move_overridden_events(
             event['status'] = 'KEPT'
             if override.get('classification') is not None:
                 event['classification'] = override['classification']
+            event['_overridden'] = True
             new_pga_kept.append(event)
         else:
             new_pga_filtered.append(event)
