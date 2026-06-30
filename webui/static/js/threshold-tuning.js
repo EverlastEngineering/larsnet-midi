@@ -1421,9 +1421,21 @@ async function saveTuningAndReconvert() {
  */
 function initTuningBaseEvents(stemType) {
     const stemData = waveformAnalysisData?.stems?.[stemType];
-    // events_configured: energy-detected onsets (most stems).
-    // events_pga: PGA-only onsets (toms, 2026-06-15 refactor).
-    const configuredEvents = stemData?.events_configured || stemData?.events_pga;
+    // 2026-06-30: prefer events_pga over events_configured. The
+    // PGA-detected events_pga is the canonical source for any
+    // stem that uses the PGA detector. For legacy sidecars that
+    // ALSO carry events_configured (an energy-detected subset
+    // from before the 2026-06-15 PGA-only refactor), using
+    // events_configured caused the waveform to render in green
+    // after a slider drag (because the events_configured set
+    // has no method='percentile_gated' marker, so getEventColor
+    // fell through to the markerKept green fallback). Picking
+    // events_pga keeps the data source consistent with the
+    // non-tuning path.
+    //
+    // events_configured: energy-detected onsets (legacy).
+    // events_pga: PGA-only onsets (canonical, 2026-06-15 refactor).
+    const configuredEvents = stemData?.events_pga || stemData?.events_configured;
     if (!configuredEvents || configuredEvents.length === 0) {
         tuningBaseEvents = null;
         return;

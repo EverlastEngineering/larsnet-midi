@@ -607,28 +607,29 @@ function drawEventsPanel(displayEvents, sensitiveEvents, configuredEvents, pgaEv
     // by the eventsToRender filter below), and the gray
     // energy-detector onsets layer is dead UI.
 
-    // 2026-06-22: FILTERED visibility is now controlled by the
+    // 2026-06-30: UNIFIED render path. The events panel
+    // previously had TWO draw calls — drawEventBars (for
+    // non-PGA events, color via getEventColor with alpha=0.9
+    // for KEPT) and drawPgaEventBars (for PGA events, hardcoded
+    // violet with the faded-red alpha=0.35 for FILTERED). The
+    // two paths produced inconsistent colors (e.g. kick in
+    // project 6 rendered violet before a slider touch and
+    // green after, because the data source switched from
+    // events_pga to events_configured). With getEventsForStem
+    // now preferring events_pga and the unified drawPgaEventBars
+    // below handling any event type via getEventColor, a single
+    // call renders the whole layer consistently.
+    //
+    // 2026-06-22: FILTERED visibility is controlled by the
     // "Show Filtered" checkbox (waveformShowFiltered), NOT by
     // the Tune panel. When the checkbox is checked, all events
     // (KEPT + FILTERED + REVERB_CONTINUATION) are drawn; when
     // unchecked, only KEPT events are drawn. The user can
-    // toggle this independently of the panel — useful when
-    // the sheer number of filtered events across a song is
-    // making the KEPT events hard to see.
+    // toggle this independently of the panel.
     const eventsToRender = waveformShowFiltered
         ? displayEvents
         : displayEvents.filter(e => e.status === 'KEPT');
-    drawEventBars(ctx, eventsToRender, timeToX, PAD, plotW, plotH, false);
-
-    // PGA events layer (2026-06-10). The third complementary
-    // detector — always drawn last so it sits on top of the
-    // configured-event bars, in violet. The events themselves are
-    // KEPT-only and never participate in the energy-vs-spectral
-    // A/B overlay, so we draw them with a fixed bar width
-    // (matching the main layer) and skip the velocity-axis label.
-    if (pgaEvents && pgaEvents.length > 0) {
-        drawPgaEventBars(ctx, pgaEvents, timeToX, PAD, plotW, plotH);
-    }
+    drawPgaEventBars(ctx, eventsToRender, timeToX, PAD, plotW, plotH);
 }
 
 function drawVelocityAxis(ctx, PAD, plotW, plotH) {
@@ -743,18 +744,34 @@ function drawEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer
     }
 }
 
-// PGA events (2026-06-11 cleanup): the toms pipeline is PGA-only.
-// PGA events now have a midi_velocity (scaled from the PGA
-// envelope_value to [min_velocity, max_velocity] from settings),
-// and a status of KEPT or FILTERED. The bar height is the
-// midi_velocity / 127 normalized into the marker region; KEPT
-// events render full opacity, FILTERED events render faded.
-// FILTERED events are hidden entirely when the sidecar /
-// tuning panel is closed (they're diagnostic only — the
-// user only wants to see them when actively investigating
-// the filter).
-function drawPgaEventBars(ctx, events, timeToX, PAD, plotW, plotH) {
-    const barWidth = 2;
+// 2026-06-30: unified event-bar renderer (formerly named
+// drawPgaEventBars). Replaces the old two-path render:
+// drawEventBars (for non-PGA events, color via getEventColor
+// with the alpha=0.9 / full-strength convention) and
+// drawPgaEventBars (for PGA events, hardcoded violet with the
+// faded-red convention). The two paths produced inconsistent
+// colors (e.g. kick in project 6 rendered violet before a
+// slider touch and green after — user-reported bug). This
+// unified function handles all event types via getEventColor,
+// uses the faded-red alpha convention for FILTERED events
+// (0.35) and a slightly faded full strength for KEPT (0.85),
+// and supports the sensitive-layer case (tuning background)
+// via the isSensitiveLayer flag.
+//
+// Color resolution (via getEventColor, in priority order):
+//   1. FILTERED → red (#ef4444), alpha 0.35 (faded)
+//   2. REVERB_CONTINUATION → orange (#f59e0b)
+//   3. hihat open/closed → orange/cyan (when classification toggle on)
+//   4. method === 'percentile_gated' → violet (#8b5cf6)
+//   5. classification index → classification palette
+//   6. else → green (markerKept)
+function drawPgaEventBars(ctx, events, timeToX, PAD, plotW, plotH, isSensitiveLayer) {
+    // 2026-06-30: was 2. The unified render path needs to feel
+    // like the events panel's bars (3-px wide) so the "faded red
+    // = filtered" convention is visually consistent. The
+    // sensitive-layer case uses a thinner 1.5-px bar so it
+    // reads as a faded background, not a foreground event.
+    const barWidth = isSensitiveLayer ? 1.5 : 2.5;
     // Toms PGA cleanup (2026-06-12). The previous top-aligned
     // draw ("grow down from markerTop") made PGA bars hard to
     // compare against the other stems' velocity bars, which are
@@ -764,35 +781,15 @@ function drawPgaEventBars(ctx, events, timeToX, PAD, plotW, plotH) {
     // matching the green velocity-bar convention used elsewhere.
     const maxBarH = plotH;
 
-    // 2026-06-19: per-classification color overlay for PGA
-    // events. PGA bars were always violet because the
-    // PGA-only draw loop (this function) didn't go through
-    // getEventColor. Now it does: hihat open/closed events
-    // get the orange/cyan pair when the classification toggle
-    // is on; falls back to violet when off. Other stems'
-    // classification branches remain at violet for now —
-    // they're already filtered to a single category (toms is
-    // a single note), and the existing getEventColor
-    // per-classification branches apply to the
-    // non-PGA-rendering paths.
-    //
-    // 2026-06-30: use getEventColor (not the manual color
-    // table below) so FILTERED events render in red. The
-    // previous version always used WAVEFORM_COLORS.markerPga
-    // (violet) regardless of status — combined with
-    // getPgaEventsForStem's KEPT-only filter, the user could
-    // only see FILTERED events after first clicking Tune
-    // (which switches the data source to waveformTuningEvents).
-    // Now the "Show Filtered" toggle works standalone.
-
     for (const event of events) {
         if (event.time == null) continue;
         const isFiltered = event.status === 'FILTERED';
-        // 2026-06-22: FILTERED PGA events are gated on the
-        // "Show Filtered" checkbox (waveformShowFiltered), not
-        // on the Tune panel. Mirrors the eventsToRender filter
-        // in drawEventsPanel.
-        if (isFiltered && !waveformShowFiltered) {
+        // 2026-06-30: the "Show Filtered" toggle gates
+        // FILTERED events on the main layer only. The
+        // sensitive-layer case (tuning background) shows
+        // filtered events for context — the user always
+        // wants to see them when investigating the filter.
+        if (!isSensitiveLayer && isFiltered && !waveformShowFiltered) {
             continue;
         }
         const x = timeToX(event.time);
@@ -812,20 +809,34 @@ function drawPgaEventBars(ctx, events, timeToX, PAD, plotW, plotH) {
 
         // 2026-06-30: use getEventColor (which already encodes
         // FILTERED → red, hihat open/closed, classification
-        // palette, REVERB_CONTINUATION → orange) so the PGA
-        // layer's color matches the events panel's color for
-        // the same event. Previously the manual table below
-        // hardcoded KEPT colors and FILTERED was silently
-        // violet.
-        const barColor = getEventColor(event);
+        // palette, REVERB_CONTINUATION → orange) for the main
+        // layer. The sensitive layer uses markerSensitive gray
+        // for all events (it's a faded context background,
+        // not a status indicator).
+        const barColor = isSensitiveLayer
+            ? WAVEFORM_COLORS.markerSensitive
+            : getEventColor(event);
 
-        // Filled rectangle — faded for FILTERED, full for KEPT
-        ctx.globalAlpha = isFiltered ? 0.35 : 0.85;
+        // Faded-red convention (user feedback 2026-06-30):
+        //   - main layer, KEPT       → alpha 0.85
+        //   - main layer, FILTERED   → alpha 0.35 (faded red)
+        //   - sensitive layer (any)   → alpha 0.40
+        let alpha;
+        if (isSensitiveLayer) {
+            alpha = 0.40;
+        } else if (isFiltered) {
+            alpha = 0.35;
+        } else {
+            alpha = 0.85;
+        }
+        ctx.globalAlpha = alpha;
         ctx.fillStyle = barColor;
         ctx.fillRect(x - barWidth / 2, barTop, barWidth, barH);
 
         // Outline for crispness at zoom levels
-        ctx.globalAlpha = isFiltered ? 0.4 : 1.0;
+        ctx.globalAlpha = isFiltered
+            ? 0.40
+            : (isSensitiveLayer ? 0.50 : 1.0);
         ctx.strokeStyle = barColor;
         ctx.lineWidth = 0.5;
         ctx.strokeRect(x - barWidth / 2, barTop, barWidth, barH);
@@ -836,10 +847,24 @@ function drawPgaEventBars(ctx, events, timeToX, PAD, plotW, plotH) {
 // ─── Data Helpers ────────────────────────────────────────────────────────
 
 function getEventsForStem(stemData) {
+    // 2026-06-30: prefer events_pga over events_configured. The
+    // PGA-detected events_pga is the canonical source for any
+    // stem that uses the PGA detector (kick/snare/toms/hihat/
+    // cymbals on the 2026-06-15 PGA-only refactor). For legacy
+    // sidecars that ALSO carry events_configured (an energy-
+    // detected subset from before the refactor), preferring
+    // events_configured led to a data-source mismatch: the
+    // events panel rendered events_configured (no method,
+    // no classification → green) while the PGA overlay rendered
+    // events_pga (PGA method → violet) at the same X positions.
+    // After touching a slider, the tuning path swapped the
+    // source to waveformTuningEvents (initialized from
+    // events_configured) so both panels rendered the same
+    // 190-event subset in green — the bug the user reported.
+    // events_pga is the only consistent source.
+    if (stemData.events_pga) return stemData.events_pga;
     if (stemData.events_configured) return stemData.events_configured;
     if (stemData.events) return stemData.events;
-    // PGA-only stems (toms, 2026-06-15): events_pga is the sole source
-    if (stemData.events_pga) return stemData.events_pga;
     return [];
 }
 
@@ -847,42 +872,16 @@ function getSensitiveEventsForStem(stemData) {
     return stemData.events_sensitive || [];
 }
 
-// PGA events live in their own sidecar field (events_pga) — the
-// third complementary detector. They run alongside energy +
-// spectral but never get promoted to events_configured. Always
-// returned (no toggle); the caller decides whether to render.
+// PGA events live in their own sidecar field (events_pga) —
+// the third complementary detector. With the 2026-06-30
+// unified-rendering refactor, the events panel and the PGA
+// overlay both pull from the same list (events_pga, see
+// getEventsForStem). This helper is kept as an alias so
+// existing callers don't break — the previous KEPT-only filter
+// is no longer needed because the unified draw function
+// handles status filtering itself.
 function getPgaEventsForStem(stemData) {
-    // 2026-06-19: filter to KEPT before returning. The previous
-    // version returned every events_pga entry (including
-    // FILTERED), relying on drawPgaEventBars to hide them when
-    // the tuning panel was closed. That double-layer filter
-    // worked when the sidecar had a healthy mix of KEPT and
-    // FILTERED bars, but failed badly when the sidecar was
-    // mostly-FILTERED (e.g. a strict cymbals threshold that
-    // zero'd out the KEPT set): closing the panel produced an
-    // empty display because every event was both filtered out
-    // by drawPgaEventBars and counted by the time-range
-    // computation. Filtering here — same pattern as
-    // getEventsForStem on the configured layer — restores the
-    // invariant that closing the panel shows the kept events.
-    // The tuning path is unaffected: it passes
-    // waveformTuningEvents (which already contains the live
-    // FILTERED mix) directly into drawPgaEventBars, bypassing
-    // this helper.
-    //
-    // 2026-06-30: the "Show Filtered" toggle gates this filter.
-    // When the toggle is ON, return every event (KEPT + FILTERED)
-    // so drawPgaEventBars can render the FILTERED bars in red
-    // (via its own isFiltered check + getEventColor's red
-    // mapping). This makes the toggle work without requiring the
-    // user to first click "Tune" (the previous workaround).
-    // The empty-display regression from 2026-06-19 is
-    // preserved for the toggle-OFF case (KEPT-only) — the
-    // FILTERED events only enter the data flow when the user
-    // has explicitly opted into seeing them.
-    const all = stemData.events_pga || [];
-    if (waveformShowFiltered) return all;
-    return all.filter(e => e.status === 'KEPT');
+    return getEventsForStem(stemData);
 }
 
 function computeTimeRange(events, sensitiveEvents, envelope, pgaEvents) {
