@@ -463,6 +463,36 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         advanced=True,
     ),
 
+    # 2026-06-30: spread guardrail threshold for snare
+    # classification. See the matching toms entry for full
+    # rationale. Stops k-means from splitting a tight cluster
+    # of stereo_width (or centroid_hz) values into multiple
+    # snare subtypes when all the hits really are the same
+    # subtype. Unitless (a ratio). Default 0.10.
+    SettingDefinition(
+        key='snare_min_cluster_spread_ratio',
+        type=SettingType.FLOAT,
+        default=0.10,
+        label='Min Cluster Spread Ratio (Snare)',
+        description=(
+            'Minimum relative IQR (IQR / median) on the chosen cluster '
+            'feature required to split into snare subtypes (snare, '
+            'rimshot, clap). Below this threshold, all snare events '
+            'get the default snare MIDI note (38). Prevents k-means '
+            'from artificially splitting a tight cluster of values '
+            'into multiple subtypes. Unitless. 0 disables the '
+            'guardrail entirely.'
+        ),
+        category=SettingCategory.SNARE,
+        ui_control=UIControl.SLIDER,
+        min_value=0.0,
+        max_value=1.0,
+        step=0.01,
+        yaml_path=['snare', 'min_cluster_spread_ratio'],
+        cli_flag='--snare-min-cluster-spread-ratio',
+        advanced=True,
+    ),
+
     SettingDefinition(
         key='snare_use_stereo',
         type=SettingType.BOOL,
@@ -522,6 +552,40 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         step=1,
         yaml_path=['toms', 'midi_note_high'],
         cli_flag='--toms-midi-high',
+        advanced=True,
+    ),
+
+    # 2026-06-30: spread guardrail threshold for tom
+    # classification. The post-filter k-means pass (classify_tom_notes)
+    # computes IQR / median on the chosen cluster feature
+    # (pitch_hz by default, falls back to spectral_centroid_hz or
+    # stereo_width) and skips splitting if the relative IQR is
+    # below this threshold. Stops k-means from artificially
+    # splitting "10 toms all at 66.1–66.9 Hz" (close but distinct
+    # values) into two clusters. Unitless (a ratio). Default 0.10
+    # = 10% of median — wide enough that real kit splits never
+    # trigger, narrow enough that sub-decile noise collapses.
+    SettingDefinition(
+        key='toms_min_cluster_spread_ratio',
+        type=SettingType.FLOAT,
+        default=0.10,
+        label='Min Cluster Spread Ratio (Toms)',
+        description=(
+            'Minimum relative IQR (IQR / median) on the chosen cluster '
+            'feature required to split into low/mid/high groups. Below '
+            'this threshold, all tom events get the mid-tom MIDI note '
+            '(default 47). Prevents k-means from artificially splitting '
+            'a tight cluster of values into multiple groups (e.g. 10 '
+            'hits all at 66.1–66.9 Hz). Unitless. 0 disables the '
+            'guardrail entirely.'
+        ),
+        category=SettingCategory.TOMS,
+        ui_control=UIControl.SLIDER,
+        min_value=0.0,
+        max_value=1.0,
+        step=0.01,
+        yaml_path=['toms', 'min_cluster_spread_ratio'],
+        cli_flag='--toms-min-cluster-spread-ratio',
         advanced=True,
     ),
 
@@ -942,6 +1006,35 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         step=1,
         yaml_path=['cymbals', 'midi_note_chinese'],
         cli_flag='--cymbals-midi-chinese',
+        advanced=True,
+    ),
+
+    # 2026-06-30: spread guardrail threshold for cymbal
+    # classification. See the matching toms entry for full
+    # rationale. Stops k-means from splitting a tight cluster
+    # of spectral_centroid_hz (or stereo_width) values into
+    # crash/ride/chinese when all the hits really are one
+    # cymbal type. Unitless (a ratio). Default 0.10.
+    SettingDefinition(
+        key='cymbals_min_cluster_spread_ratio',
+        type=SettingType.FLOAT,
+        default=0.10,
+        label='Min Cluster Spread Ratio (Cymbals)',
+        description=(
+            'Minimum relative IQR (IQR / median) on the chosen cluster '
+            'feature required to split into crash/ride/chinese. Below '
+            'this threshold, all cymbal events get the default crash '
+            'MIDI note (49). Prevents k-means from artificially '
+            'splitting a tight cluster of values into multiple cymbal '
+            'types. Unitless. 0 disables the guardrail entirely.'
+        ),
+        category=SettingCategory.CYMBALS,
+        ui_control=UIControl.SLIDER,
+        min_value=0.0,
+        max_value=1.0,
+        step=0.01,
+        yaml_path=['cymbals', 'min_cluster_spread_ratio'],
+        cli_flag='--cymbals-min-cluster-spread-ratio',
         advanced=True,
     ),
 

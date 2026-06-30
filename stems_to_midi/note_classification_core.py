@@ -492,6 +492,86 @@ def _cluster_values(
 
 
 # ============================================================================
+# Spread Guardrail (2026-06-30)
+# ============================================================================
+# Prevents k-means from splitting a feature array into k groups when the
+# values are too close together to semantically represent distinct
+# clusters (e.g. 10 toms all at 66.1–66.9 Hz). The existing n_unique < k
+# check only catches the "all identical" case; this catches the
+# "close-but-distinct" case where k-means would dutifully produce k
+# centroids from a cluster of values that are really one population.
+#
+# Metric: relative IQR = (Q3 − Q1) / median. Unitless (a ratio),
+# so it works for pitch_hz (Hz), stereo_width (0..1), or any other
+# feature the user picks via ``cluster_feature``. One threshold per
+# stem works across all features. Chosen over absolute IQR because
+# absolute IQR breaks when the user selects a non-default feature
+# with different units (e.g. toms.cluster_feature='stereo_width'
+# paired with a toms.min_pitch_spread_hz=5.0 threshold — the units
+# mismatch collapses real splits).
+#
+# When the guardrail triggers, classify_*_notes assigns
+# classification=1 (mid for toms, 0 for snare/cymbals — see each
+# function) to all KEPT events and skips k-means — matching the
+# existing empty-data default so the user's MIDI output degrades
+# gracefully to "all hits get the default note" instead of producing
+# arbitrary splits.
+
+
+def _has_sufficient_spread(
+    values: np.ndarray,
+    relative_threshold: float,
+) -> bool:
+    """Return True iff ``IQR(values) / median(values) >= threshold``.
+
+    Pure function. Behavior:
+      - Empty arrays: return False.
+      - Single value (n_unique == 1): return True so the existing
+        ``_cluster_values`` single-value path runs (it returns
+        classification 0 — the lowest, matching pre-guardrail
+        behavior).
+      - All identical: IQR = 0 → returns False (guardrail triggers,
+        caller assigns default classification).
+      - Mixed: returns True iff relative IQR >= threshold.
+
+    Args:
+        values: 1-D ndarray of feature values (e.g. pitch_hz,
+            spectral_centroid_hz, stereo_width).
+        relative_threshold: Minimum ``IQR / median`` required to
+            consider the data spread-out enough to cluster.
+            Per-stem defaults live in midiconfig.yaml and
+            ``webui/settings_schema.py``:
+              toms.min_cluster_spread_ratio       (default 0.10)
+              snare.min_cluster_spread_ratio      (default 0.10)
+              cymbals.min_cluster_spread_ratio    (default 0.10)
+
+    Returns:
+        True if clustering should proceed (relative IQR is big
+        enough, or only one value exists). False if the data is
+        "close but distinct" and should collapse to one note.
+    """
+    if len(values) == 0:
+        return False
+    n_unique = len(np.unique(values))
+    if n_unique < 2:
+        # Single value (or all identical) — let k-means produce its
+        # existing single-cluster result (classification 0). The
+        # guardrail only fires for "multiple values that look like
+        # one population".
+        return True
+    q75, q25 = np.percentile(values, [75, 25])
+    iqr = q75 - q25
+    median = float(np.median(values))
+    if abs(median) < 1e-9:
+        # Median is essentially zero — feature isn't on a meaningful
+        # scale. Fall back to absolute IQR vs relative_threshold to
+        # avoid division blowup. Practically unreachable for the
+        # features currently in use (all positive, all >> 0).
+        return bool(iqr >= relative_threshold)
+    return bool((iqr / median) >= relative_threshold)
+
+
+# ============================================================================
 # Tom Classification (k-means on spectral centroid)
 # ============================================================================
 
@@ -511,8 +591,11 @@ def classify_tom_notes(
 
     Args:
         events: KEPT tom event dicts with spectral_centroid_hz field.
-        config: Full config dict. Reads toms.expected_clusters (default 3)
-            and toms.cluster_feature (default 'auto').
+        config: Full config dict. Reads toms.expected_clusters (default 3),
+            toms.cluster_feature (default 'auto'), and
+            toms.min_cluster_spread_ratio (default 0.10, unitless
+            relative-IQR threshold for the spread guardrail — see
+            ``_has_sufficient_spread``).
 
     Returns:
         Same events with 'classification' field: 0=low, 1=mid, 2=high.
@@ -555,6 +638,18 @@ def classify_tom_notes(
             event['classification'] = 1  # mid tom default
         return events
 
+    # 2026-06-30: spread guardrail. If the chosen feature's
+    # relative IQR is below the per-stem threshold, skip k-means —
+    # the values are all in one population and splitting them would
+    # be arbitrary. Default 0.10 (10% of median) — wide enough that
+    # real kit splits (low/mid/high toms) never trigger, narrow
+    # enough that sub-decile noise gets collapsed.
+    min_spread = float(toms_config.get('min_cluster_spread_ratio', 0.10))
+    if not _has_sufficient_spread(values, min_spread):
+        for event in events:
+            event['classification'] = 1  # mid default (same as empty)
+        return events
+
     n_unique = len(np.unique(values))
     k = min(expected_clusters, n_unique)
     labels = _cluster_values(values, k=k)
@@ -587,8 +682,11 @@ def classify_cymbal_notes(
 
     Args:
         events: KEPT cymbal event dicts with spectral_centroid_hz field.
-        config: Full config dict. Reads cymbals.expected_clusters (default 2)
-            and cymbals.cluster_feature (default 'auto').
+        config: Full config dict. Reads cymbals.expected_clusters
+            (default 2), cymbals.cluster_feature (default 'auto'),
+            and cymbals.min_cluster_spread_ratio (default 0.10,
+            unitless relative-IQR threshold for the spread guardrail
+            — see ``_has_sufficient_spread``).
 
     Returns:
         Same events with 'classification' field: 0=crash, 1=ride, 2=chinese.
@@ -623,6 +721,15 @@ def classify_cymbal_notes(
     if len(values) == 0:
         for event in events:
             event['classification'] = 0  # crash default
+        return events
+
+    # 2026-06-30: spread guardrail. Default 0.10 relative IQR —
+    # see classify_tom_notes for rationale. Unitless; works
+    # for centroid_hz or any other feature the user picks.
+    min_spread = float(cymbal_config.get('min_cluster_spread_ratio', 0.10))
+    if not _has_sufficient_spread(values, min_spread):
+        for event in events:
+            event['classification'] = 0  # crash default (same as empty)
         return events
 
     n_unique = len(np.unique(values))
@@ -665,7 +772,10 @@ def classify_snare_notes(
     Args:
         events: KEPT snare event dicts with stereo_width and/or
             spectral_centroid_hz fields.
-        config: Full config dict. Reads snare.expected_clusters (default 2).
+        config: Full config dict. Reads snare.expected_clusters
+            (default 2) and snare.min_cluster_spread_ratio
+            (default 0.10, unitless relative-IQR threshold for the
+            spread guardrail — see ``_has_sufficient_spread``).
 
     Returns:
         Same events with 'classification' field: 0-2.
@@ -708,6 +818,15 @@ def classify_snare_notes(
     if len(values) == 0:
         for event in events:
             event['classification'] = 0
+        return events
+
+    # 2026-06-30: spread guardrail. Default 0.10 relative IQR —
+    # see classify_tom_notes for rationale. Unitless; works
+    # for stereo_width or any other feature the user picks.
+    min_spread = float(snare_config.get('min_cluster_spread_ratio', 0.10))
+    if not _has_sufficient_spread(values, min_spread):
+        for event in events:
+            event['classification'] = 0  # snare default (same as empty)
         return events
 
     # Use k = min(expected_clusters, number of unique values)

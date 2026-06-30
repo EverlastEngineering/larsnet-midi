@@ -1134,3 +1134,183 @@ class TestClassifyNotes:
         open_count = sum(1 for e in events if e['note'] == 46)
         assert closed_count == 20
         assert open_count == 3
+
+
+# ============================================================================
+# Spread Guardrail Tests (2026-06-30)
+# ============================================================================
+# The spread guardrail prevents k-means from splitting a feature array into
+# k groups when the values are too close together to semantically represent
+# distinct clusters (the "10 toms all at 66.1–66.9 Hz" case the user raised).
+# Metric is IQR (75th − 25th percentile). When IQR < per-stem threshold,
+# classify_*_notes skips k-means and assigns classification=1 (mid) to all
+# events — matching the existing empty-data default.
+
+
+class TestSpreadGuardrail:
+    """Tests for the relative-IQR spread guardrail helper."""
+
+    def test_flat_array_insufficient_spread(self):
+        """All identical values → n_unique=1 → guardrail returns True
+        (single population; k-means will collapse to one cluster)."""
+        from stems_to_midi.note_classification_core import _has_sufficient_spread
+        assert _has_sufficient_spread(np.array([80.0] * 10), relative_threshold=0.10) is True
+
+    def test_close_but_distinct_insufficient_spread(self):
+        """10 values 66.1..66.9 — unique but relative IQR ~0.5% < 10%."""
+        from stems_to_midi.note_classification_core import _has_sufficient_spread
+        values = np.arange(66.1, 67.0, 0.1)
+        assert _has_sufficient_spread(values, relative_threshold=0.10) is False
+
+    def test_well_spread_values(self):
+        """Values clearly bimodal — relative IQR ~ 100%."""
+        from stems_to_midi.note_classification_core import _has_sufficient_spread
+        # 5 events around 70 Hz, 5 around 130 Hz — bimodal, median ~100,
+        # IQR ~50, relative IQR ~0.5.
+        values = np.array([68, 69, 70, 71, 72, 128, 129, 130, 131, 132])
+        assert _has_sufficient_spread(values, relative_threshold=0.10) is True
+
+    def test_empty_array(self):
+        """Empty array → no data → insufficient."""
+        from stems_to_midi.note_classification_core import _has_sufficient_spread
+        assert _has_sufficient_spread(np.array([]), relative_threshold=0.10) is False
+
+    def test_single_value(self):
+        """Single value → n_unique=1 → guardrail returns True
+        (k-means single-value path will produce classification 0)."""
+        from stems_to_midi.note_classification_core import _has_sufficient_spread
+        assert _has_sufficient_spread(np.array([80.0]), relative_threshold=0.10) is True
+
+    def test_two_close_values_stereo_width(self):
+        """Two close stereo_width values — relative IQR tiny."""
+        from stems_to_midi.note_classification_core import _has_sufficient_spread
+        # values 0.05 and 0.06, IQR = 0.01, median = 0.055, rel IQR ≈ 0.18.
+        # Wait: with 2 values and linear interpolation, 25th pct = first
+        # value (0.05), 75th pct = second (0.06), so IQR = 0.01. rel IQR
+        # = 0.01/0.055 ≈ 0.18 → above threshold of 0.10. Pick a
+        # narrower pair to verify the False path.
+        values = np.array([0.050, 0.051, 0.052])
+        # IQR = Q3 - Q1 = 0.052 - 0.050 = 0.002, median = 0.051
+        # rel IQR = 0.002/0.051 ≈ 0.039 → below 0.10 threshold.
+        assert _has_sufficient_spread(values, relative_threshold=0.10) is False
+
+    def test_unitless_across_features(self):
+        """The whole point of relative IQR: pitch_hz, centroid_hz, and
+        stereo_width all use the same threshold."""
+        from stems_to_midi.note_classification_core import _has_sufficient_spread
+        # Same RATIO of values, different absolute units.
+        # 9 toms at 66.1..66.9 Hz — rel IQR ~0.6% → False.
+        pitch_close = np.arange(66.1, 67.0, 0.1)
+        # 10 cymbals at 4800..4890 Hz — rel IQR ~0.9% → False.
+        centroid_close = np.arange(4800.0, 4900.0, 10.0)
+        # 9 snare widths 0.020..0.022 step 0.00025 — rel IQR ~0.8% → False.
+        width_close = np.arange(0.020, 0.02225, 0.00025)
+        for arr in (pitch_close, centroid_close, width_close):
+            assert _has_sufficient_spread(arr, relative_threshold=0.10) is False, (
+                f"Expected False for {arr} but got True"
+            )
+
+
+class TestClassifyTomNotesSpread:
+    """Tom classification behavior when pitch_hz spread is small."""
+
+    def test_close_pitches_collapse_to_single_classification(self, default_config):
+        """10 toms at 66.1–66.9 Hz must NOT split into 2 groups
+        even though there are 9 unique values (the bug the spread
+        guardrail was added to fix)."""
+        config = {**default_config, 'toms': {'expected_clusters': 2}}
+        events = [
+            _make_event(pitch_hz=66.0 + 0.1 * i)
+            for i in range(10)
+        ]
+        classify_tom_notes(events, config)
+        unique_classes = {e['classification'] for e in events}
+        assert len(unique_classes) == 1, (
+            f"Expected single classification for close-pitch toms, "
+            f"got {unique_classes}"
+        )
+
+    def test_well_separated_pitches_split_correctly(self, default_config):
+        """5 toms around 70 Hz, 5 around 130 Hz → 2 distinct classes."""
+        config = {**default_config, 'toms': {'expected_clusters': 2}}
+        events = [_make_event(pitch_hz=70.0 + 0.5 * i) for i in range(5)]
+        events += [_make_event(pitch_hz=130.0 + 0.5 * i) for i in range(5)]
+        classify_tom_notes(events, config)
+        unique_classes = {e['classification'] for e in events}
+        assert unique_classes == {0, 1}, (
+            f"Expected low/mid split for bimodal pitches, got {unique_classes}"
+        )
+
+    def test_custom_spread_threshold_disables_guardrail(self, default_config):
+        """Threshold=0.0001 (effectively zero) forces even tiny spreads
+        to count as 'enough' — guardrail becomes a no-op. Verifies
+        the threshold is read from config (not hardcoded)."""
+        config = {
+            **default_config,
+            'toms': {'expected_clusters': 2, 'min_cluster_spread_ratio': 0.0001},
+        }
+        events = [
+            _make_event(pitch_hz=66.0 + 0.1 * i)
+            for i in range(10)
+        ]
+        classify_tom_notes(events, config)
+        unique_classes = {e['classification'] for e in events}
+        assert len(unique_classes) == 2, (
+            f"Expected k-means split when threshold=0.0001, got {unique_classes}"
+        )
+
+
+class TestClassifySnareNotesSpread:
+    """Snare classification behavior when stereo_width spread is small."""
+
+    def test_close_widths_collapse_to_single_classification(self, default_config):
+        """8 snare hits all with stereo_width 0.020–0.022 (relative IQR
+        < 10%) must NOT split into 2 groups even with expected_clusters=2."""
+        config = {**default_config, 'snare': {'expected_clusters': 2}}
+        events = [
+            _make_event(stereo_width=0.020 + 0.00025 * i)
+            for i in range(9)
+        ]
+        classify_snare_notes(events, config)
+        unique_classes = {e['classification'] for e in events}
+        assert len(unique_classes) == 1, (
+            f"Expected single classification for close-width snares, "
+            f"got {unique_classes}"
+        )
+
+    def test_bimodal_widths_split(self, default_config):
+        """5 mono snares (width ~0.02) + 5 wide claps (width ~0.4) → 2 groups."""
+        config = {**default_config, 'snare': {'expected_clusters': 2}}
+        events = [_make_event(stereo_width=0.020 + 0.001 * i) for i in range(5)]
+        events += [_make_event(stereo_width=0.40 + 0.005 * i) for i in range(5)]
+        classify_snare_notes(events, config)
+        unique_classes = {e['classification'] for e in events}
+        assert unique_classes == {0, 1}
+
+
+class TestClassifyCymbalNotesSpread:
+    """Cymbal classification behavior when centroid spread is small."""
+
+    def test_close_centroids_collapse(self, default_config):
+        """10 cymbals with centroids 4800–4900 Hz (one crash type) must
+        not split into 2 groups with expected_clusters=2."""
+        config = {**default_config, 'cymbals': {'expected_clusters': 2}}
+        events = [
+            _make_event(spectral_centroid_hz=4800.0 + 10.0 * i)
+            for i in range(10)
+        ]
+        classify_cymbal_notes(events, config)
+        unique_classes = {e['classification'] for e in events}
+        assert len(unique_classes) == 1, (
+            f"Expected single classification for close-centroid cymbals, "
+            f"got {unique_classes}"
+        )
+
+    def test_well_separated_centroids_split(self, default_config):
+        """5 at 4 kHz + 5 at 8 kHz → 2 groups."""
+        config = {**default_config, 'cymbals': {'expected_clusters': 2}}
+        events = [_make_event(spectral_centroid_hz=4000.0 + 10.0 * i) for i in range(5)]
+        events += [_make_event(spectral_centroid_hz=8000.0 + 10.0 * i) for i in range(5)]
+        classify_cymbal_notes(events, config)
+        unique_classes = {e['classification'] for e in events}
+        assert unique_classes == {0, 1}

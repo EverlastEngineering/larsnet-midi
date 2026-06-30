@@ -22,7 +22,16 @@ from .pga_event_builder import  _build_pga_events_with_filter
 # rule (falls back to geomean+sustain when decay_slope_db is
 # absent). The MIDI note loop below reads hihat_state to flip
 # drum_mapping.hihat (42) -> drum_mapping.hihat_open (46).
-from .note_classification_core import classify_hihat_notes
+#
+# 2026-06-30: generalized to all classification-capable stems
+# (hihat, toms, snare, cymbals). The bug was that only hihat
+# got classified here — toms/snare/cymbals got a single
+# per-stem note regardless of ``classify_*_notes`` output.
+# Now we call ``classify_notes`` (the dispatch in
+# ``note_classification_core``) which both classifies AND
+# stamps ``event['note']`` via ``_map_note``, and the MIDI
+# loop reads ``ev['note']`` instead of a single per-stem value.
+from .note_classification_core import classify_notes
 
 
 def _build_webui_envelope(
@@ -198,9 +207,13 @@ def process_percentile_gated(
         'right': env_energy,
     }
 
-    # Build MIDI events from pga_kept
+    # Build MIDI events from pga_kept.
+    # 2026-06-30: ``note`` is the per-stem default (used as a
+    # fallback when ``ev.get('note')`` is missing — e.g. kick,
+    # or classification skipped). For classification-capable
+    # stems (hihat/toms/snare/cymbals), ``classify_notes`` below
+    # stamps the per-event note before the MIDI loop runs.
     note = int(getattr(drum_mapping, stem_type))
-    note_open = int(getattr(drum_mapping, 'hihat_open', note))
     timing_offset = config.get(stem_type, {}).get('timing_offset', 0.0)
     max_duration = config.get(stem_type, {}).get(
         'max_note_duration', config.get('midi', {}).get('max_note_duration', 0.5))
@@ -213,8 +226,17 @@ def process_percentile_gated(
     # in the return dict — pga_raw is the same list object as
     # pga_kept + pga_filtered before any classification runs,
     # so classifying it stamps the sidecar's hihat_state too).
-    if stem_type == 'hihat' and pga_kept:
-        classify_hihat_notes(pga_kept, config, force_reclassify=True)
+    #
+    # 2026-06-30: generalized — ``classify_notes`` now handles
+    # all classification-capable stems (hihat, toms, snare,
+    # cymbals). The dispatch runs the right per-stem classifier
+    # (k-means for toms/snare/cymbals, threshold rule for hihat)
+    # AND stamps ``event['note']`` via ``_map_note``. The MIDI
+    # loop below reads ``ev['note']`` instead of a single
+    # per-stem value, so toms get low/mid/high differentiation,
+    # snare gets rimshot/clap differentiation, etc.
+    if stem_type in ('hihat', 'toms', 'snare', 'cymbals') and pga_kept:
+        classify_notes(pga_kept, stem_type, drum_mapping, config, force_reclassify=True)
 
     midi_events = []
     for i, ev in enumerate(pga_kept):
@@ -226,10 +248,12 @@ def process_percentile_gated(
             duration = min(pga_kept[i + 1]['time'] - ev['time'], max_duration)
         else:
             duration = default_duration
-        # 2026-06-19: open hihats use the open note (46), the
-        # rest use the default hihat note (42 = closed). The
-        # classifier above stamped hihat_state on this event.
-        ev_note = note_open if ev.get('hihat_state') == 'open' else note
+        # 2026-06-30: read the per-event note set by
+        # classify_notes above. Fall back to the per-stem
+        # default (``drum_mapping.<stem>``) for events that
+        # somehow didn't get classified (e.g. kick, or
+        # classification skipped due to empty data).
+        ev_note = ev.get('note') or note
         midi_events.append({
             'time': float(midi_time),
             'note': ev_note,

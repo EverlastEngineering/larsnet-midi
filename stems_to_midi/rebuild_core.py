@@ -390,11 +390,16 @@ def rebuild_events_from_analysis(
         # PGA events already carry midi_velocity from the
         # detector's linear envelope mapping. The note,
         # timing_offset, and max_note_duration are read per-stem.
+        #
+        # 2026-06-30: ``stem_note`` is now only a FALLBACK for
+        # events that lack a per-event ``note`` field (kick, or
+        # classification skipped). For hihat/toms/snare/cymbals,
+        # ``classify_notes`` above stamps ``ev['note']`` per
+        # event (open vs closed for hihat; low/mid/high for toms;
+        # snare/rimshot/clap for snare; crash/ride/chinese for
+        # cymbals). The MIDI loop reads ``ev.get('note')`` first
+        # and falls back to ``stem_note`` otherwise.
         stem_note = getattr(drum_mapping, stem_type)
-        stem_note_open = (
-            getattr(drum_mapping, 'hihat_open', stem_note)
-            if stem_type == 'hihat' else stem_note
-        )
         stem_timing_offset = config.get(stem_type, {}).get('timing_offset', 0.0)
         stem_max_duration = config.get(stem_type, {}).get(
             'max_note_duration',
@@ -410,11 +415,7 @@ def rebuild_events_from_analysis(
                 duration = min(events[i + 1]['time'] - ev['time'], stem_max_duration)
             else:
                 duration = config.get('audio', {}).get('default_note_duration', 0.1)
-            ev_note = (
-                stem_note_open
-                if ev.get('hihat_state') == 'open'
-                else stem_note
-            )
+            ev_note = ev.get('note') or stem_note
             midi_events.append({
                 'time': float(midi_time),
                 'note': int(ev_note),
