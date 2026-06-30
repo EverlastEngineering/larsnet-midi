@@ -1,25 +1,22 @@
 /**
- * 08b — Save button UX regression (2026-06-30 followup)
+ * 08b — Save button UX regression (2026-06-30)
  *
- * User followup after the original event-override fix: "the
- * save button appears but goes away in about 1/2 a second."
- *
- * The bug: the Save button's visibility was driven by
- * `eventOverridesDirty`, which the debounced save (500ms) cleared
- * right after the click. The button appeared → disappeared in
- * ~500ms, even though the user hadn't clicked Save yet.
+ * User followup after the event-override fix: "the save button
+ * appears but goes away in about 1/2 a second. i don't think
+ * it ever saves."
  *
  * The fix: split the dirty flag into two:
- *   - `eventOverridesDirty`: in-memory ≠ JSON (cleared by
- *     debounced save; used internally for the debounce trigger).
- *   - `sessionOverridesDirty`: user has unsaved changes waiting
+ *   - eventOverridesDirty: in-memory ≠ JSON (cleared by the
+ *     debounced save after 500ms). Used internally for the
+ *     debounce trigger and the JSON write.
+ *   - sessionOverridesDirty: user has unsaved changes waiting
  *     for Save & Reconvert (cleared only by the sync from the
- *     rebuild response). The Save button checks this.
+ *     rebuild response). Drives the Save button visibility.
  *
  * This test verifies the regression fix:
- *   1. Click event → Save button visible.
- *   2. Wait 1 second (twice the debounce) → button STILL visible
- *      AND sessionOverridesDirty is still true.
+ *   1. Click event → Save button visible (synchronous).
+ *   2. Wait 1 second (twice the debounce) → button STILL
+ *      visible AND sessionOverridesDirty is still true.
  *      eventOverridesDirty is false (cleared by debounce).
  */
 import { test, expect } from "@playwright/test";
@@ -65,7 +62,7 @@ test("Save button stays visible 1s after the cycle click (UX regression)", async
   await expect(snareTab).toHaveClass(/waveform-tab-active/);
   await page.waitForTimeout(300);
 
-  // Reset overrides to a clean slate.
+  // Reset overrides.
   await page.evaluate(async () => {
     const w = (window as any);
     const projectNumber = w.currentProject?.number;
