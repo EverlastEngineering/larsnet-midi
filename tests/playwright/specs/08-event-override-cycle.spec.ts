@@ -114,15 +114,16 @@ test("cycleEventOverride: off → cls 0 → cls 1 → cls 2 → off on snare", a
   // to cls 0, not advances an existing KEPT cls 0 to cls 1). We
   // know there are 1203 FILTERED events; pick one from the
   // dense middle of the song so the test is stable.
-  const firstFilteredTime = await page.waitForFunction(() => {
+  // 2026-06-30: key on frame (integer), not time (string).
+  const firstFilteredFrame = await page.waitForFunction(() => {
     const pga = (window as any).waveformAnalysisData?.()?.stems?.snare?.events_pga;
     if (!pga) return null;
     const filtered = pga
-      .filter((e: any) => e.status === "FILTERED" && e.time > 30)
-      .sort((a: any, b: any) => a.time - b.time)[0];
-    return filtered ? filtered.time : null;
+      .filter((e: any) => e.status === "FILTERED" && e.frame > 10000)
+      .sort((a: any, b: any) => a.frame - b.frame)[0];
+    return filtered ? filtered.frame : null;
   }, { timeout: 15_000 });
-  const timeKey = (await firstFilteredTime.jsonValue() as number).toFixed(4);
+  const timeKey = String(await firstFilteredFrame.jsonValue() as number);
 
   // Reset to a clean slate: delete the file via the API. Don't
   // reload the page (reload wipes waveformAnalysisData and the
@@ -163,7 +164,7 @@ test("cycleEventOverride: off → cls 0 → cls 1 → cls 2 → off on snare", a
       const w = (window as any);
       const pga = w.waveformAnalysisData?.()?.stems?.snare?.events_pga || [];
       const event = pga.find(
-        (e: any) => Math.abs(e.time - parseFloat(timeKey)) < 1e-9
+        (e: any) => parseInt(timeKey) === e.frame
       );
       if (!event) throw new Error("event not found at " + timeKey);
       if (typeof w.cycleEventOverride === "function") {
@@ -271,11 +272,12 @@ test("Save & Reconvert applies override to sidecar and MIDI (Bug 1 fix)", async 
     // Find a FILTERED event in the dense middle of the song.
     const filtered = pga
       .filter((e: any) => e.status === "FILTERED")
-      .find((e: any) => e.time > 30);
-    return filtered ? { time: filtered.time, note: filtered.note } : null;
+      .sort((a: any, b: any) => a.frame - b.frame)
+      .find((e: any) => e.frame > 10000);
+    return filtered ? { frame: filtered.frame, note: filtered.note } : null;
   });
   expect(target).toBeTruthy();
-  const targetKey = target!.time.toFixed(4);
+  const targetKey = String(target!.frame);
 
   // Override: KEPT with classification 1 (rimshot).
   // 2 clicks: FILTERED → KEPT cls 0 → KEPT cls 1.
@@ -283,7 +285,7 @@ test("Save & Reconvert applies override to sidecar and MIDI (Bug 1 fix)", async 
     const w = (window as any);
     const pga = w.waveformAnalysisData?.()?.stems?.snare?.events_pga || [];
     const event = pga.find(
-      (e: any) => Math.abs(e.time - parseFloat(timeKey)) < 1e-9
+      (e: any) => parseInt(timeKey) === e.frame
     );
     if (!event) throw new Error("event not found");
     w.cycleEventOverride("snare", event);  // FILTERED → KEPT cls 0
@@ -313,7 +315,7 @@ test("Save & Reconvert applies override to sidecar and MIDI (Bug 1 fix)", async 
     const w = (window as any);
     const pga = w.waveformAnalysisData?.()?.stems?.snare?.events_pga || [];
     const event = pga.find(
-      (e: any) => Math.abs(e.time - parseFloat(timeKey)) < 1e-9
+      (e: any) => parseInt(timeKey) === e.frame
     );
     return event
       ? { status: event.status, classification: event.classification }
@@ -371,7 +373,7 @@ test("Save & Reconvert applies override to sidecar and MIDI (Bug 1 fix)", async 
     const w = (window as any);
     const pga = w.waveformAnalysisData?.()?.stems?.snare?.events_pga || [];
     const event = pga.find(
-      (e: any) => Math.abs(e.time - parseFloat(timeKey)) < 1e-9
+      (e: any) => parseInt(timeKey) === e.frame
     );
     if (!event) throw new Error("event not found");
     // Currently KEPT cls 1. Cycle backwards: cls 1 → cls 0.

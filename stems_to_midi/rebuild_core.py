@@ -76,8 +76,35 @@ def _classification_thresholds_changed(
 
 
 def _format_time_key(t: float) -> str:
-    """Format a song time as the 4-decimal key used by overrides."""
+    """Format a song time as the 4-decimal key (legacy override
+    key for events without a frame field)."""
     return f"{t:.4f}"
+
+
+def _event_override_key(event: Dict) -> str:
+    """The override key for an event. Uses ``event['frame']``
+    (the integer frame index from the PGA detector) when
+    available; falls back to a 4-decimal time string for
+    legacy data without a frame field.
+
+    2026-06-30: switched from time-string to frame-integer to
+    fix the user-reported "time: 2.954 vs '2.9540' mismatch" —
+    a file with non-4-decimal time keys would never match the
+    lookup. Frame is always an integer (no float-precision
+    issues) and is the canonical per-event identifier.
+
+    Returns the same format the WebUI's
+    ``_eventOverrideKey`` produces (``str(event.frame)`` or
+    ``event.time.toFixed(4)`` fallback), so the Python
+    rebuild path and the JS front-end agree on the key.
+    """
+    frame = event.get('frame')
+    if frame is not None:
+        return str(frame)
+    time = event.get('time')
+    if time is not None:
+        return _format_time_key(time)
+    return ''  # No key — caller should skip
 
 
 def _apply_overrides(
@@ -87,11 +114,12 @@ def _apply_overrides(
     """
     Apply manual overrides to event statuses (legacy path).
 
-    Override keys are time strings rounded to 4 decimals. Each
-    override value is a record: ``{ status: "KEPT"|"FILTERED",
-    [classification]: int }`` — ``status`` is required;
-    ``classification`` is optional. Mutates and returns the same
-    list.
+    Override keys are frame integers (str(event.frame)) per
+    2026-06-30, with a fallback to time strings for legacy
+    data without a frame. Each override value is a record:
+    ``{ status: "KEPT"|"FILTERED", [classification]: int }`` —
+    ``status`` is required; ``classification`` is optional.
+    Mutates and returns the same list.
 
     The modern rebuild path uses ``_move_overridden_events``
     instead, which is a post-filter veto on the KEPT/FILTERED
@@ -106,8 +134,10 @@ def _apply_overrides(
         return events
 
     for event in events:
-        time_key = _format_time_key(event['time'])
-        override = overrides.get(time_key)
+        key = _event_override_key(event)
+        if not key:
+            continue
+        override = overrides.get(key)
         if not override:
             continue
         event['status'] = override['status']
@@ -153,8 +183,11 @@ def _move_overridden_events(
     new_pga_filtered = []
 
     for event in pga_kept:
-        time_key = f"{event['time']:.4f}"
-        override = overrides.get(time_key)
+        key = _event_override_key(event)
+        if not key:
+            new_pga_kept.append(event)
+            continue
+        override = overrides.get(key)
         if override is None:
             new_pga_kept.append(event)
             continue
@@ -176,8 +209,11 @@ def _move_overridden_events(
             new_pga_kept.append(event)
 
     for event in pga_filtered:
-        time_key = f"{event['time']:.4f}"
-        override = overrides.get(time_key)
+        key = _event_override_key(event)
+        if not key:
+            new_pga_filtered.append(event)
+            continue
+        override = overrides.get(key)
         if override is None:
             new_pga_filtered.append(event)
             continue
@@ -432,27 +468,31 @@ def rebuild_events_from_analysis(
         # Skip events the user has overridden — their status is
         # already correct (from _move_overridden_events above), and
         # the filter_reason would be misleading.
-        kept_times = {round(e['time'], 4) for e in pga_kept}
-        filtered_times = {round(e['time'], 4) for e in pga_filtered}
-        override_time_keys = {
-            round(float(t), 4) for t in (stem_overrides or {}).keys()
-        }
+        #
+        # 2026-06-30: switched key from time-string to frame-string
+        # (with time fallback for legacy data). The previous time
+        # key had a dangerous mismatch with files written by the
+        # WebUI (4-decimal) vs files written by hand or other
+        # sources (variable decimals). Frame is always an integer
+        # and is the canonical per-event identifier.
+        kept_keys = {_event_override_key(e) for e in pga_kept}
+        filtered_keys = {_event_override_key(e) for e in pga_filtered}
         for ev in raw_pga_events:
-            t = round(ev['time'], 4)
-            if t in override_time_keys:
+            ev_key = _event_override_key(ev)
+            if not ev_key:
+                continue
+            if ev_key in (stem_overrides or {}):
                 # User override. The status was set correctly
                 # by _move_overridden_events (or by the override
                 # record's `status` field). Drop any existing
                 # filter_reason — the override is the new "why".
-                ev['status'] = (
-                    stem_overrides[_format_time_key(t)]['status']
-                )
+                ev['status'] = stem_overrides[ev_key]['status']
                 ev.pop('filter_reason', None)
                 continue
-            if t in kept_times:
+            if ev_key in kept_keys:
                 ev['status'] = 'KEPT'
                 ev.pop('filter_reason', None)
-            elif t in filtered_times:
+            elif ev_key in filtered_keys:
                 ev['status'] = 'FILTERED'
                 existing_reason = ev.get('filter_reason', '')
                 if (

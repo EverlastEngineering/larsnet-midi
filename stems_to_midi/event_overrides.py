@@ -156,6 +156,27 @@ def save_event_overrides(
     return override_path
 
 
+def _event_key(ev: Dict) -> str:
+    """The override key for an event. Uses ``ev['frame']``
+    (integer frame index from the PGA detector) when
+    available; falls back to a 4-decimal time string for
+    legacy data without a frame field.
+
+    2026-06-30: switched from time-string to frame-integer to
+    fix the user-reported "time: 2.954 vs '2.9540' mismatch" —
+    a file with non-4-decimal time keys would never match the
+    lookup. Frame is always an integer (no float-precision
+    issues) and is the canonical per-event identifier.
+    """
+    frame = ev.get('frame')
+    if frame is not None:
+        return str(frame)
+    time = ev.get('time')
+    if time is not None:
+        return f"{time:.4f}"
+    return ''
+
+
 def clean_overrides(
     overrides: Dict[str, Dict[str, Any]],
     analysis_data: Dict,
@@ -194,18 +215,25 @@ def clean_overrides(
         stem_data = analysis_data.get('stems', {}).get(stem_type, {})
         events_pga = stem_data.get('events_pga', [])
 
-        # Build a quick lookup: time_str -> event (events_pga is
-        # the canonical post-2026-06-15 source for status +
-        # classification).
-        events_by_time: Dict[str, Dict] = {}
+        # Build a quick lookup: frame_str (or time_str fallback)
+        # -> event. events_pga is the canonical post-2026-06-15
+        # source for status + classification.
+        #
+        # 2026-06-30: switched from time-string to frame-integer
+        # (with time fallback) — the user reported that the
+        # 4-decimal time key in the WebUI ("2.9540") didn't match
+        # manually-edited files with 3-decimal keys ("2.954").
+        # Frame is always an integer, no rounding issues.
+        events_by_key: Dict[str, Dict] = {}
         for ev in events_pga:
-            if ev.get('time') is None:
+            key = _event_key(ev)
+            if not key:
                 continue
-            events_by_time[f"{ev['time']:.4f}"] = ev
+            events_by_key[key] = ev
 
         kept: Dict[str, Any] = {}
-        for time_str, override in (stem_overrides or {}).items():
-            sidecar_event = events_by_time.get(time_str)
+        for over_key, override in (stem_overrides or {}).items():
+            sidecar_event = events_by_key.get(over_key)
             if sidecar_event is None:
                 # Event no longer in the sidecar. Drop the
                 # override — it's referencing a ghost event.
@@ -216,7 +244,7 @@ def clean_overrides(
             sidecar_status = sidecar_event.get('status')
             if override_status != sidecar_status:
                 # Override disagrees with the filter — keep.
-                kept[time_str] = override
+                kept[over_key] = override
                 continue
 
             # Status matches. Check classification if the
@@ -234,7 +262,7 @@ def clean_overrides(
 
             # Classification override disagrees with sidecar.
             # Keep.
-            kept[time_str] = override
+            kept[over_key] = override
 
         if kept:
             cleaned[stem_type] = kept

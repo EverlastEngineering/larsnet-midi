@@ -1212,14 +1212,17 @@ function updateSessionSaveButton() {
     }
 
     // 2026-06-30: event overrides (per-event click cycle) are
-    // another source of unsaved changes. eventOverridesDirty is
-    // set in waveform.js whenever cycleEventOverride runs. The
-    // debounced save (500ms) writes the override to disk; after
-    // the save, eventOverridesDirty is cleared. So this flag
-    // captures "the user clicked something the server hasn't
-    // seen yet" — that's still unsaved.
-    if (!hasChanges && typeof window.eventOverridesDirty === 'function'
-        && window.eventOverridesDirty()) {
+    // 2026-06-30: another source of unsaved changes —
+    // sessionOverridesDirty, set in waveform.js whenever the
+    // user clicks an event. Unlike eventOverridesDirty (which
+    // the debounced save clears), sessionOverridesDirty stays
+    // set until the user clicks Save & Reconvert (which
+    // commits the override to the MIDI via the server rebuild).
+    // This is the fix for the "Save button disappears in 1/2
+    // second" UX bug — the button now stays visible until the
+    // user actually commits.
+    if (!hasChanges && typeof window.sessionOverridesDirty === 'function'
+        && window.sessionOverridesDirty()) {
         hasChanges = true;
     }
 
@@ -1331,14 +1334,27 @@ function buildConfigUpdates(stemType) {
 async function saveTuningAndReconvert() {
     if (!currentProject || !waveformActiveStem) return;
 
-    const btn = document.getElementById('tuning-save-btn');
+    // 2026-06-30: the Save button at the top of the analysis
+    // section (`#session-save-btn`) is reachable even when the
+    // Tune panel is closed. The user might have ONLY override
+    // changes (no config slider changes). In that case,
+    // `buildConfigUpdates` returns [] and the function used
+    // to bail with "No changes to save" — but the override
+    // changes still need to be committed. Skip the early return
+    // when there are overrides to commit; just skip Step 1
+    // (config update) in that case.
     const stemType = waveformActiveStem;
     const updates = buildConfigUpdates(stemType);
+    const hasOverrides = typeof window.eventOverrides === 'object'
+        && window.eventOverrides
+        && Object.keys(window.eventOverrides).length > 0;
 
-    if (updates.length === 0) {
+    if (updates.length === 0 && !hasOverrides) {
         showToast('No changes to save', 'info');
         return;
     }
+
+    const btn = document.getElementById('tuning-save-btn');
 
     // Disable button during save
     if (btn) {
@@ -1347,14 +1363,16 @@ async function saveTuningAndReconvert() {
     }
 
     try {
-        // Step 1: Save config changes
-        await api.updateConfig(currentProject.number, 'midiconfig', updates);
-        // Re-fetch the live yaml so tuningConfig reflects the
-        // committed values (the Save button reset below clears
-        // tuningSliderValues, so the next panel open will read
-        // straight from tuningConfig). 2026-06-15.
-        await loadTuningConfig(stemType);
-        showToast(`Saved ${updates.length} threshold${updates.length > 1 ? 's' : ''} for ${stemType}`, 'success');
+        // Step 1: Save config changes (only if there are any)
+        if (updates.length > 0) {
+            await api.updateConfig(currentProject.number, 'midiconfig', updates);
+            // Re-fetch the live yaml so tuningConfig reflects the
+            // committed values (the Save button reset below clears
+            // tuningSliderValues, so the next panel open will read
+            // straight from tuningConfig). 2026-06-15.
+            await loadTuningConfig(stemType);
+            showToast(`Saved ${updates.length} threshold${updates.length > 1 ? 's' : ''} for ${stemType}`, 'success');
+        }
 
         // Step 2: Try fast rebuild from cached analysis
         if (btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Rebuilding…';

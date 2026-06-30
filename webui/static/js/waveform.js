@@ -161,13 +161,23 @@ let audioPlaybackTime = null; // time (in song seconds) where playback started
 let audioStartContextTime = null; // audioCtx.currentTime when playback started
 let playbackAnimFrameId = null;   // requestAnimationFrame ID for playback indicator
 
-// Event override state: { stemType: { "1.2345": { status, [classification] } } }
+// Event override state: { stemType: { "<frame>": { status, [classification] } } }
 // Each override record carries at minimum a `status` ("KEPT"|"FILTERED").
 // An optional `classification` is set when the user has cycled past the
 // first "on" state via cycleEventOverride. The classification drives the
 // per-event note via the standard classify_notes path on rebuild.
+//
+// 2026-06-30: keys are now frame integers (str(frame)) instead of
+// time strings (time.toFixed(4)). Frame is the canonical per-event
+// identifier and avoids the float-precision mismatch the user hit
+// when the file was written with "2.954" but the lookup used
+// "2.9540". See _eventOverrideKey below.
 let eventOverrides = {};
+// in-memory ≠ JSON (cleared by the debounced save)
 let eventOverridesDirty = false;
+// user has unsaved changes waiting for Save & Reconvert
+// (cleared only by saveTuningAndReconvert's server sync)
+let sessionOverridesDirty = false;
 let eventOverridesSaveTimer = null;
 
 // ─── Loading Indicator ───────────────────────────────────────────────────
@@ -240,6 +250,7 @@ async function initWaveformViewer(project) {
     audioBufferCache = {};
     eventOverrides = {};
     eventOverridesDirty = false;
+    sessionOverridesDirty = false;
     // Clear all tuning state so fresh project loads with logic-block defaults
     tuningSliderValues = {};
     clusterNoteOverrides = {};
@@ -2144,10 +2155,12 @@ async function loadEventOverrides() {
     }
     applyOverridesToEvents();
     // After loading, the in-memory `eventOverrides` matches
-    // what's on disk — not dirty. Make sure the Save button
-    // reflects this. (Tuning changes are tracked separately by
-    // threshold-tuning.js.)
+    // what's on disk — not dirty. The session-dirty flag is
+    // also cleared (we just committed the previous session by
+    // loading). Tuning changes are tracked separately by
+    // threshold-tuning.js.
     eventOverridesDirty = false;
+    sessionOverridesDirty = false;
     if (typeof window.updateSessionSaveButton === 'function') {
         window.updateSessionSaveButton();
     }
@@ -2182,15 +2195,23 @@ function applyOverridesToEvents() {
 
         // Apply to events_pga (the canonical post-2026-06-15
         // source) AND to events_configured / events_sensitive
-        // (legacy). Same time key matches all three lists.
+        // (legacy). Same frame key matches all three lists.
         const allEvents = [
             ...(stemData.events_pga || []),
             ...(stemData.events_configured || []),
             ...(stemData.events_sensitive || []),
         ];
         for (const event of allEvents) {
-            if (event.time == null) continue;
-            const key = event.time.toFixed(4);
+            // 2026-06-30: key on `event.frame` (integer) instead
+            // of `event.time.toFixed(4)` (string). The previous
+            // time-based key had a dangerous mismatch: the JSON
+            // could have keys like "2.954" (3-decimal) that didn't
+            // match the 4-decimal format produced by toFixed(4).
+            // Frame is an integer, no rounding issues, and is
+            // stable across precision changes. Falls back to
+            // time-string key for legacy data that doesn't
+            // have a frame.
+            const key = _eventOverrideKey(event);
             const override = stemOverrides[key];
             if (!override) continue;
             event.status = override.status;
@@ -2200,6 +2221,23 @@ function applyOverridesToEvents() {
             event._overridden = true;
         }
     }
+}
+
+/**
+ * The override key for an event. Uses `event.frame` when
+ * available (the canonical integer frame index from the
+ * detector); falls back to `event.time.toFixed(4)` for legacy
+ * data without a frame field.
+ *
+ * 2026-06-30: switched from time-string to frame-integer to fix
+ * the user-reported "time: 2.954 vs '2.9540' mismatch" — a file
+ * with non-4-decimal time keys would never match the lookup.
+ * Frame is always an integer (no float precision issues) and
+ * is the canonical per-event identifier.
+ */
+function _eventOverrideKey(event) {
+    if (event.frame != null) return String(event.frame);
+    return event.time.toFixed(4);
 }
 
 /**
@@ -2242,7 +2280,9 @@ function collectClassesForStem(stemType) {
 function cycleEventOverride(stemType, event) {
     if (!event || event.time == null) return;
 
-    const key = event.time.toFixed(4);
+    // 2026-06-30: key on frame (integer) instead of time.toFixed(4)
+    // (string). See _eventOverrideKey for the rationale.
+    const key = _eventOverrideKey(event);
     if (!eventOverrides[stemType]) eventOverrides[stemType] = {};
     const existing = eventOverrides[stemType][key] || {};
     const currentStatus = existing.status || event.status;
@@ -2326,11 +2366,12 @@ function cycleEventOverride(stemType, event) {
     drawWaveform();
 
     // 2026-06-30: light up the session-dirty Save button at the
-    // top of the analysis section. The debounced save will clear
-    // eventOverridesDirty 500ms later, and the saveTuningAndReconvert
-    // call from clicking the Save button will sync the in-memory
-    // state from the server (via syncEventOverridesFromServer),
-    // which clears the dirty flag too.
+    // top of the analysis section. The debounced save clears
+    // eventOverridesDirty 500ms later (in-memory ↔ JSON in
+    // sync), but sessionOverridesDirty stays set until the user
+    // commits via Save & Reconvert. This is the UX fix the
+    // user asked for: the Save button stays visible until they
+    // actually click it.
     if (typeof window.updateSessionSaveButton === 'function') {
         window.updateSessionSaveButton();
     }
@@ -2338,15 +2379,16 @@ function cycleEventOverride(stemType, event) {
 
 function scheduleOverrideSave() {
     eventOverridesDirty = true;
+    // 2026-06-30: sessionOverridesDirty is set here (and in
+    // cycleEventOverride above) so the Save button lights up
+    // immediately. It is NOT cleared by the debounced save —
+    // only by saveTuningAndReconvert (which syncs the in-memory
+    // state from the server's cleaned dict). This way the
+    // button stays visible until the user actually commits.
+    sessionOverridesDirty = true;
     clearTimeout(eventOverridesSaveTimer);
     eventOverridesSaveTimer = setTimeout(saveEventOverrides, 500);
 
-    // Mark session dirty so the Save button lights up
-    // immediately. After the debounced save runs, the
-    // eventOverridesDirty flag is cleared (in saveEventOverrides
-    // below) — but the in-memory override is still active, so the
-    // Save button stays lit until the user clicks Save or closes
-    // the project.
     if (typeof window.updateSessionSaveButton === 'function') {
         window.updateSessionSaveButton();
     }
@@ -2359,6 +2401,10 @@ async function saveEventOverrides() {
     if (!currentProject || !eventOverridesDirty) return;
     try {
         await api.saveEventOverrides(currentProject.number, eventOverrides);
+        // Clear the in-memory ≠ JSON flag. The session-dirty flag
+        // stays set so the Save button remains visible — the
+        // user still needs to click Save & Reconvert for the
+        // override to reach the MIDI.
         eventOverridesDirty = false;
         if (typeof window.updateSessionSaveButton === 'function') {
             window.updateSessionSaveButton();
@@ -2379,10 +2425,28 @@ function syncEventOverridesFromServer(cleaned) {
     if (cleaned && typeof cleaned === 'object') {
         eventOverrides = cleaned;
         eventOverridesDirty = false;
+        // 2026-06-30: sync from the server means the rebuild
+        // has run. The in-memory state now matches the server's
+        // cleaned dict. The session is no longer dirty — the
+        // user's changes have been committed to the MIDI.
+        sessionOverridesDirty = false;
+        // Re-evaluate the Save button. The button's hidden
+        // state is sticky (toggled by updateSessionSaveButton),
+        // so without this call the button would stay visible
+        // after the sync even though sessionOverridesDirty is
+        // now false.
+        if (typeof window.updateSessionSaveButton === 'function') {
+            window.updateSessionSaveButton();
+        }
     }
 }
 window.syncEventOverridesFromServer = syncEventOverridesFromServer;
+window.eventOverrides = eventOverrides;  // For saveTuningAndReconvert
+                                       // to detect "user has overrides to
+                                       // commit even when no config
+                                       // updates".
 window.eventOverridesDirty = () => eventOverridesDirty;
+window.sessionOverridesDirty = () => sessionOverridesDirty;
 window.cycleEventOverride = cycleEventOverride;
 window.collectClassesForStem = collectClassesForStem;
 // Exposed for tests; lets a Playwright spec read the current
