@@ -1201,27 +1201,32 @@ function getEventColor(event) {
         if (event.hihat_state === 'open') return HIHAT_OPEN_COLOR;
         if (event.hihat_state === 'closed') return HIHAT_CLOSED_COLOR;
     }
-    // Percentile-gated broad-attack events get the dedicated violet
-    // (2026-06-10). PGA is a THIRD complementary detector; it runs
-    // alongside energy + spectral but isn't part of the
-    // energy-vs-spectral A/B comparison. The violet is always-on
-    // for these events — there's no overlay flag because PGA isn't
-    // mixed into the configured pipeline at all. See
-    // percentile_gated_detector.py for the algorithm.
-    if (event.method === 'percentile_gated') {
-        return WAVEFORM_COLORS.markerPga;
-    }
-    // 2026-06-19: gate the per-classification color overlay on
-    // the toggle (same flag as the hihat open/closed branch
-    // above). When the toggle is off, every KEPT event falls
-    // through to the default green (or its method-based color)
-    // regardless of classification value. The hihat branch is
-    // already gated above; this is the catch-all for other
-    // stems' cluster-id classifications.
+    // 2026-06-30: classification wins over the PGA-method marker.
+    // Previously the PGA check came first, so every PGA event
+    // rendered violet regardless of classification — that hid
+    // the 3 different snare classes (cls 0, 1, 2 → notes 38,
+    // 37, 39) under a single violet color. Swapping the order
+    // means: a PGA event with a classification index renders
+    // in the classification palette (snare 0 = green, 1 =
+    // purple, 2 = cyan), a PGA event WITHOUT a classification
+    // (e.g. kick, toms) falls through to the violet marker.
+    // The classification palette is the visual identity the
+    // user has learned to look for on the tuning panel; the
+    // violet marker is a fallback for events that have no
+    // classification metadata.
     if (classEnabled
         && event.classification != null
         && CLASSIFICATION_COLORS[event.classification]) {
         return CLASSIFICATION_COLORS[event.classification];
+    }
+    // Percentile-gated broad-attack events get the dedicated violet
+    // (2026-06-10). PGA is a THIRD complementary detector; it runs
+    // alongside energy + spectral but isn't part of the
+    // energy-vs-spectral A/B comparison. The violet is the
+    // fallback for PGA events that DON'T have a classification
+    // (i.e. stems with k-means disabled or single-class output).
+    if (event.method === 'percentile_gated') {
+        return WAVEFORM_COLORS.markerPga;
     }
     return WAVEFORM_COLORS.markerKept;
 }

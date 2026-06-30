@@ -171,3 +171,86 @@ test("kick renders violet both before and after a slider drag", async ({
     `after a slider drag, breaking the unified render.`
   ).toBeGreaterThan(violetBefore * 0.5);
 });
+
+/** Count pixels close to a CSS color (rgb 0-255). */
+async function countPixelsOfColor(
+  page: any,
+  r: number, g: number, b: number,
+  tolerance: number = 20,
+): Promise<number> {
+  return await page.evaluate(
+    ([r, g, b, t]: [number, number, number, number]) => {
+      const canvas = document.getElementById("events-canvas");
+      if (!canvas) return -1;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return -1;
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      let n = 0;
+      for (let i = 0; i < img.data.length; i += 4) {
+        const pr = img.data[i], pg = img.data[i + 1], pb = img.data[i + 2], a = img.data[i + 3];
+        if (a < 200) continue;
+        if (Math.abs(pr - r) < t && Math.abs(pg - g) < t && Math.abs(pb - b) < t) n++;
+      }
+      return n;
+    },
+    [r, g, b, tolerance],
+  );
+}
+
+test("snare renders 3 classification colors (green/purple/cyan)", async ({
+  page,
+}) => {
+  // User report (2026-06-30 follow-up): after the unified-rendering
+  // fix, the 3 different snare classes (cls 0, 1, 2 → notes 38,
+  // 37, 39) were no longer visible — all rendered violet because
+  // the PGA-method check won over the classification check in
+  // getEventColor. The fix swaps the order so classification wins.
+
+  await page.goto("/");
+  await expect(page.getByText("Transform Drum Tracks into MIDI")).toBeVisible({
+    timeout: 15_000,
+  });
+
+  const projectItem = page
+    .locator(".project-item")
+    .filter({ hasText: FIXTURE_PROJECT_NAME })
+    .first();
+  await expect(projectItem).toBeVisible({ timeout: 10_000 });
+  await projectItem.click();
+
+  const analysisSection = page.locator("#analysis-section");
+  await expect(analysisSection).toBeVisible({ timeout: 20_000 });
+
+  const eventsCanvas = page.locator("#events-canvas");
+  await eventsCanvas.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(300);
+
+  const snareTab = page.locator('.waveform-stem-tab[data-stem="snare"]').first();
+  await expect(snareTab).toBeVisible({ timeout: 15_000 });
+  await snareTab.click();
+  await expect(snareTab).toHaveClass(/waveform-tab-active/);
+  await page.waitForTimeout(500);
+
+  // Snare in project 6 has 3 classes: cls 0 (119 evts, note 38),
+  // cls 1 (113 evts, note 37), cls 2 (15 evts, note 39).
+  // CLASSIFICATION_COLORS: 0 = #10b981 (green), 1 = #a855f7 (purple),
+  // 2 = #22d3ee (cyan). All three should be visible on the canvas.
+
+  const green = await countPixelsOfColor(page, 0x10, 0xb9, 0x81);  // #10b981 cls 0
+  const purple = await countPixelsOfColor(page, 0xa8, 0x55, 0xf7); // #a855f7 cls 1
+  const cyan = await countPixelsOfColor(page, 0x22, 0xd3, 0xee);   // #22d3ee cls 2
+
+  console.log(`snare classification pixels:  green=${green} purple=${purple} cyan=${cyan}`);
+
+  await page.screenshot({
+    path: path.join(SNAPSHOT_DIR, "03-snare-classifications.png"),
+    fullPage: false,
+  });
+
+  // Each class should produce a non-trivial number of pixels
+  // (cls 2 has only 15 events so its count will be the smallest
+  // — generous threshold to allow for any test environment).
+  expect(green, "snare cls 0 (note 38) should render green").toBeGreaterThan(50);
+  expect(purple, "snare cls 1 (note 37) should render purple").toBeGreaterThan(50);
+  expect(cyan, "snare cls 2 (note 39) should render cyan").toBeGreaterThan(10);
+});
