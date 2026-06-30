@@ -105,6 +105,12 @@ from .filter_kinds import (
     evaluate_filter,
     build_filter_reason as _build_filter_reason,
 )
+# 2026-06-29: hihat "openness" score stamping (TEST viability hook).
+# Stamp the per-event openness score on raw PGA events BEFORE any
+# filter runs, so the user can see the score distribution across
+# KEPT/FILTERED events in the sidecar. Lazy-imports librosa inside
+# the wrapper so non-hihat stems don't pay the cold-path cost.
+from .note_classification_core import stamp_hihat_openness_score
 
 
 __all__ = [
@@ -1604,6 +1610,19 @@ def _build_pga_events_with_filter(
     )
 
     raw = detect_pga_events(audio_mono, sr, config, stem_type=stem_type)
+    # 2026-06-29: TEST-only — hihat openness score (stamped BEFORE
+    # the filter chain so KEPT and FILTERED events both carry it,
+    # letting the user see how noise / FPs score on the openness
+    # axis). Stamps `hihat_openness_score` (float in [0, 1]) on
+    # every event that has a 'frame' field. Recomputes the mel-spec
+    # internally — duplicative with the KMeans classifier's mel-spec
+    # (which runs in classify_hihat_by_kmeans downstream), but the
+    # classifier only stamps KEPT events so this can't be reused.
+    # Future: cache the mel-spec in pga_debug and pass it through
+    # to avoid the duplicate compute — only worth doing once the
+    # test confirms the score is viable.
+    if stem_type == 'hihat':
+        stamp_hihat_openness_score(raw, audio_mono, sr)
     # 2026-06-22: envelope_value filter (Pass 0.4). Sister
     # to the prominence filter but uses the linear
     # envelope_value at the peak frame (set by

@@ -815,13 +815,30 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
     # project (p10=2.02, p90=3.41, closed hits 3.4-3.6, open
     # hits 0.7). The fallback 2.0 is intentionally conservative
     # — raise it to favor "open" calls, lower it to favor "closed".
+    # 2026-06-29: DEPRECATED — hihat_openness_score_threshold
+    # (below) replaces this as the production rule. The schema
+    # entry is retained so older project configs don't fail to
+    # parse, but the WebUI no longer surfaces a slider and
+    # classify_hihat_notes only consults this value when
+    # ``hihat_openness_score`` is missing on the event (older
+    # sidecars from before 2026-06-29). Pinning the key here
+    # means migration is keyed off this exact ``yaml_path``
+    # string; do NOT rename without bumping a migration tool.
     SettingDefinition(
         key='hihat_open_decay_slope_max',
         type=SettingType.FLOAT,
         default=2.0,
-        label='Open Hi-Hat Decay Slope Max',
-        description='Maximum broadband-envelope decay slope (dB/frame) for an open hihat hit. Closed hihats decay fast (slope 3.4-3.6) — open hihats ring out so the next strike cuts in before the envelope drops, giving a shallow slope (0.7-1.4). Events with decay_slope_db < threshold are classified open. Default 2.0 is the population p50 across all KEPT hihats in the Taylor Swift project.',
+        label='Open Hi-Hat Decay Slope Max (deprecated)',
+        description='DEPRECATED 2026-06-29 — replaced by ``hihat_openness_score_threshold``. Kept here so legacy project configs parse without a migration step. classify_hihat_notes only consults this value when the event has no ``hihat_openness_score`` (older sidecars from before 2026-06-29).',
         category=SettingCategory.HIHAT,
+        # 2026-06-29: no slider rendered — the schema entry is
+        # retained for backwards-compatible YAML parsing but the
+        # threshold-tuning.js STEM_SLIDER_CONFIGS list no longer
+        # includes this key, so the WebUI doesn't render a
+        # widget. ``SLIDER`` here is a safe placeholder since the
+        # only consumers are the CLI flag generator (which
+        # doesn't read ui_control) and the WebUI schema render
+        # (which filters by STEM_SLIDER_CONFIGS membership).
         ui_control=UIControl.SLIDER,
         min_value=0.0,
         max_value=10.0,
@@ -829,6 +846,37 @@ SETTINGS_REGISTRY: List[SettingDefinition] = [
         unit='dB/frame',
         yaml_path=['hihat', 'open_decay_slope_max'],
         cli_flag='--hihat-open-decay-slope-max',
+        advanced=True,
+    ),
+
+    # 2026-06-29: hihat_openness_score_threshold replaces the
+    # decay-slope rule as the production open/closed classifier.
+    # ``hihat_openness_score`` is stamped on every detected
+    # hihat event at detect time (BEFORE the filter chain — see
+    # pga_event_builder._build_pga_events_with_filter) by
+    # note_classification_core.stamp_hihat_openness_score. Score
+    # = 0.7 × normalized mid-band tail energy + 0.3 × normalized
+    # decay gradient, clamped to [0, 1]. Events with
+    # ``hihat_openness_score >= threshold`` are classified open.
+    # Threshold 0.8 was selected empirically on the Taylor Swift
+    # (project 6) reference: the KMeans open-rate climbs from
+    # ~11% at score 0.4-0.6 to ~33% at score 0.8+, so 0.8 maps
+    # cleanly to the top open-bucket. Lower to 0.6 for a more
+    # aggressive open call; raise to 0.9 for stricter opens.
+    SettingDefinition(
+        key='hihat_openness_score_threshold',
+        type=SettingType.FLOAT,
+        default=0.8,
+        label='Open Hi-Hat Openness Score',
+        description='Minimum ``hihat_openness_score`` (0..1) for an event to be classified as open. The score = 0.7 × normalized mid-band tail energy + 0.3 × normalized decay gradient, clamped to [0, 1]. Stamped on every detected hihat event by note_classification_core.stamp_hihat_openness_score. Empirical default 0.8 selected on the Taylor Swift (project 6) reference: KMeans open-rate climbs from ~11% (score 0.4-0.6) to ~33% (score 0.8+). Lower toward 0.6 for more aggressive open calls; raise toward 0.9 for stricter opens.',
+        category=SettingCategory.HIHAT,
+        ui_control=UIControl.SLIDER,
+        min_value=0.0,
+        max_value=1.0,
+        step=0.05,
+        unit='score',
+        yaml_path=['hihat', 'openness_score_threshold'],
+        cli_flag='--hihat-openness-score-threshold',
     ),
 
 

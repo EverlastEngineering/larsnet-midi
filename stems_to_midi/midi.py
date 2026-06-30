@@ -342,6 +342,41 @@ def _serialize_onset_events(
             if value is not None:
                 event[field] = _round_value(value, 4)
 
+        # 2026-06-29: dynamic passthrough for per-event diagnostic
+        # fields NOT in the OPTIONAL_PHASE2_FIELDS allowlist above.
+        # Previously, every new per-event field required editing
+        # this serializer (e.g. ``hihat_openness_score`` and the
+        # KMeans classifier's ``hihat_kmeans_*`` fields silently
+        # disappeared into the sidecar). Any key the explicit
+        # passes already wrote is skipped; everything else survives
+        # at 4-decimal rounding, matching the OPTIONAL convention.
+        # Numpy 0-dim scalars get coerced via .item(); multi-dim
+        # arrays are still skipped (the KMeans feature vector is
+        # 1-D and would need explicit .tolist() — left for whoever
+        # actually wants to inspect it post-hoc).
+        for k, v in onset_data.items():
+            if k in event:
+                continue
+            if v is None:
+                continue
+            if isinstance(k, str) and k.startswith('_'):
+                continue  # private — should not land in the sidecar
+            # Coerce numpy 0-dim scalars to native Python.
+            if hasattr(v, 'item') and callable(v.item):
+                try:
+                    v = v.item()
+                except (ValueError, TypeError):
+                    continue
+            if isinstance(v, bool):
+                event[k] = v
+            elif isinstance(v, (int, float)):
+                event[k] = _round_value(v, 4)
+            elif isinstance(v, str):
+                event[k] = v
+            elif isinstance(v, (list, dict)):
+                event[k] = v
+            # else: skip (n-dim arrays, custom objects, etc.)
+
         # Stem-relevant features — always present, with null when missing
         # so downstream consumers (WebUI, scripts) can rely on the key
         # existing in every event.
@@ -531,6 +566,38 @@ def _serialize_pga_events(pga_events: list) -> list:
             'delta5_stability': _round_value(ev.get('delta5_stability'), 4),
             'combined_score': _round_value(ev.get('combined_score'), 4),
         })
+        # 2026-06-29: dynamic passthrough for per-event fields NOT
+        # in the explicit dict above. Avoids allowlist maintenance
+        # for every new diagnostic field (hihat_openness_score,
+        # hihat_kmeans_*, future additions). Anything the explicit
+        # pass already wrote is skipped; everything else lands at
+        # 4-decimal rounding (matches the OPTIONAL convention used
+        # by _serialize_onset_events). Keys starting with '_'
+        # (private) and None values are dropped. n-dim numpy
+        # arrays (e.g. the 3-element KMeans feature vector) still
+        # need explicit .tolist() in their callers if they want
+        # to round-trip — left for whoever actually needs that.
+        for k, v in ev.items():
+            if k in out[-1]:
+                continue
+            if v is None:
+                continue
+            if isinstance(k, str) and k.startswith('_'):
+                continue
+            if hasattr(v, 'item') and callable(v.item):
+                try:
+                    v = v.item()
+                except (ValueError, TypeError):
+                    continue
+            if isinstance(v, bool):
+                out[-1][k] = v
+            elif isinstance(v, (int, float)):
+                out[-1][k] = _round_value(v, 4)
+            elif isinstance(v, str):
+                out[-1][k] = v
+            elif isinstance(v, (list, dict)):
+                out[-1][k] = v
+            # else: skip (n-dim arrays, custom objects, etc.)
     return out
 
 

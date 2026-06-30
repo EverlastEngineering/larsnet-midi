@@ -88,3 +88,90 @@
 - **Files**: `stems_to_midi/midi.py` (`save_contrast_envelope`, `load_contrast_envelope`), `stems_to_midi/pga_event_builder.py` (return debug dict with envelope; per-event walk fields added), `stems_to_midi/processing_shell_percentile_gated.py` (forward `pga_envelope_data` to CLI), `stems_to_midi_cli.py` (save npz after analysis), `scripts/walk_kept_events.py` (post-hoc walk tool, exploratory).
 - **Follow-up**: WebUI slider for the slope threshold; production `classify_hihat_by_decay_slope` rule that consumes the per-event slope fields from the sidecar.
 
+
+## Bug: pga_min_combined_score at "off" position filters everything
+- **Status**: Open
+- **Priority**: High
+- **Description**: When the slider is at the far-left (off / 0.0), the warble filter
+  ends up filtering every kept event instead of being a no-op. The user
+  expects: at the off position, the filter is disabled (no events filtered,
+  key removed from yaml); at any positive value, the filter applies (events with
+  combined_score < threshold are filtered). Currently, threshold=0 is treated as
+  the strictest filter and every event with combined_score < 0 is dropped —
+  but at the off position the user clearly wants no filter applied.
+- **Expected behavior**:
+  - Slider at off (far left): no filtering, key removed from yaml on save.
+  - Slider > off: key saved to yaml with the slider value, filter applies.
+  - Display: slider UI shows the off indicator when at the leftmost position.
+- **Files to change**:
+  - `webui/static/js/threshold-tuning.js`: SLIDER_RENDER_VALUE shows
+    "off" when value=0, slider snaps to 0 with step matching the data, and
+    the save call (buildConfigUpdates) omits pga_min_combined_score from
+    the updates list when value=0.
+  - `stems_to_midi/filter_registry.json` or `pga_event_builder.py`: when
+    threshold=0 is read from yaml, skip the filter entirely. Mirrors the
+    Python convention of treating 0 as a "disabled sentinel" for these
+    "off / disabled" filters (see `band_max_ratio_max` and `show_only_snap_events`).
+  - `stems_to_mdi/rebuild_core.py` or `rebuild_shell.py`: when reading the
+    config for rebuild, treat 0 as "filter disabled" and skip the call
+    (preserves current behavior for the 0.0 default).
+- **Test**: 05-warble-rebuild.spec.ts add a case where threshold=0 and
+  assert the Kept count matches the no-filter baseline (i.e., no events
+  are dropped). 04-combined-score.spec.ts add an assertion that the
+  default value when yaml omits the key is 0.0 (no filter) and the test
+  confirms the spec returns the registry fallback.
+- **Reproduction**:
+  1. Open the project 10 tuning slideout, move combined_score slider
+     to 0.0, save.
+  2. Inspect sidecar: all kept events with negative combined_score are
+     dropped, leaving a sparse set (should be a no-op).
+  3. Move the slider to 100, save. Verify all those events return.
+  4. Move the slider to 0 again. Verify no events are dropped.
+- **User-visible contract**: the slider should not apply any filter at
+  threshold=0; the saved yaml should not contain pga_min_combined_score
+  at all when the user puts the slider to the off position.
+
+## Bug: "Show Filtered" toggle does not trigger updateEvents when slideout is closed
+- **Status**: Open
+- **Priority**: High
+- **Description**: The "Show Filtered" toggle (which controls whether filtered
+  events appear faded in the waveform) works when the slideout is open and
+  a slider value is being moved. But when the slideout is closed and
+  the user toggles "Show Filtered", the events do NOT show their filtered
+  state. They only update after opening the slideout and touching a
+  slider — the slider change handler triggers the updateEvents function
+  that the toggle click handler does not.
+- **Expected behavior**: Toggling "Show Filtered" (whether the slideout is
+  open or closed) should immediately trigger the events re-render so
+  filtered events appear faded or full-color consistently.
+- **Likely cause**: The toggle button has a click handler that
+  updates tuningShowFiltered (in-memory state) but does not call
+  applyTuningFilter() or updateEvents(). The slider change handler does
+  call applyTuningFilter(), which is why moving a slider works.
+- **Files to change**:
+  - `webui/static/js/threshold-tuning.js`: the click handler for the
+    show-filtered toggle (likely in toggleTuningShowFiltered or wherever
+    the "Show Filtered" button is wired) must call applyTuningFilter()
+    after updating tuningShowFiltered. Look for the pattern used by the
+    slider oninput handler (which calls applyTuningFilter() and then
+    re-applies the events) and copy that flow into the click handler.
+  - Verify that any other toggle handler in the slideout (e.g. the
+    snap-mask toggle) has the same issue and apply the same fix
+    consistently.
+- **Reproduction**:
+  1. Close the slideout.
+  2. Toggle "Show Filtered" on.
+  3. The waveform does not update — filtered events are NOT faded
+     (or are already hidden, depending on the prior state).
+  4. Open the slideout, touch any slider (without changing its value).
+  5. The waveform updates — events now show their filtered state.
+- **Test**: write a Playwright spec (probably as part of 03- or a
+  new -waveform-events.spec.ts) that:
+  1. Opens project 10 hihat
+  2. Toggles "Show Filtered" while the slideout is closed
+  3. Asserts that events on the waveform show their filtered
+     state (e.g. opacity < 1.0 for filtered events)
+  4. Toggles it off and asserts opacity returns to 1.0
+- **User-visible contract**: the Show Filtered toggle should trigger
+  a re-render regardless of slideout state. Same fix should apply to any
+  other toggle/checkbox in the slideout.

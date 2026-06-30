@@ -33,11 +33,12 @@ async function _ensureFilterRegistryLoaded() {
 
             // 2026-06-19: cache the classification sliders
             // (open_geomean_min, open_sustain_ms,
-            // open_decay_slope_max, expected_clusters,
-            // cluster_feature) BEFORE the registry override —
-            // they live in the hard-coded STEM_SLIDER_CONFIGS
-            // because they don't fit the filter-registry shape
-            // (they re-label KEPT events, not filter them). The
+            // openness_score_threshold,
+            // expected_clusters, cluster_feature) BEFORE the
+            // registry override — they live in the hard-coded
+            // STEM_SLIDER_CONFIGS because they don't fit the
+            // filter-registry shape (they re-label KEPT events,
+            // not filter them). The
             // registry override below replaces the entire array
             // for PGA-pipeline stems, so without this cache
             // + restore, the WebUI would silently lose all
@@ -154,12 +155,25 @@ const STEM_SLIDER_CONFIGS = {
         { key: 'pga_min_prominence', label: 'PGA Min Prominence', min: 0, max: 10000, step: 100, fallback: 1000, unit: '', yamlPath: ['toms', 'pga_min_prominence'] }
     ],
     hihat: [
-        // 2026-06-19: broadband-envelope decay-slope classifier.
-        // ``decay_slope_db`` is the per-frame dB drop from the
-        // event's peak forward — closed hihats decay fast
-        // (3.4-3.6 dB/frame); open hihats ring out and the next
-        // strike cuts in before the envelope drops (0.7-1.4).
-        // Events with slope < threshold are classified open.
+        // 2026-06-29: openness-score classifier (REPLACES the
+        // decay-slope rule that lived here through 2026-06-28).
+        // ``hihat_openness_score`` is stamped on every detected
+        // hihat event at detect time by
+        // note_classification_core.stamp_hihat_openness_score
+        // (score = 0.7 × normalized mid-band tail energy + 0.3
+        // × normalized decay gradient, clamped to [0, 1]).
+        // Events with score >= threshold are classified open.
+        // Default threshold 0.8 was calibrated empirically on
+        // the Taylor Swift (project 6) reference where
+        // KMeans-ground-truth open-rate climbs from ~11% in
+        // score 0.4-0.6 to ~33% at score 0.8+. Sliding the
+        // threshold toward 0 lowers the bar for open (more
+        // events become open); sliding toward 1 raises it.
+        //
+        // The legacy ``open_decay_slope_max`` slider is
+        // REMOVED from the WebUI — its server-side rule is
+        // retained as a fallback in classify_hihat_notes for
+        // older sidecars that don't carry hihat_openness_score.
         //
         // 2026-06-19: open_geomean_min and open_sustain_ms were
         // removed from the WebUI. They are obsolete — the slope
@@ -169,7 +183,7 @@ const STEM_SLIDER_CONFIGS = {
         // only fires when decay_slope_db is missing (older
         // sidecars from before 2026-06-19), so users never need
         // to tune it.
-        { key: 'open_decay_slope_max', label: '🔓 Open/Closed: Decay Slope', min: 0, max: 10, step: 0.1, decimals: 2, fallback: 2.0, unit: 'dB/f', classification: true }
+        { key: 'openness_score_threshold', label: '🔓 Open/Closed: Openness Score', min: 0, max: 1, step: 0.05, decimals: 2, fallback: 0.8, unit: 'score', classification: true }
     ],
     cymbals: [
         // 2026-06-20: expected_clusters slider removed (Phase 3
@@ -599,9 +613,9 @@ function buildSlidersForStem(stemType) {
             </div>`);
 
         document.getElementById('tuning-hihat-classify')?.addEventListener('change', onHihatClassificationToggle);
-        
+
         // Initialize slider visibility based on toggle state
-        const sliderKeys = ['open_decay_slope_max'];
+        const sliderKeys = ['openness_score_threshold'];
         const isEnabled = hihatClassificationEnabled[stemType] !== false;
         sliderKeys.forEach(key => {
             const sliderRow = document.querySelector(`[data-slider-key="${key}"]`);
@@ -644,8 +658,8 @@ function formatSliderValue(val, decimals) {
     if (val === 0) return 'Off';
     // 2026-06-22: if the caller passes an explicit `decimals`
     // (from the slider config), honor it. The hihat
-    // open_decay_slope_max slider passes `decimals: 2` so the
-    // UI preview shows e.g. "1.55" instead of "1.5" or "2".
+    // openness_score_threshold slider passes `decimals: 2` so
+    // the UI preview shows e.g. "0.80" instead of "0.8".
     if (Number.isInteger(decimals) && decimals >= 0) {
         return val.toFixed(decimals);
     }
@@ -715,7 +729,12 @@ function _buildConfigOverrides(stemType, stored) {
         // 2026-06-19: open_geomean_min and open_sustain_ms removed
         // from the override writeback — the slope rule is the
         // only hihat open/closed classifier on current sidecars.
-        'open_decay_slope_max', 'expected_clusters',
+        // 2026-06-29: openness_score_threshold replaces the slope
+        // rule on the production path. open_decay_slope_max is
+        // kept here as a fallback path for older sidecars — if the
+        // user has it set explicitly, it still gets written to YAML.
+        'openness_score_threshold', 'open_decay_slope_max',
+        'expected_clusters',
         'cluster_feature', 'onset_events_enabled',
         'show_only_snap_events', 'band_max_ratio_max',
     ]) {
@@ -763,9 +782,9 @@ function onSliderInput(e) {
     const val = parseFloat(e.target.value);
     const isClassification = e.target.dataset.classification === 'true';
     // 2026-06-22: per-slider decimal precision (e.g. hihat
-    // open_decay_slope_max uses 2 decimals so 1.55 displays
-    // as "1.55", not "1.5"). Falls back to undefined when the
-    // slider config didn't set one — formatSliderValue's
+    // openness_score_threshold uses 2 decimals so 0.80
+    // displays as "0.80", not "0.8"). Falls back to undefined
+    // when the slider config didn't set one — formatSliderValue's
     // default branches then apply.
     const decimalsAttr = e.target.dataset.decimals;
     const decimals = decimalsAttr === '' || decimalsAttr == null
@@ -789,8 +808,8 @@ function onSliderInput(e) {
     if (isClassification) {
         // 2026-06-22: classification sliders re-classify entirely
         // client-side — no /api/reclassify round-trip. The sidecar
-        // already carries per-event data (e.g. `decay_slope_db` for
-        // hihat) needed to relabel KEPT events against the new
+        // already carries per-event data (e.g. `hihat_openness_score`
+        // for hihat) needed to relabel KEPT events against the new
         // threshold. applyTuningFilter() runs first to refresh
         // waveformTuningEvents (it rebuilds it from tuningBaseEvents
         // and re-applies filter passes), then the new classifier
@@ -931,7 +950,7 @@ function onHihatClassificationToggle(e) {
     hihatClassificationEnabled[stemType] = enabled;
 
     // Show/hide the open/closed classification sliders
-    const sliderKeys = ['open_decay_slope_max'];
+    const sliderKeys = ['openness_score_threshold'];
     sliderKeys.forEach(key => {
         const sliderRow = document.querySelector(`[data-slider-key="${key}"]`);
         if (sliderRow) {
@@ -1503,7 +1522,7 @@ function applyPgaProminenceFilter(events, threshold, disabledIds) {
 /**
  * 2026-06-22: Apply client-side classification to the active stem's
  * tuning events. Mirrors the per-stem branches in
- * applyHihatDecaySlopeClassification (hihat) and any future
+ * applyHihatOpennessScoreClassification (hihat) and any future
  * classification sliders — each slider is a single value-compare on
  * a per-event field that's already in the sidecar. No network call.
  *
@@ -1516,37 +1535,39 @@ function reapplyClientSideClassification(stemType) {
     if (!stemType || !waveformTuningEvents) return;
     const stored = tuningSliderValues[stemType] || {};
     if (stemType === 'hihat') {
-        const slopeMax = stored.open_decay_slope_max;
-        if (slopeMax != null) {
-            applyHihatDecaySlopeClassification(waveformTuningEvents, slopeMax);
+        const scoreThreshold = stored.openness_score_threshold;
+        if (scoreThreshold != null) {
+            applyHihatOpennessScoreClassification(waveformTuningEvents, scoreThreshold);
         }
     }
 }
 
 /**
- * 2026-06-22: Apply hihat open/closed classification to KEPT events.
+ * 2026-06-29: Apply hihat open/closed classification to KEPT events.
  * Mirrors classify_hihat_notes in
- * stems_to_midi/note_classification_core.py — slope < threshold → open,
- * slope >= threshold → closed. Operates entirely client-side: the sidecar
- * already carries `decay_slope_db` on every hihat event (written by
- * _serialize_onset_events in stems_to_midi/midi.py), so no server
- * round-trip is needed. The Save & Reconvert path still re-applies
- * classification server-side and stamps the result into the sidecar.
+ * stems_to_midi/note_classification_core.py — score >= threshold → open,
+ * score < threshold → closed. Operates entirely client-side: the sidecar
+ * already carries `hihat_openness_score` on every hihat event (written by
+ * _serialize_pga_events in stems_to_midi/midi.py via the dynamic
+ * passthrough), so no server round-trip is needed. The Save & Reconvert
+ * path still re-applies classification server-side and stamps the result
+ * into the sidecar.
  *
- * Events without a numeric `decay_slope_db` are left as-is (defensive —
- * older sidecars may lack the field; the server-side classify_hihat_notes
- * falls back to the geomean+sustain path for those).
+ * Events without a numeric `hihat_openness_score` are left as-is
+ * (defensive — older sidecars from before 2026-06-29 may lack the
+ * field; the server-side classify_hihat_notes falls back to the
+ * decay_slope / geomean+sustain path for those).
  *
  * Mutates the events array in place. Updates `hihat_state` and `note`
  * (GM 42 = closed, 46 = open) so legend counts and bar colors reflect
  * the new threshold without waiting for a reclassify round-trip.
  */
-function applyHihatDecaySlopeClassification(events, slopeMax) {
+function applyHihatOpennessScoreClassification(events, scoreThreshold) {
     for (const ev of events) {
         if (ev.status !== 'KEPT') continue;
-        const slope = ev.decay_slope_db;
-        if (slope == null) continue;
-        ev.hihat_state = slope < slopeMax ? 'open' : 'closed';
+        const score = ev.hihat_openness_score;
+        if (score == null) continue;
+        ev.hihat_state = score >= scoreThreshold ? 'open' : 'closed';
         ev.note = ev.hihat_state === 'open' ? 46 : 42;
     }
 }

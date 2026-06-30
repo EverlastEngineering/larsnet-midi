@@ -22,82 +22,242 @@ import numpy as np
 # ============================================================================
 
 
+def extract_hihat_features(frames_matrix, onset_frame, tail_length=12):
+    """3-element feature vector per hihat onset (pure numpy).
+
+    Features (all in mel-spec units):
+        [0] mid-band tail energy — mean over frames 4..10 of the
+            mean of mel bins 12..22. Captures the broad mid-frequency
+            sustain pattern that distinguishes an open hihat's ring
+            (sustained mid energy) from a closed hihat's clack
+            (fast decay in the same band).
+        [1] avg decay gradient — mean of first-difference of the
+            per-frame broad-band envelope across frames 2..tail.
+            Negative slope = decay (closed), positive or flat =
+            ring-out (open).
+        [2] avg spectral centroid proxy — weighted average of bin
+            indices over frames 2..8 of the decay slice; bin
+            weights are the absolute frame values.
+
+    Args:
+        frames_matrix: ndarray of shape (n_frames, 40). Each row is
+            a log-mel-spectrogram frame (40 bins).
+        onset_frame: int. STFT frame index of the strike onset.
+        tail_length: int. Number of post-onset frames to analyze
+            (default 12).
+
+    Returns:
+        1-D ndarray of shape (3,).
+    """
+    end_frame = min(onset_frame + tail_length, frames_matrix.shape[0])
+    decay_slice = frames_matrix[onset_frame:end_frame]
+
+    # Pad short tails with silence at -80 dB so the feature
+    # vector stays at a consistent length across the event set.
+    if decay_slice.shape[0] < tail_length:
+        padding = np.full((tail_length - decay_slice.shape[0], 40), -80.0)
+        decay_slice = np.vstack([decay_slice, padding])
+
+    mid_band_tail_energy = np.mean(decay_slice[4:10, 12:22])
+    overall_envelope = np.mean(decay_slice, axis=1)
+    decay_rates = np.diff(overall_envelope)
+    avg_decay_speed = np.mean(decay_rates)
+    bin_weights = np.arange(40)
+    weighted_frames = [
+        np.average(bin_weights, weights=np.abs(frame))
+        for frame in decay_slice[2:8]
+    ]
+    avg_centroid = np.mean(weighted_frames)
+
+    return np.array([mid_band_tail_energy, avg_decay_speed, avg_centroid])
+
+
+def compute_hihat_openness_score(
+    features_2d: np.ndarray,
+    energy_min: float = -65.0,
+    energy_max: float = -15.0,
+    decay_min: float = -3.0,
+    decay_max: float = 1.0,
+    w_energy: float = 0.7,
+    w_decay: float = 0.3,
+) -> np.ndarray:
+    """Per-event openness score (0..1) from (N, 2) feature rows.
+
+    Pure function. Features layout per row:
+        features_2d[:, 0] = mid-band tail energy (dB)
+        features_2d[:, 1] = avg decay gradient (dB/frame)
+
+    Each column is min-max normalized to [0, 1] then clamped
+    against unexpected outliers, then weighted and summed. Returns
+    float ndarray of shape (N,) in [0.0, 1.0].
+
+    Operational boundaries (2026-06-29 calibration):
+        Energy [-65, -15] dB; decay [-3, 1] dB/frame.
+        Default weights: 70% energy, 30% decay.
+
+    Args:
+        features_2d: ndarray shape (N, 2) — (mid_band_energy, decay).
+        energy_min, energy_max: clip window for mid-band energy (dB).
+        decay_min, decay_max: clip window for decay gradient (dB/frame).
+        w_energy, w_decay: weights summing to 1.0.
+
+    Returns:
+        ndarray of shape (N,) in [0.0, 1.0].
+    """
+    if features_2d.size == 0:
+        return np.array([], dtype=float)
+
+    energy = features_2d[:, 0]
+    decay = features_2d[:, 1]
+
+    energy_range = energy_max - energy_min
+    decay_range = decay_max - decay_min
+    n_energy = (energy - energy_min) / energy_range
+    n_decay = (decay - decay_min) / decay_range
+    n_energy = np.clip(n_energy, 0.0, 1.0)
+    n_decay = np.clip(n_decay, 0.0, 1.0)
+
+    return w_energy * n_energy + w_decay * n_decay
+
+
+def stamp_hihat_openness_score(
+    events: List[Dict],
+    audio: np.ndarray,
+    sr: int,
+    hop: int = 256,
+    n_mels: int = 40,
+    tail_length: int = 12,
+    energy_min: float = -65.0,
+    energy_max: float = -15.0,
+    decay_min: float = -3.0,
+    decay_max: float = 1.0,
+    w_energy: float = 0.7,
+    w_decay: float = 0.3,
+) -> List[Dict]:
+    """Stamp ``hihat_openness_score`` (0..1) on every event with a frame.
+
+    In-place. Lazy-imports librosa (cold path). Reuses the same
+    mel-spec parameters as the PGA detector (n_fft=1024, hop=256,
+    n_mels=40) so the per-event features line up.
+
+    Called by ``pga_event_builder._build_pga_events_with_filter``
+    on the raw event list (BEFORE the filter chain) so the score
+    is available on every event by the time ``classify_hihat_notes``
+    runs. See that function for the rule order.
+
+    Skips events without a ``frame`` field (no-op).
+    """
+    import librosa  # noqa: F401
+
+    if not events:
+        return events
+
+    valid_indices = [
+        i for i, ev in enumerate(events)
+        if ev.get('frame') is not None
+    ]
+    if not valid_indices:
+        return events
+
+    mel_spec = librosa.feature.melspectrogram(
+        y=audio, sr=sr, n_mels=n_mels, hop_length=hop,
+    )
+    mel_db = librosa.power_to_db(mel_spec, ref=np.max)
+    frames_matrix = mel_db.T  # (n_frames, n_mels)
+
+    feature_rows = np.empty((len(valid_indices), 2), dtype=float)
+    for row_i, ev_i in enumerate(valid_indices):
+        feats = extract_hihat_features(
+            frames_matrix, int(events[ev_i]['frame']),
+            tail_length=tail_length,
+        )
+        feature_rows[row_i, 0] = feats[0]
+        feature_rows[row_i, 1] = feats[1]
+
+    scores = compute_hihat_openness_score(
+        feature_rows,
+        energy_min=energy_min, energy_max=energy_max,
+        decay_min=decay_min, decay_max=decay_max,
+        w_energy=w_energy, w_decay=w_decay,
+    )
+
+    for i, score in zip(valid_indices, scores):
+        events[i]['hihat_openness_score'] = float(score)
+
+    return events
+
+
 def classify_hihat_notes(
     events: List[Dict],
     config: Dict,
     force_reclassify: bool = False,
 ) -> List[Dict]:
-    """
-    Classify hihat events as open or closed from stored spectral features.
+    """Classify hihat events as open or closed.
 
-    Uses geomean (sqrt(body_energy * sizzle_energy)) and sustain_ms
-    to distinguish open from closed hits. Matches the logic in
-    detection_shell.detect_hihat_state() but operates on stored data.
-
-    By default, events that already have a stored ``hihat_state`` keep it.
-    This matches the behavior of other stems (snare/toms/cymbals keep their
-    stored ``classification`` when re-running pass-2) and prevents
-    threshold-slider changes from silently re-classifying the same event
-    differently on rebuild.  Pass ``force_reclassify=True`` to override
-    stored states (e.g. when the user has explicitly changed the sliders
-    and wants the new thresholds applied to the existing data).
+    Rule order (2026-06-29):
+        1. PRIMARY  — ``hihat_openness_score`` (0..1, stamped at
+           detect time by ``stamp_hihat_openness_score``). Score
+           = 0.7 × normalized mid-band tail energy + 0.3 ×
+           normalized decay gradient, clamped to [0, 1]. Events
+           with score >= ``hihat_openness_score_threshold`` are
+           open. Default threshold 0.8 (top-open-bucket boundary
+           calibrated on the Taylor Swift reference).
+        2. FALLBACK — ``decay_slope_db`` (broadband-envelope
+           decay slope). Legacy rule; still honored for older
+           sidecars that don't carry ``hihat_openness_score``.
+           Slope below ``hihat.open_decay_slope_max`` (default
+           2.0 dB/frame) is open.
+        3. FALLBACK — geomean(body_energy, sizzle_energy) and
+           sustain_ms (legacy geomean+sustain rule, retained for
+           oldest sidecars from before 2026-06-19).
 
     Args:
-        events: KEPT hihat event dicts with body_energy, sizzle_energy,
-            sustain_ms, and optionally geomean fields.
-        config: Full config dict. Reads hihat.open_decay_slope_max
-            (default 2.0 dB/frame) for the slope rule. The legacy
-            hihat.open_geomean_min (default 262) and
-            hihat.open_sustain_ms (default 100) keys are also
-            read by the defensive fallback path, which only
-            fires when decay_slope_db is missing (older sidecars
-            from before 2026-06-19). They are no longer in the
-            settings schema or project yaml — current projects
-            will never go down the fallback path.
-        force_reclassify: If True, recompute hihat_state for every event
-            even if one is already stored. Default False.
+        events: KEPT hihat event dicts.
+        config: Full config dict. Reads
+            ``hihat.openness_score_threshold`` (default 0.8),
+            ``hihat.open_decay_slope_max`` (default 2.0 dB/frame,
+            legacy), and the deprecated
+            ``hihat.open_geomean_min`` /
+            ``hihat.open_sustain_ms`` (defaults 262 / 100).
+        force_reclassify: If True, recompute hihat_state for every
+            event even if one is already stored.
 
     Returns:
-        Same events with 'hihat_state' field set to 'open' or 'closed'.
+        Same events with 'hihat_state' field set to 'open' or
+        'closed'.
     """
     hihat_config = config.get('hihat', {})
-    open_geomean_min = hihat_config.get('open_geomean_min', 262.0)
-    open_sustain_ms = hihat_config.get('open_sustain_ms', 100.0)
 
     for event in events:
-        # Preserve stored classification across rebuilds (parity with
-        # snare/toms/cymbals which keep their stored 'classification').
         if not force_reclassify and event.get('hihat_state') in ('open', 'closed'):
             continue
 
-        # 2026-06-19: broadband-envelope decay-slope rule wins when
-        # the field is present. The PGA detector walks the broadband
-        # contrast envelope forward from the event's peak frame and
-        # stamps ``decay_slope_db`` (mean per-frame dB drop). Closed
-        # hihats decay fast (3.4-3.6 dB/frame); open hihats ring out
-        # so the next strike cuts in before the envelope drops, giving
-        # a shallow slope (0.7-1.4). If decay_slope_db is below
-        # ``hihat.open_decay_slope_max`` (default 2.0 dB/frame), the
-        # event is open — no need to consult geomean/sustain.
-        #
-        # Falls back to the geomean+sustain rule when decay_slope_db
-        # is missing (older sidecars from before 2026-06-19, or stems
-        # where the detector didn't produce a per-event walk).
+        # PRIMARY (2026-06-29): openness score stamped at
+        # detect time. Events with score >= threshold are open.
+        score = event.get('hihat_openness_score')
+        score_threshold = hihat_config.get('openness_score_threshold', 0.8)
+        if score is not None:
+            event['hihat_state'] = 'open' if score >= score_threshold else 'closed'
+            continue
+
+        # LEGACY FALLBACK: broadband-envelope decay slope.
+        # Retained for older sidecars that don't carry
+        # ``hihat_openness_score``.
         slope = event.get('decay_slope_db')
         slope_max = hihat_config.get('open_decay_slope_max', 2.0)
         if slope is not None:
             event['hihat_state'] = 'open' if slope < slope_max else 'closed'
             continue
 
-        # Use stored geomean if available, otherwise compute from energies
+        # OLDEST FALLBACK: geomean + sustain (pre-2026-06-19).
         geomean = event.get('geomean')
         if geomean is None:
             body = event.get('body_energy', 0)
             sizzle = event.get('sizzle_energy', 0)
             geomean = np.sqrt(body * sizzle) if (body > 0 and sizzle > 0) else 0
-
         sustain = event.get('sustain_ms', 0) or 0
-
+        open_geomean_min = hihat_config.get('open_geomean_min', 262.0)
+        open_sustain_ms = hihat_config.get('open_sustain_ms', 100.0)
         if geomean >= open_geomean_min and sustain >= open_sustain_ms:
             event['hihat_state'] = 'open'
         else:
