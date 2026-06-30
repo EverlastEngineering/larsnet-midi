@@ -156,8 +156,17 @@ def process_percentile_gated(
     # CLI to cache to {stem}.contrast_envelope.npz. Post-hoc
     # walk diagnostics (open/closed hihat) read from that npz
     # — no need to re-run detection.
+    #
+    # 2026-06-30: pass the original stereo audio (when present)
+    # so per-event stereo features (``stereo_width``,
+    # ``pan_confidence``) get computed. Snare's cluster resolver
+    # was silently falling back to ``spectral_centroid_hz``
+    # because the PGA pipeline only saw mono audio. Detector
+    # still runs on ``audio_mono`` (onset detection is
+    # fundamentally temporal — broadband contrast envelope).
     pga_raw, pga_kept, pga_filtered, pga_debug = _build_pga_events_with_filter(
         audio_mono, sr, config, stem_type=stem_type,
+        audio_stereo=audio if audio.ndim == 2 else None,
     )
     pga_envelope_data: Optional[Dict[str, Any]] = None
     if pga_debug is not None and pga_debug.get('envelope') is not None:

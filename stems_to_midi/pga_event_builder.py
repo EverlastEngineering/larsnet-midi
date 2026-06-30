@@ -1129,6 +1129,7 @@ def _compute_features_for_filtered_events(
     sr: int,
     config: Dict[str, Any],
     stem_type: Optional[str],
+    audio_stereo: Optional[np.ndarray] = None,
 ) -> None:
     """Compute per-event features for events that have already
     been through the filter step.
@@ -1148,6 +1149,16 @@ def _compute_features_for_filtered_events(
     existed, so a filtered event between two kept strikes
     silently capped the prior strike's ``duration_ms`` at the
     filtered event's time).
+
+    2026-06-30: also runs a stereo pass when ``audio_stereo`` is
+    provided. Calls ``stereo_core.calculate_stereo_features`` on the
+    original stereo audio (not the mono downmix) and stamps
+    ``pan_confidence`` + ``stereo_width`` onto every event. These
+    fields feed the snare/toms/cymbal cluster feature resolver
+    (priority: stereo_width for snare; pan_confidence as a
+    tertiary fallback). When ``audio_stereo`` is None (mono source
+    or ``use_stereo: false``), the stereo pass is skipped and
+    events get None for both fields.
 
     Per-event exceptions are swallowed: a bad event shouldn't
     poison the rest of the pipeline. The WebUI shows "N/A" for
@@ -1224,6 +1235,43 @@ def _compute_features_for_filtered_events(
                 'inter_onset_ms': None,
             }
         ev.update(feats)
+
+    # 2026-06-30: stereo feature pass. Only runs when the original
+    # stereo audio was plumbed through (``audio_stereo is not None``).
+    # For mono sources (audio.ndim == 1) or when ``use_stereo: false``,
+    # the caller passes None and this block is a no-op.
+    #
+    # Uses ``stereo_core.calculate_stereo_features`` (pure function,
+    # already tested in ``test_stereo_core.py``) to compute
+    # ``pan_confidence`` + ``stereo_width`` per onset. Snare's
+    # cluster feature resolver (priority: stereo_width →
+    # spectral_centroid_hz) was silently falling back to centroid
+    # before this change because the PGA pipeline ran on mono only.
+    if audio_stereo is not None and events:
+        # Lazy import: stereo_core has no heavy deps but is not on
+        # the cold path.
+        from .stereo_core import calculate_stereo_features
+        try:
+            onset_times = np.array(
+                [ev['time'] for ev in events], dtype=np.float64,
+            )
+            stereo_feats = calculate_stereo_features(
+                audio_stereo, onset_times, sr,
+            )
+            for ev, sf in zip(events, stereo_feats):
+                # ``calculate_stereo_features`` returns dicts with
+                # both keys populated even for mono inputs (it
+                # detects 1-D audio and returns width=0, pan=0).
+                # The downstream resolver treats 0.0 as valid for
+                # stereo_width (it's in _ALLOW_ZERO_FEATURES).
+                ev['pan_confidence'] = sf.get('pan_confidence')
+                ev['stereo_width'] = sf.get('stereo_width')
+        except Exception:
+            # Defensive: bad stereo data shouldn't poison the rest
+            # of the features. The WebUI shows "N/A".
+            for ev in events:
+                ev.setdefault('pan_confidence', None)
+                ev.setdefault('stereo_width', None)
 
 
 def _apply_pga_filter(
@@ -1544,6 +1592,7 @@ def _build_pga_events_with_filter(
     sr: int,
     config: Dict[str, Any],
     stem_type: Optional[str] = None,
+    audio_stereo: Optional[np.ndarray] = None,
 ) -> Tuple[List[Dict[str, List]], List[Dict], Dict[str, Any]]:
     """Run the full PGA event pipeline on mono audio and return
     the kept/filtered partition plus the detector debug dict.
@@ -1563,6 +1612,17 @@ def _build_pga_events_with_filter(
             ``onset_detection.pga_min_prominence`` (default
             ``1000``) and ``midi.min_velocity`` /
             ``midi.max_velocity`` (defaults ``80``/``110``).
+        audio_stereo: 2026-06-30: optional 2-D float array of
+            shape (samples, 2) — the original stereo audio
+            before mono downmix. When provided, per-event
+            stereo features (``stereo_width``, ``pan_confidence``)
+            are computed alongside the existing mono features
+            via ``stereo_core.calculate_stereo_features``.
+            When None (mono source, or ``use_stereo: false``),
+            the stereo pass is a no-op and events get None for
+            both fields. The detector itself still runs on
+            ``audio_mono`` — onset detection is fundamentally
+            temporal and doesn't benefit from stereo.
 
     Returns:
         ``(raw, events_kept, events_filtered, debug_dict)``:
@@ -1725,6 +1785,7 @@ def _build_pga_events_with_filter(
     # dropped" with the actual feature values, not None.
     _compute_features_for_filtered_events(
         raw, audio_mono, sr, config, stem_type,
+        audio_stereo=audio_stereo,
     )
     # 2026-06-19: per-event broadband-envelope walk. See
     # build_pga_events above for rationale.
