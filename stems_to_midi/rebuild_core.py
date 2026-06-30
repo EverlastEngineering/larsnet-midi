@@ -22,7 +22,7 @@ with that flag set).
 Public entry point: :func:`rebuild_events_from_analysis`.
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .config import DrumMapping
 from .note_classification_core import classify_notes
@@ -75,33 +75,124 @@ def _classification_thresholds_changed(
     return False
 
 
+def _format_time_key(t: float) -> str:
+    """Format a song time as the 4-decimal key used by overrides."""
+    return f"{t:.4f}"
+
+
 def _apply_overrides(
     events: List[Dict],
-    overrides: Dict[str, str],
+    overrides: Dict[str, Dict[str, Any]],
 ) -> List[Dict]:
     """
-    Apply manual overrides to event statuses.
+    Apply manual overrides to event statuses (legacy path).
 
-    Override keys are time strings rounded to 4 decimals. Override
-    values are 'KEPT' or 'FILTERED'. Mutates and returns the same
+    Override keys are time strings rounded to 4 decimals. Each
+    override value is a record: ``{ status: "KEPT"|"FILTERED",
+    [classification]: int }`` — ``status`` is required;
+    ``classification`` is optional. Mutates and returns the same
     list.
 
-    Used by the WebUI when the user toggles individual events in
-    the analysis panel. PGA stems that have manual overrides set
-    in ``event_overrides.json`` will have those overrides applied
-    on rebuild, even though the PGA prominence filter is also
-    re-run from scratch.
+    The modern rebuild path uses ``_move_overridden_events``
+    instead, which is a post-filter veto on the KEPT/FILTERED
+    split (so the override can un-FILTER events the filter
+    dropped — this function only mutates events in the input
+    list, which the legacy call site passed as ``pga_kept``).
+    This function is kept for the no-PGA fallback path in
+    ``rebuild_events_from_analysis`` (legacy projects that
+    only have events_configured, no events_pga).
     """
     if not overrides:
         return events
 
     for event in events:
-        time_key = f"{event['time']:.4f}"
-        if time_key in overrides:
-            event['status'] = overrides[time_key]
-            event['override'] = True
+        time_key = _format_time_key(event['time'])
+        override = overrides.get(time_key)
+        if not override:
+            continue
+        event['status'] = override['status']
+        if override.get('classification') is not None:
+            event['classification'] = override['classification']
+        event['override'] = True
 
     return events
+
+
+def _move_overridden_events(
+    pga_kept: List[Dict],
+    pga_filtered: List[Dict],
+    overrides: Dict[str, Dict[str, Any]],
+) -> Tuple[List[Dict], List[Dict]]:
+    """
+    Treat the user's override as a post-filter veto on the event's
+    KEPT/FILTERED status. The PGA prominence filter ran first
+    and split events into ``pga_kept`` (passed) and ``pga_filtered``
+    (dropped). If the user has clicked an event to a state that
+    disagrees with the filter's decision, we move the event to
+    the matching list. This is the fix for the "MIDI has the
+    FILTERED note anyway" bug — the override's KEPT wins over
+    the filter's FILTERED (and vice versa).
+
+    Args:
+        pga_kept: Events that passed the filter.
+        pga_filtered: Events that the filter dropped.
+        overrides: The full per-stem override dict, keyed by
+            time string.
+
+    Returns:
+        Tuple of (new_pga_kept, new_pga_filtered) — both new
+        lists, with events moved between them per the override.
+        The override's status is applied to the moved event
+        (and to events that already match the override's
+        status, for consistency).
+    """
+    if not overrides:
+        return pga_kept, pga_filtered
+
+    new_pga_kept = []
+    new_pga_filtered = []
+
+    for event in pga_kept:
+        time_key = f"{event['time']:.4f}"
+        override = overrides.get(time_key)
+        if override is None:
+            new_pga_kept.append(event)
+            continue
+        new_status = override.get('status')
+        if new_status == 'FILTERED':
+            # Filter let it through, override says drop. Move
+            # to filtered, and apply the override's
+            # classification (if any) so downstream sees it.
+            event['status'] = 'FILTERED'
+            if override.get('classification') is not None:
+                event['classification'] = override['classification']
+            new_pga_filtered.append(event)
+        else:
+            # Filter and override agree (KEPT) or override has
+            # no status. Keep in pga_kept; apply the
+            # classification so the override's class wins.
+            if override.get('classification') is not None:
+                event['classification'] = override['classification']
+            new_pga_kept.append(event)
+
+    for event in pga_filtered:
+        time_key = f"{event['time']:.4f}"
+        override = overrides.get(time_key)
+        if override is None:
+            new_pga_filtered.append(event)
+            continue
+        new_status = override.get('status')
+        if new_status == 'KEPT':
+            # Filter dropped it, override says keep. This is
+            # the bug fix — move to kept, apply override.
+            event['status'] = 'KEPT'
+            if override.get('classification') is not None:
+                event['classification'] = override['classification']
+            new_pga_kept.append(event)
+        else:
+            new_pga_filtered.append(event)
+
+    return new_pga_kept, new_pga_filtered
 
 
 def rebuild_events_from_analysis(
@@ -319,14 +410,45 @@ def rebuild_events_from_analysis(
         )
         pga_filtered = pga_filtered + cs_filtered
 
-        # Apply manual overrides on top of the re-filtered list
-        _apply_overrides(pga_kept, stem_overrides)
+        # 2026-06-30: treat the override as a POST-FILTER VETO on
+        # status. The PGA filter chain ran above and split events
+        # into pga_kept (passed) and pga_filtered (dropped). The
+        # override wins: an event with override.status='KEPT' that
+        # the filter dropped gets moved to pga_kept; an event with
+        # override.status='FILTERED' that the filter kept gets
+        # moved to pga_filtered. This is the fix for the "MIDI
+        # has the FILTERED note anyway" bug — the user explicitly
+        # clicked the event to a state, and the filter must not
+        # silently override that decision.
+        #
+        # The override's classification (if set) is applied here
+        # too, so the downstream MIDI loop picks it up via the
+        # existing _map_note path.
+        pga_kept, pga_filtered = _move_overridden_events(
+            pga_kept, pga_filtered, stem_overrides,
+        )
 
-        # Stamp filter_reason on the filtered events for the sidecar
+        # Stamp filter_reason on the filtered events for the sidecar.
+        # Skip events the user has overridden — their status is
+        # already correct (from _move_overridden_events above), and
+        # the filter_reason would be misleading.
         kept_times = {round(e['time'], 4) for e in pga_kept}
         filtered_times = {round(e['time'], 4) for e in pga_filtered}
+        override_time_keys = {
+            round(float(t), 4) for t in (stem_overrides or {}).keys()
+        }
         for ev in raw_pga_events:
             t = round(ev['time'], 4)
+            if t in override_time_keys:
+                # User override. The status was set correctly
+                # by _move_overridden_events (or by the override
+                # record's `status` field). Drop any existing
+                # filter_reason — the override is the new "why".
+                ev['status'] = (
+                    stem_overrides[_format_time_key(t)]['status']
+                )
+                ev.pop('filter_reason', None)
+                continue
             if t in kept_times:
                 ev['status'] = 'KEPT'
                 ev.pop('filter_reason', None)
@@ -368,10 +490,15 @@ def rebuild_events_from_analysis(
             force_reclassify=classification_changed,
         )
 
-        # Stamp classification back onto the raw_pga entries
-        # (events_configured is empty for PGA-only stems, so the
-        # sidecar reader falls through to events_pga — the source
-        # of truth).
+        # 2026-06-30: classification override application. The
+        # _move_overridden_events call above already wrote the
+        # override's classification onto the events in pga_kept.
+        # _map_note (called inside classify_notes) reads the event's
+        # classification and emits the right MIDI note. So the
+        # override's per-event note flows through naturally. We
+        # only need to mirror the override's classification onto the
+        # raw_pga_events entries (so the sidecar reflects it) and
+        # the same for hihat_state if the user toggled it.
         time_to_kept = {round(e['time'], 4): e for e in events}
         for ev in raw_pga_events:
             if ev.get('status') != 'KEPT':

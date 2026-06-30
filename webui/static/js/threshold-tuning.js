@@ -1141,12 +1141,43 @@ function onClusterNoteChange(e) {
 // ─── Save & Reconvert ────────────────────────────────────────────────────
 
 /**
- * Check whether current slider values differ from the configured values.
- * Shows/hides the Save & Reconvert button accordingly.
+ * 2026-06-30: consolidated session-dirty flag. The Save button
+ * (id="session-save-btn" at the top of the analysis section)
+ * lights up when there are unsaved changes from EITHER source:
+ *   1. Tuning-slider values differ from the configured values
+ *      (the original behavior of updateTuningSaveButton), OR
+ *   2. Event overrides are dirty (the user clicked an event on
+ *      the canvas and the debounced save hasn't run yet, or
+ *      cycleEventOverride's in-memory state hasn't been flushed).
+ *
+ * Renamed from updateTuningSaveButton — the new name reflects
+ * the broader scope. The function is still referenced from
+ * inside this module by callers that previously said
+ * updateTuningSaveButton; those references are now no-ops in
+ * practice (the new button is at the top of the analysis
+ * section, not in the panel), but they're kept for safety
+ * during the migration.
  */
 function updateTuningSaveButton() {
-    const btn = document.getElementById('tuning-save-btn');
-    if (!btn || !waveformActiveStem) return;
+    updateSessionSaveButton();
+}
+
+// Exported on window so waveform.js (which owns the
+// eventOverridesDirty flag) can call this from cycleEventOverride
+// and scheduleOverrideSave without creating a circular import.
+function updateSessionSaveButton() {
+    // The button is at the top of the analysis section. It's
+    // shown when there are unsaved changes (overrides OR
+    // tuning-slider changes).
+    const btn = document.getElementById('session-save-btn');
+    if (!btn) return;
+    if (!waveformActiveStem) {
+        // No active stem — no concept of "this stem's tuning
+        // changes". Only overrides count, and overrides are
+        // per-stem so we can't easily decide here. Hide.
+        btn.classList.add('hidden');
+        return;
+    }
 
     const stemType = waveformActiveStem;
     // Get defaults from live midiconfig.yaml (2026-06-15). The
@@ -1159,19 +1190,16 @@ function updateTuningSaveButton() {
     const sliderConfigs = STEM_SLIDER_CONFIGS[stemType];
     const stored = tuningSliderValues[stemType] || {};
 
-    if (!sliderConfigs) {
-        btn.classList.add('hidden');
-        return;
-    }
-
-    // Check if any value differs from the configured value
     let hasChanges = false;
-    for (const slider of sliderConfigs) {
-        const configuredVal = logic[slider.key] != null ? logic[slider.key] : slider.fallback;
-        const currentVal = stored[slider.key];
-        if (_sliderValueChanged(slider, currentVal, configuredVal)) {
-            hasChanges = true;
-            break;
+
+    if (sliderConfigs) {
+        for (const slider of sliderConfigs) {
+            const configuredVal = logic[slider.key] != null ? logic[slider.key] : slider.fallback;
+            const currentVal = stored[slider.key];
+            if (_sliderValueChanged(slider, currentVal, configuredVal)) {
+                hasChanges = true;
+                break;
+            }
         }
     }
 
@@ -1183,8 +1211,17 @@ function updateTuningSaveButton() {
         }
     }
 
-    // 2026-06-20: cluster-feature change-detection removed
-    // (clusterFeatureOverrides no longer exists).
+    // 2026-06-30: event overrides (per-event click cycle) are
+    // another source of unsaved changes. eventOverridesDirty is
+    // set in waveform.js whenever cycleEventOverride runs. The
+    // debounced save (500ms) writes the override to disk; after
+    // the save, eventOverridesDirty is cleared. So this flag
+    // captures "the user clicked something the server hasn't
+    // seen yet" — that's still unsaved.
+    if (!hasChanges && typeof window.eventOverridesDirty === 'function'
+        && window.eventOverridesDirty()) {
+        hasChanges = true;
+    }
 
     btn.classList.toggle('hidden', !hasChanges);
 }
@@ -1331,6 +1368,25 @@ async function saveTuningAndReconvert() {
                 // Update analysis data in place — no page refresh needed
                 if (result.analysis_data) {
                     waveformAnalysisData = result.analysis_data;
+                }
+
+                // 2026-06-30: the server cleans up overrides on
+                // every rebuild (entries whose state now matches
+                // the sidecar's natural state are dropped). Sync
+                // the in-memory `eventOverrides` with the cleaned
+                // dict the server returned, and toast the count
+                // of removed entries so the user knows the file
+                // is staying minimal.
+                if (typeof window.syncEventOverridesFromServer === 'function'
+                    && result.event_overrides) {
+                    window.syncEventOverridesFromServer(result.event_overrides);
+                }
+                if (typeof result.event_overrides_removed === 'number'
+                    && result.event_overrides_removed > 0) {
+                    showToast(
+                        `Cleaned ${result.event_overrides_removed} redundant override(s)`,
+                        'info',
+                    );
                 }
 
                 const totalEvents = Object.values(result.events_by_stem || {})
@@ -2390,3 +2446,9 @@ function updateEventCounts(stemData) {
             <span class="text-gray-500">${sensitiveTotal} total sensitive</span>`;
     }
 }
+
+// Exported on window for cross-module access. waveform.js (which
+// owns the event-override state) calls this whenever the user
+// clicks an event to cycle its status, so the Save button at
+// the top of the analysis section lights up immediately.
+window.updateSessionSaveButton = updateSessionSaveButton;

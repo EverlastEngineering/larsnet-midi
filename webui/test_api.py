@@ -415,8 +415,14 @@ class TestEventOverridesRoute:
         overrides dict (or empty dict if file doesn't exist)."""
         project_path = tmp_path / '1 - Test'
         (project_path / 'midi').mkdir(parents=True)
+        # 2026-06-30: new shape is {stem: {time: {status, [classification]?}}}.
+        # The old string-valued format was nuked per the user's
+        # "nuke the old files and start fresh" direction.
         (project_path / 'midi' / 'event_overrides.json').write_text(
-            json.dumps({'snare': {'2.0782': 'FILTERED'}})
+            json.dumps({
+                'snare': {'2.0782': {'status': 'FILTERED'}},
+                'kick': {'1.0': {'status': 'KEPT', 'classification': 0}},
+            })
         )
         mock_get.return_value = {
             'number': 1, 'name': 'Test', 'path': project_path,
@@ -430,7 +436,10 @@ class TestEventOverridesRoute:
             f"double 'projects/' prefix."
         )
         data = json.loads(response.data)
-        assert data['overrides'] == {'snare': {'2.0782': 'FILTERED'}}
+        assert data['overrides'] == {
+            'snare': {'2.0782': {'status': 'FILTERED'}},
+            'kick': {'1.0': {'status': 'KEPT', 'classification': 0}},
+        }
 
     @patch('webui.api.projects.get_project_by_number')
     def test_get_event_overrides_no_file_returns_empty(self, mock_get, client, tmp_path):
@@ -459,7 +468,16 @@ class TestEventOverridesRoute:
             'created': datetime.now(), 'metadata': {},
         }
 
-        overrides = {'snare': {'2.0782': 'FILTERED'}, 'kick': {'1.0': 'KEPT'}}
+        # 2026-06-30: new shape — each per-time entry is an
+        # object with `status` (required) and optional
+        # `classification` (the per-event note override).
+        overrides = {
+            'snare': {
+                '2.0782': {'status': 'FILTERED'},
+                '1.5': {'status': 'KEPT', 'classification': 1},
+            },
+            'kick': {'1.0': {'status': 'KEPT'}},
+        }
         response = client.put(
             '/api/projects/1/event-overrides',
             data=json.dumps({'overrides': overrides}),
@@ -475,6 +493,127 @@ class TestEventOverridesRoute:
             (project_path / 'midi' / 'event_overrides.json').read_text()
         )
         assert written == overrides
+
+    @patch('webui.api.projects.get_project_by_number')
+    def test_event_overrides_rejects_legacy_string_format(self, mock_get, client, tmp_path):
+        """Loading an event_overrides.json in the old string-valued
+        format raises EventOverridesError (schema check). The user's
+        "nuke the old files and start fresh" direction means legacy
+        files are unsupported — they must be deleted or rewritten by
+        the user before the next Save & Reconvert will work."""
+        project_path = tmp_path / '1 - Test'
+        (project_path / 'midi').mkdir(parents=True)
+        # Old format: {stem: {time: "FILTERED"}}
+        (project_path / 'midi' / 'event_overrides.json').write_text(
+            json.dumps({'snare': {'2.0782': 'FILTERED'}})
+        )
+        mock_get.return_value = {
+            'number': 1, 'name': 'Test', 'path': project_path,
+            'created': datetime.now(), 'metadata': {},
+        }
+
+        # The GET endpoint just passes through JSON — it doesn't
+        # validate the inner shape. So the legacy file is returned
+        # as-is. The validation happens on the rebuild path (in
+        # load_event_overrides). So a legacy file would only fail
+        # when the user clicks Save & Reconvert.
+        response = client.get('/api/projects/1/event-overrides')
+        assert response.status_code == 200
+        # The data passes through unchanged. The rebuild path's
+        # load_event_overrides would raise EventOverridesError
+        # because the legacy file's inner values are strings, not
+        # dicts. That's the safety net.
+        data = json.loads(response.data)
+        assert data['overrides'] == {'snare': {'2.0782': 'FILTERED'}}
+
+    def test_load_event_overrides_rejects_legacy_string_format(self, tmp_path):
+        """load_event_overrides raises EventOverridesError when an
+        event_overrides.json in the old string-valued format is
+        present. (The user's "nuke the old files and start fresh"
+        direction — legacy files are unsupported, must be deleted
+        or rewritten by hand.)"""
+        from stems_to_midi.event_overrides import (
+            EventOverridesError,
+            load_event_overrides,
+        )
+        project_path = tmp_path / '1 - Test'
+        (project_path / 'midi').mkdir(parents=True)
+        (project_path / 'midi' / 'event_overrides.json').write_text(
+            json.dumps({'snare': {'2.0782': 'FILTERED'}})
+        )
+        with pytest.raises(EventOverridesError):
+            load_event_overrides(project_path)
+
+    def test_clean_overrides_drops_matching_status(self):
+        """clean_overrides drops an override whose status matches
+        the sidecar's natural state. (Auto-cleanup at Save time:
+        once the filter's natural state catches up to the user's
+        override, the override is redundant.)"""
+        from stems_to_midi.event_overrides import clean_overrides
+        overrides = {
+            'snare': {
+                '1.0': {'status': 'FILTERED'},
+                '2.0': {'status': 'KEPT'},
+            },
+        }
+        analysis_data = {
+            'stems': {
+                'snare': {
+                    'events_pga': [
+                        {'time': 1.0, 'status': 'FILTERED', 'classification': 0},
+                        {'time': 2.0, 'status': 'KEPT', 'classification': 1},
+                    ],
+                },
+            },
+        }
+        cleaned = clean_overrides(overrides, analysis_data)
+        assert cleaned == {}, 'Both overrides match the sidecar — should be cleaned'
+
+    def test_clean_overrides_keeps_differing_status(self):
+        """clean_overrides keeps an override whose status DIFFERS
+        from the sidecar's natural state — the override is
+        still actively shaping the user's intent."""
+        from stems_to_midi.event_overrides import clean_overrides
+        # Time keys are 4-decimal strings (canonical format used
+        # by the rebuild path and the WebUI click handler).
+        overrides = {
+            'snare': {
+                '1.0000': {'status': 'KEPT'},  # user wants KEPT, sidecar says FILTERED
+            },
+        }
+        analysis_data = {
+            'stems': {
+                'snare': {
+                    'events_pga': [
+                        {'time': 1.0, 'status': 'FILTERED', 'classification': None},
+                    ],
+                },
+            },
+        }
+        cleaned = clean_overrides(overrides, analysis_data)
+        assert cleaned == overrides, 'Override disagrees with sidecar — must be kept'
+
+    def test_clean_overrides_keeps_classification_override(self):
+        """clean_overrides keeps an override whose status matches
+        but classification doesn't — the per-event note override
+        is still active."""
+        from stems_to_midi.event_overrides import clean_overrides
+        overrides = {
+            'snare': {
+                '1.0000': {'status': 'KEPT', 'classification': 2},
+            },
+        }
+        analysis_data = {
+            'stems': {
+                'snare': {
+                    'events_pga': [
+                        {'time': 1.0, 'status': 'KEPT', 'classification': 0},
+                    ],
+                },
+            },
+        }
+        cleaned = clean_overrides(overrides, analysis_data)
+        assert cleaned == overrides, 'Classification override disagrees — must be kept'
 
 
 class TestConfigUpdateMissingFile:

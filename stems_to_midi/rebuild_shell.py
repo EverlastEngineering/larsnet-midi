@@ -11,9 +11,14 @@ This module is the thin I/O wrapper around rebuild_core.py.
 import json
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .config import load_config
+from .event_overrides import (
+    clean_overrides,
+    load_event_overrides,
+    save_event_overrides,
+)
 from .midi import create_midi_file, load_analysis_sidecar
 from .rebuild_core import rebuild_events_from_analysis
 
@@ -32,13 +37,46 @@ def _find_midi_path(midi_dir: Path) -> Optional[Path]:
     return midi_files[0]
 
 
-def _load_overrides(midi_dir: Path) -> Dict[str, Dict[str, str]]:
+def _load_overrides(midi_dir: Path) -> Dict[str, Dict[str, Any]]:
     """Load event_overrides.json if it exists."""
-    overrides_path = midi_dir / 'event_overrides.json'
-    if not overrides_path.exists():
+    project_dir = midi_dir.parent
+    return load_event_overrides(project_dir) or {}
+
+
+def _clean_overrides(
+    overrides: Dict[str, Dict[str, Any]],
+    analysis_data: Dict,
+) -> Dict[str, Dict[str, Any]]:
+    """Drop redundant override entries. Wrapper that handles
+    the None case (no overrides → return empty dict)."""
+    if not overrides:
         return {}
-    with open(overrides_path, 'r') as f:
-        return json.load(f)
+    return clean_overrides(overrides, analysis_data)
+
+
+def _persist_overrides_if_changed(
+    midi_dir: Path,
+    before: Dict[str, Dict[str, Any]],
+    after: Dict[str, Dict[str, Any]],
+) -> int:
+    """Write the cleaned override dict back to disk if it differs
+    from the input. Returns the number of entries removed
+    (0 if no change, positive if entries were dropped)."""
+    if before == after:
+        return 0
+    project_dir = midi_dir.parent
+    if not after:
+        # No overrides left — delete the file rather than
+        # writing an empty object.
+        path = midi_dir / 'event_overrides.json'
+        if path.exists():
+            path.unlink()
+    else:
+        save_event_overrides(project_dir, after)
+    # Count removed entries
+    before_count = sum(len(t) for t in before.values())
+    after_count = sum(len(t) for t in after.values())
+    return before_count - after_count
 
 
 def _apply_config_overrides(config: Dict, overrides: Dict) -> None:
@@ -177,7 +215,10 @@ def rebuild_midi_for_project(
     if config_overrides:
         _apply_config_overrides(config, config_overrides)
 
-    # Load overrides
+    # Load overrides (post-2026-06-30 shape: {stem: {time: {status,
+    # [classification]?}}}). The legacy string-valued file format
+    # was deleted per the user's "nuke the old files and start
+    # fresh" direction.
     overrides = _load_overrides(midi_dir) if honor_overrides else {}
 
     # Run the rebuild (pure function)
@@ -196,6 +237,16 @@ def rebuild_midi_for_project(
             'stems_rebuilt': [],
             'elapsed_ms': int((time.monotonic() - start) * 1000),
         }
+
+    # 2026-06-30: clean up overrides that now match the sidecar's
+    # natural state (e.g. user toggled a FILTERED event to KEPT,
+    # then lowered the prominence filter so the event's natural
+    # state became KEPT — the override is redundant). The file
+    # stays intentionally minimal.
+    cleaned_overrides = _clean_overrides(overrides, updated_analysis)
+    _cleanup_result = _persist_overrides_if_changed(
+        midi_dir, overrides, cleaned_overrides,
+    )
 
     # Write updated MIDI file
     tempo = config.get('midi', {}).get('default_tempo', 120.0)
@@ -224,4 +275,6 @@ def rebuild_midi_for_project(
         'analysis_data': updated_analysis,
         'events_by_stem': midi_events_by_stem,
         'data_integrity_warnings': integrity_warnings,
+        'event_overrides': cleaned_overrides,
+        'event_overrides_removed': _cleanup_result,
     }

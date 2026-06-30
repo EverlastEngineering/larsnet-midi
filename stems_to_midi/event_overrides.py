@@ -1,40 +1,38 @@
 """
-User event overrides — read-side loader for the WebUI's
+User event overrides — utility for the WebUI's
 ``event_overrides.json`` sidecar.
 
-When the user toggles an event on / off in the WebUI tuning
-panel, the panel writes a per-project override file at::
+When the user clicks (or click-cycles) an event in the WebUI
+waveform panel, the panel writes a per-project override file at::
 
     user_files/<project>/midi/event_overrides.json
 
 with the shape::
 
     {
-        "<event_id>": {
-            "status": "FILTERED",
-            "reason": "manually disabled via WebUI"
-        },
-        ...
+        "<stem_type>": {
+            "<time_str>": {
+                "status": "KEPT",
+                [optional "classification": int]
+            },
+            ...
+        }
     }
 
-This module is the read-side: it loads the file (if present)
-and returns the dict. The write path is owned by the WebUI
-(``webui/static/js/waveform.js``) and is intentionally out of
-scope for this refactor — the goal here is to make the PGA
-filter pipeline able to consume the file when the WebUI
-re-applies the filter, not to change how the file is written.
+The override record carries at minimum a ``status`` field
+(``"KEPT"`` or ``"FILTERED"``). The optional ``classification``
+is the user's per-event note override (snare body vs rimshot vs
+clap, toms low vs mid vs high, etc.) — the rebuild path uses it
+to drive the per-event MIDI note via the standard
+classify_notes path.
 
-Design constraints:
-  - Pure read path. The function returns the dict verbatim
-    after a light schema check (must be a dict; values must
-    be dicts); malformed files raise ``EventOverridesError``
-    with a clear message so the WebUI can show a toast.
-  - No mutation of the loaded dict — the caller is free to
-    re-use the keys for ``apply_pga_prominence_filter``'s
-    ``disabled_ids`` argument.
-  - File I/O is the only side-effect (functional core /
-    imperative shell split — the read function is a thin
-    imperative shell around a tiny pure parser).
+This module is the read+write utility for that file. The
+rebuild path uses ``clean_overrides`` after every Save to
+prune entries whose state now matches the sidecar's natural
+state — keeping the file intentionally minimal.
+
+Pure functions. File I/O is the only side-effect (functional
+core / imperative shell split).
 """
 from __future__ import annotations
 
@@ -45,15 +43,17 @@ from typing import Any, Dict, Optional
 
 __all__ = [
     'load_event_overrides',
+    'save_event_overrides',
+    'clean_overrides',
     'EventOverridesError',
 ]
 
 
 class EventOverridesError(RuntimeError):
     """Raised when the override file is present but malformed
-    (e.g. not a JSON object, or values are not dicts). The
-    WebUI surfaces this as a toast — the file is left in
-    place so the user can hand-edit it if needed."""
+    (e.g. not a JSON object, or values are not the expected
+    shape). The WebUI surfaces this as a toast — the file is
+    left in place so the user can hand-edit it if needed."""
 
 
 def load_event_overrides(
@@ -71,16 +71,15 @@ def load_event_overrides(
     Returns:
         ``None`` when the file does not exist (the common case
         — most projects have no overrides). A ``dict`` mapping
-        event id -> override record when the file exists. The
-        override record is a dict with at minimum a ``status``
-        key (``"FILTERED"`` or ``"KEPT"``); other keys are
-        preserved verbatim so future fields (``timestamp``,
-        ``user_note``, etc.) can be added without breaking
-        this loader.
+        stem type -> override record dict when the file exists.
+        Each override record is a dict with at minimum a
+        ``status`` key (``"FILTERED"`` or ``"KEPT"``); other keys
+        are preserved verbatim.
 
     Raises:
-        EventOverridesError: The file exists but is not a
-            valid JSON object, or any value is not a dict.
+        EventOverridesError: The file exists but is not valid
+            JSON, or its top-level value is not a dict, or any
+            per-stem value is not a dict.
     """
     project_dir = Path(project_dir)
     override_path = project_dir / 'midi' / 'event_overrides.json'
@@ -99,20 +98,145 @@ def load_event_overrides(
     if not isinstance(data, dict):
         raise EventOverridesError(
             f"event_overrides.json at {override_path} must be a JSON "
-            f"object (event_id -> override), got {type(data).__name__}"
+            f"object (stem -> time -> override), got {type(data).__name__}"
         )
 
-    # Light schema check — values must be dicts (an override
-    # record carries status + reason; we don't validate the
-    # inner keys here, that would couple us to the WebUI's
-    # write format). Bad records surface as a clear error
-    # rather than a silent None.
-    for k, v in data.items():
-        if not isinstance(v, dict):
+    # Light schema check: stem values must be dicts (time -> override).
+    for stem, stem_overrides in data.items():
+        if not isinstance(stem_overrides, dict):
             raise EventOverridesError(
-                f"event_overrides.json at {override_path}: override "
-                f"for event id {k!r} must be an object, got "
-                f"{type(v).__name__}"
+                f"event_overrides.json at {override_path}: stem "
+                f"{stem!r} value must be an object, got "
+                f"{type(stem_overrides).__name__}"
             )
+        # Per-time values must be dicts (override record). The
+        # legacy file format used strings ("KEPT" / "FILTERED")
+        # — per the user's "nuke the old files and start fresh"
+        # direction (2026-06-30), legacy files are unsupported
+        # and must be deleted or rewritten by hand. Catching the
+        # legacy shape here is the safety net.
+        for time_key, override_record in stem_overrides.items():
+            if not isinstance(override_record, dict):
+                raise EventOverridesError(
+                    f"event_overrides.json at {override_path}: stem "
+                    f"{stem!r} time {time_key!r} value must be an "
+                    f"object (override record), got "
+                    f"{type(override_record).__name__}. Legacy "
+                    f"string-valued entries are no longer supported "
+                    f"as of 2026-06-30 — please rewrite the file "
+                    f"with {{ status: 'KEPT'|'FILTERED', "
+                    f"[classification]: N }} entries."
+                )
 
     return data
+
+
+def save_event_overrides(
+    project_dir: str | Path,
+    overrides: Dict[str, Dict[str, Any]],
+) -> Path:
+    """Write the per-project override file.
+
+    Args:
+        project_dir: Path to the project directory.
+        overrides: The override dict in the canonical shape
+            (stem -> time -> override record).
+
+    Returns:
+        The path of the written file.
+    """
+    project_dir = Path(project_dir)
+    midi_dir = project_dir / 'midi'
+    midi_dir.mkdir(parents=True, exist_ok=True)
+    override_path = midi_dir / 'event_overrides.json'
+
+    with open(override_path, 'w') as f:
+        json.dump(overrides, f, indent=2)
+
+    return override_path
+
+
+def clean_overrides(
+    overrides: Dict[str, Dict[str, Any]],
+    analysis_data: Dict,
+) -> Dict[str, Dict[str, Any]]:
+    """Drop entries whose effective state now matches the
+    sidecar's natural state. The cleaned dict is structurally
+    equivalent to the input (same dict-of-dict shape) but with
+    redundant entries removed.
+
+    An entry is redundant when:
+      - The override's status matches the sidecar event's
+        status (KEPT or FILTERED), AND
+      - Either the override has no classification (so the
+        status alone is the comparison), OR the override's
+        classification matches the sidecar event's classification
+        (so classification is also consistent).
+
+    Args:
+        overrides: The full override dict in the canonical
+            shape (stem -> time_str -> override record).
+        analysis_data: The current sidecar data (v3 format).
+            Used to look up each event's natural status and
+            classification.
+
+    Returns:
+        A new dict with redundant entries removed. If no entries
+        are redundant, the input dict is returned (a new dict
+        is always returned for caller safety — the input is
+        not mutated).
+    """
+    if not overrides:
+        return {}
+
+    cleaned: Dict[str, Dict[str, Any]] = {}
+    for stem_type, stem_overrides in (overrides or {}).items():
+        stem_data = analysis_data.get('stems', {}).get(stem_type, {})
+        events_pga = stem_data.get('events_pga', [])
+
+        # Build a quick lookup: time_str -> event (events_pga is
+        # the canonical post-2026-06-15 source for status +
+        # classification).
+        events_by_time: Dict[str, Dict] = {}
+        for ev in events_pga:
+            if ev.get('time') is None:
+                continue
+            events_by_time[f"{ev['time']:.4f}"] = ev
+
+        kept: Dict[str, Any] = {}
+        for time_str, override in (stem_overrides or {}).items():
+            sidecar_event = events_by_time.get(time_str)
+            if sidecar_event is None:
+                # Event no longer in the sidecar. Drop the
+                # override — it's referencing a ghost event.
+                continue
+
+            # Compare override to sidecar's natural state.
+            override_status = override.get('status')
+            sidecar_status = sidecar_event.get('status')
+            if override_status != sidecar_status:
+                # Override disagrees with the filter — keep.
+                kept[time_str] = override
+                continue
+
+            # Status matches. Check classification if the
+            # override sets one.
+            override_class = override.get('classification')
+            if override_class is None:
+                # Status-only override, and it matches the
+                # sidecar's natural state. Drop it.
+                continue
+
+            sidecar_class = sidecar_event.get('classification')
+            if override_class == sidecar_class:
+                # Both status and classification match. Drop.
+                continue
+
+            # Classification override disagrees with sidecar.
+            # Keep.
+            kept[time_str] = override
+
+        if kept:
+            cleaned[stem_type] = kept
+
+    return cleaned

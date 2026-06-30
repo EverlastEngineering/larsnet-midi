@@ -641,6 +641,22 @@
                                                     title="Tune detection thresholds">
                                                 <i class="fas fa-sliders-h mr-1"></i>Tune
                                             </button>
+                                            <!-- 2026-06-30: Save & Reconvert at the top.
+                                                 The user can override events (via the
+                                                 canvas click → cycleEventOverride) WITHOUT
+                                                 opening the Tune panel, so the Save
+                                                 button has to be reachable from the
+                                                 top-right of the analysis section. It's
+                                                 hidden when there are no unsaved changes
+                                                 (overrides OR tuning-slider changes).
+                                                 Same handler as the in-panel button —
+                                                 the user only needs one place to click. -->
+                                            <button id="session-save-btn"
+                                                    class="hidden px-2.5 py-1 rounded text-xs font-medium bg-larsnet-primary text-white hover:bg-indigo-500 transition-smooth"
+                                                    onclick="saveTuningAndReconvert()"
+                                                    title="Save overrides + thresholds to disk and rebuild the MIDI">
+                                                <i class="fas fa-save mr-1"></i>Save &amp; Reconvert
+                                            </button>
                                         </div>
                                     </div>
                                     <!-- Dual-panel canvas container -->
@@ -684,9 +700,12 @@
                                                 <button onclick="resetTuningSliders()" class="px-2 py-0.5 rounded text-xs text-gray-400 hover:text-white hover:bg-gray-700 transition-smooth" title="Reset to configured defaults">
                                                     <i class="fas fa-undo mr-1"></i>Reset
                                                 </button>
-                                                <button id="tuning-save-btn" onclick="saveTuningAndReconvert()" class="hidden px-2.5 py-0.5 rounded text-xs font-medium bg-larsnet-primary text-white hover:bg-indigo-500 transition-smooth" title="Save thresholds to config and re-run MIDI conversion">
-                                                    <i class="fas fa-save mr-1"></i>Save &amp; Reconvert
-                                                </button>
+                                                <!-- 2026-06-30: in-panel Save button removed.
+                                                     The session-save-btn at the top of the
+                                                     analysis section is the only Save
+                                                     button. It's reachable from inside
+                                                     the Tune panel as well (just scroll
+                                                     up). One button, one place to click. -->
                                                 <button onclick="toggleTuningPanel()" class="px-2 py-0.5 rounded text-xs text-gray-400 hover:text-white hover:bg-gray-700 transition-smooth" title="Close tuning panel">
                                                     <i class="fas fa-times"></i>
                                                 </button>

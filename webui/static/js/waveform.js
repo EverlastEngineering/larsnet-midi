@@ -161,7 +161,11 @@ let audioPlaybackTime = null; // time (in song seconds) where playback started
 let audioStartContextTime = null; // audioCtx.currentTime when playback started
 let playbackAnimFrameId = null;   // requestAnimationFrame ID for playback indicator
 
-// Event override state: { stemType: { "1.2345": "KEPT"|"FILTERED", ... } }
+// Event override state: { stemType: { "1.2345": { status, [classification] } } }
+// Each override record carries at minimum a `status` ("KEPT"|"FILTERED").
+// An optional `classification` is set when the user has cycled past the
+// first "on" state via cycleEventOverride. The classification drives the
+// per-event note via the standard classify_notes path on rebuild.
 let eventOverrides = {};
 let eventOverridesDirty = false;
 let eventOverridesSaveTimer = null;
@@ -1863,7 +1867,7 @@ function onCanvasDragStart(e) {
         if (isEventsPanel && waveformActiveStem) {
             const hitEvent = hitTestEvent(mouseX);
             if (hitEvent) {
-                toggleEventOverride(waveformActiveStem, hitEvent);
+                cycleEventOverride(waveformActiveStem, hitEvent);
                 return;
             }
         }
@@ -1935,7 +1939,7 @@ function onCanvasDragStart(e) {
     if (isEventsPanel) {
         const hitEvent = hitTestEvent(mouseX);
         if (hitEvent) {
-            toggleEventOverride(waveformActiveStem, hitEvent);
+            cycleEventOverride(waveformActiveStem, hitEvent);
             return;
         }
     }
@@ -2139,11 +2143,35 @@ async function loadEventOverrides() {
         eventOverrides = {};
     }
     applyOverridesToEvents();
+    // After loading, the in-memory `eventOverrides` matches
+    // what's on disk — not dirty. Make sure the Save button
+    // reflects this. (Tuning changes are tracked separately by
+    // threshold-tuning.js.)
+    eventOverridesDirty = false;
+    if (typeof window.updateSessionSaveButton === 'function') {
+        window.updateSessionSaveButton();
+    }
 }
 
 /**
  * Apply stored overrides to in-memory event data.
+ *
  * Overrides are keyed by stem type and event time (4-decimal string).
+ * Each value is a record: { status: "KEPT"|"FILTERED",
+ * [classification]: int }. The classification override is applied
+ * to the event when present — this is the "click to set class N"
+ * feature the user asked for.
+ *
+ * 2026-06-30 (Bug 1 fix): previously this only iterated
+ * events_configured || events_sensitive. For PGA-only stems
+ * (the entire post-2026-06-15 refactor world — kick, snare,
+ * toms, hihat, cymbals on project 6), the sidecar carries
+ * events_pga, not events_configured. The override would be
+ * silently ignored on initial load. Now we iterate events_pga
+ * for PGA-only stems (the only data source the sidecar
+ * actually has). Legacy projects with non-empty
+ * events_configured still get the override applied to that
+ * list for back-compat with the 2026-06-15 refactor.
  */
 function applyOverridesToEvents() {
     if (!waveformAnalysisData || !waveformAnalysisData.stems) return;
@@ -2152,42 +2180,176 @@ function applyOverridesToEvents() {
         const stemOverrides = eventOverrides[stemType];
         if (!stemOverrides) continue;
 
+        // Apply to events_pga (the canonical post-2026-06-15
+        // source) AND to events_configured / events_sensitive
+        // (legacy). Same time key matches all three lists.
         const allEvents = [
+            ...(stemData.events_pga || []),
             ...(stemData.events_configured || []),
             ...(stemData.events_sensitive || []),
         ];
         for (const event of allEvents) {
             if (event.time == null) continue;
             const key = event.time.toFixed(4);
-            if (stemOverrides[key]) {
-                event.status = stemOverrides[key];
-                event._overridden = true;
+            const override = stemOverrides[key];
+            if (!override) continue;
+            event.status = override.status;
+            if (override.classification != null) {
+                event.classification = override.classification;
             }
+            event._overridden = true;
         }
     }
 }
 
 /**
- * Toggle an event's kept/filtered status and schedule a save.
+ * Collect the unique classification values that exist in the
+ * sidecar for the given stem's events_pga. Returns a sorted
+ * array of integers (e.g. [0, 1, 2] for snare with 3
+ * classes) or [] for stems with no classification data.
+ *
+ * Used by cycleEventOverride to step through the classes in
+ * order (off → cls[0] → cls[1] → ... → off).
  */
-function toggleEventOverride(stemType, event) {
+function collectClassesForStem(stemType) {
+    const stemData = waveformAnalysisData?.stems?.[stemType];
+    if (!stemData) return [];
+    const pga = stemData.events_pga || [];
+    const classes = new Set();
+    for (const ev of pga) {
+        if (ev.classification != null) classes.add(ev.classification);
+    }
+    return Array.from(classes).sort((a, b) => a - b);
+}
+
+/**
+ * Cycle an event's status + classification on click.
+ *
+ * Cycle logic (user's spec, 2026-06-30):
+ *   - If currently FILTERED (or no override): next click →
+ *     KEPT, classification = smallest available class (or null
+ *     if no classes — single-class / no-class stems).
+ *   - If currently KEPT and at the highest class index:
+ *     next click → FILTERED (cycle off).
+ *   - Otherwise: advance to the next class.
+ *
+ * Hihat: when the event has a hihat_state (open/closed), the
+ * cycle first alternates hihat_state (open ↔ closed), then
+ * status. Hihat classification is server-side, so the
+ * per-event classification override is moot for hihat (use
+ * the cluster card in the Tune panel for that).
+ */
+function cycleEventOverride(stemType, event) {
     if (!event || event.time == null) return;
 
     const key = event.time.toFixed(4);
     if (!eventOverrides[stemType]) eventOverrides[stemType] = {};
+    const existing = eventOverrides[stemType][key] || {};
+    const currentStatus = existing.status || event.status;
+    const currentClass = existing.classification ?? event.classification ?? null;
 
-    // Toggle status
-    const newStatus = event.status === 'KEPT' ? 'FILTERED' : 'KEPT';
-    event.status = newStatus;
+    // Hihat open/closed cycle runs first (per-stem override
+    // independent of the KEPT/FILTERED state).
+    if (stemType === 'hihat' && event.hihat_state) {
+        // Toggle hihat_state. KEPT/FILTERED status doesn't change
+        // here — that's a separate click action.
+        const newHihatState = event.hihat_state === 'open' ? 'closed' : 'open';
+        event.hihat_state = newHihatState;
+        event._overridden = true;
+        // Persist as a special override (status: 'KEPT' to
+        // keep the record valid; the hihat_state will be
+        // handled in the rebuild path). For now, just store
+        // the existing structure.
+        eventOverrides[stemType][key] = {
+            status: currentStatus,
+            ...(currentClass != null ? { classification: currentClass } : {}),
+            hihat_state: newHihatState,
+        };
+        scheduleOverrideSave();
+        drawWaveform();
+        return;
+    }
+
+    // Collect the stem's available classes (from events_pga).
+    const classes = collectClassesForStem(stemType);
+    const hasClasses = classes.length > 0;
+
+    let nextStatus, nextClass;
+
+    if (currentStatus !== 'KEPT') {
+        // Currently FILTERED (or no override). Turn on, default
+        // to the smallest class.
+        nextStatus = 'KEPT';
+        nextClass = hasClasses ? classes[0] : null;
+    } else if (currentClass == null || !hasClasses) {
+        // KEPT but no class. Cycle off.
+        nextStatus = 'FILTERED';
+        nextClass = null;
+    } else {
+        // KEPT with a class. Find position in classes.
+        const idx = classes.indexOf(currentClass);
+        if (idx === -1) {
+            // Override class isn't in the sidecar's class set
+            // (slider changed under us). Default to the lowest.
+            nextStatus = 'KEPT';
+            nextClass = classes[0];
+        } else if (idx === classes.length - 1) {
+            // At the highest class. Cycle off.
+            nextStatus = 'FILTERED';
+            nextClass = null;
+        } else {
+            // Advance to the next class.
+            nextStatus = 'KEPT';
+            nextClass = classes[idx + 1];
+        }
+    }
+
+    // Update in-memory event. Mark classification only if the
+    // override set one — leave the sidecar's natural
+    // classification alone when the override is null
+    // (status-only toggle for kick/single-class toms).
+    event.status = nextStatus;
+    if (nextClass != null) {
+        event.classification = nextClass;
+    }
     event._overridden = true;
-    eventOverrides[stemType][key] = newStatus;
 
-    // Debounced save (500ms after last toggle)
+    // Build the override record. Drop the classification key
+    // when null (cleaner JSON, no spurious nulls).
+    const overrideRecord = { status: nextStatus };
+    if (nextClass != null) {
+        overrideRecord.classification = nextClass;
+    }
+    eventOverrides[stemType][key] = overrideRecord;
+
+    scheduleOverrideSave();
+    drawWaveform();
+
+    // 2026-06-30: light up the session-dirty Save button at the
+    // top of the analysis section. The debounced save will clear
+    // eventOverridesDirty 500ms later, and the saveTuningAndReconvert
+    // call from clicking the Save button will sync the in-memory
+    // state from the server (via syncEventOverridesFromServer),
+    // which clears the dirty flag too.
+    if (typeof window.updateSessionSaveButton === 'function') {
+        window.updateSessionSaveButton();
+    }
+}
+
+function scheduleOverrideSave() {
     eventOverridesDirty = true;
     clearTimeout(eventOverridesSaveTimer);
     eventOverridesSaveTimer = setTimeout(saveEventOverrides, 500);
 
-    drawWaveform();
+    // Mark session dirty so the Save button lights up
+    // immediately. After the debounced save runs, the
+    // eventOverridesDirty flag is cleared (in saveEventOverrides
+    // below) — but the in-memory override is still active, so the
+    // Save button stays lit until the user clicks Save or closes
+    // the project.
+    if (typeof window.updateSessionSaveButton === 'function') {
+        window.updateSessionSaveButton();
+    }
 }
 
 /**
@@ -2198,10 +2360,35 @@ async function saveEventOverrides() {
     try {
         await api.saveEventOverrides(currentProject.number, eventOverrides);
         eventOverridesDirty = false;
+        if (typeof window.updateSessionSaveButton === 'function') {
+            window.updateSessionSaveButton();
+        }
     } catch (err) {
         console.warn('Failed to save event overrides:', err);
     }
 }
+
+/**
+ * Sync the in-memory `eventOverrides` with the server-cleaned
+ * version (e.g. after a Save & Reconvert that auto-pruned
+ * redundant entries). Exported on `window` so other modules
+ * (threshold-tuning's saveTuningAndReconvert flow) can call it
+ * after a rebuild round-trip.
+ */
+function syncEventOverridesFromServer(cleaned) {
+    if (cleaned && typeof cleaned === 'object') {
+        eventOverrides = cleaned;
+        eventOverridesDirty = false;
+    }
+}
+window.syncEventOverridesFromServer = syncEventOverridesFromServer;
+window.eventOverridesDirty = () => eventOverridesDirty;
+window.cycleEventOverride = cycleEventOverride;
+window.collectClassesForStem = collectClassesForStem;
+// Exposed for tests; lets a Playwright spec read the current
+// sidecar data (e.g. to find a KEPT event to override) without
+// having to maintain a parallel reflection in window.
+window.waveformAnalysisData = () => waveformAnalysisData;
 
 /**
  * Hit-test: find the event nearest to a canvas click, within a small radius.
