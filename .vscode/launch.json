@@ -13,7 +13,7 @@
             "env": {
                 "CONDA_DEFAULT_ENV": "drumtomidi"
             },
-            "args": ["10", "--stems", "hihat"]
+            "args": ["6", "--stems", "hihat"]
         }
     ]
 }
