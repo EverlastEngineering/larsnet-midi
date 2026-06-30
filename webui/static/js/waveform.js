@@ -775,7 +775,15 @@ function drawPgaEventBars(ctx, events, timeToX, PAD, plotW, plotH) {
     // a single note), and the existing getEventColor
     // per-classification branches apply to the
     // non-PGA-rendering paths.
-    const classEnabled = classificationEnabledByStem[waveformActiveStem] !== false;
+    //
+    // 2026-06-30: use getEventColor (not the manual color
+    // table below) so FILTERED events render in red. The
+    // previous version always used WAVEFORM_COLORS.markerPga
+    // (violet) regardless of status — combined with
+    // getPgaEventsForStem's KEPT-only filter, the user could
+    // only see FILTERED events after first clicking Tune
+    // (which switches the data source to waveformTuningEvents).
+    // Now the "Show Filtered" toggle works standalone.
 
     for (const event of events) {
         if (event.time == null) continue;
@@ -802,23 +810,14 @@ function drawPgaEventBars(ctx, events, timeToX, PAD, plotW, plotH) {
         // the events panel (barTop = PAD.top + plotH - barH).
         const barTop = PAD.top + plotH - barH;
 
-        // 2026-06-19: pick the per-classification color when
-        // the toggle is on. Order matches getEventColor's KEPT
-        // branches: hihat_state first (open/closed), then the
-        // generic cluster-id path. Falls back to the violet
-        // PGA color when the toggle is off OR the event has
-        // no classification metadata.
-        let barColor = WAVEFORM_COLORS.markerPga;
-        if (classEnabled) {
-            if (event.hihat_state === 'open') {
-                barColor = HIHAT_OPEN_COLOR;
-            } else if (event.hihat_state === 'closed') {
-                barColor = HIHAT_CLOSED_COLOR;
-            } else if (event.classification != null
-                       && CLASSIFICATION_COLORS[event.classification]) {
-                barColor = CLASSIFICATION_COLORS[event.classification];
-            }
-        }
+        // 2026-06-30: use getEventColor (which already encodes
+        // FILTERED → red, hihat open/closed, classification
+        // palette, REVERB_CONTINUATION → orange) so the PGA
+        // layer's color matches the events panel's color for
+        // the same event. Previously the manual table below
+        // hardcoded KEPT colors and FILTERED was silently
+        // violet.
+        const barColor = getEventColor(event);
 
         // Filled rectangle — faded for FILTERED, full for KEPT
         ctx.globalAlpha = isFiltered ? 0.35 : 0.85;
@@ -870,7 +869,19 @@ function getPgaEventsForStem(stemData) {
     // waveformTuningEvents (which already contains the live
     // FILTERED mix) directly into drawPgaEventBars, bypassing
     // this helper.
+    //
+    // 2026-06-30: the "Show Filtered" toggle gates this filter.
+    // When the toggle is ON, return every event (KEPT + FILTERED)
+    // so drawPgaEventBars can render the FILTERED bars in red
+    // (via its own isFiltered check + getEventColor's red
+    // mapping). This makes the toggle work without requiring the
+    // user to first click "Tune" (the previous workaround).
+    // The empty-display regression from 2026-06-19 is
+    // preserved for the toggle-OFF case (KEPT-only) — the
+    // FILTERED events only enter the data flow when the user
+    // has explicitly opted into seeing them.
     const all = stemData.events_pga || [];
+    if (waveformShowFiltered) return all;
     return all.filter(e => e.status === 'KEPT');
 }
 
