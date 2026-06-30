@@ -1,302 +1,263 @@
 # MIDI Conversion Configuration
-# Settings for converting drum stems to MIDI notes
+# Default for new projects. Per-project overrides live in
+# user_files/<n> - <name>/midiconfig.yaml. Schema-driven surface:
+# webui/settings_schema.py::SETTINGS_REGISTRY (the single source
+# of truth for active tuning knobs).
+#
+# Two deprecated filters are still wired but default to
+# large-bypass values so they don't filter anything by default:
+#   attack_rise_max_ms: 15000  (real toms < 20ms; FPs 100-500ms;
+#                              15000 is "off for everything")
+#   min_decay_col_min_db: -160.0  (real toms -60 to -84 dB; FPs
+#                              -84 to -90 dB; -160 is "off")
+# Per-stem overrides can tighten these to bring the filter back.
+#
+# Dead keys removed in the 2026-06-20 PGA-universal cleanup (do
+# not re-add): per-stem expected_clusters, threshold_db,
+# min_peak_spacing_ms, min_absolute_energy, merge_window_ms,
+# energy_method, peak_hold_ms, onset_threshold, onset_delta,
+# onset_wait, min_strength_threshold, min_sustain_ms,
+# enable_spectral_filter, reverb_continuation_attack_threshold.
+# Sections removed: filtering.*, clustering.method,
+# threshold_optimization.*, debug.*, learning_mode.*.
 
 # === AUDIO PROCESSING ===
 audio:
-  # Legacy mono conversion (DEPRECATED - use per-stem use_stereo instead)
-  force_mono: true  # Convert stereo to mono (overridden by per-stem use_stereo settings)
-  
-  # Silence detection
-  silence_threshold: 0.001  # Amplitude below which audio is considered silent (-60dB)
-  min_segment_length: 512  # Minimum audio segment length for analysis (samples)
-  
-  # Amplitude normalization (helps with quiet/loud recordings)
-  normalize_amplitude: false  # Scale audio to target amplitude before detection
-  target_amplitude: 0.8  # Target peak amplitude (0-1 range)
-  normalize_stereo_balance: false  # Equalize L/R RMS for fair stereo detection
-  
-  # Peak amplitude measurement (for velocity calculation)
-  peak_window_sec: 0.1  # Window size for measuring peak amplitude after onset
-  
-  # Sustain/duration measurement (envelope analysis)
-  sustain_window_sec: 0.2  # Window size for analyzing sound decay
-  envelope_threshold: 0.1  # Threshold as fraction of peak (0.1 = 10%)
-  envelope_smooth_kernel: 51  # Median filter kernel size (must be odd)
-  
-  # MIDI timing defaults
-  default_note_duration: 0.1  # Default duration for last note (seconds)
-  very_short_duration: 0.01  # Very short note duration for MIDI output (beats)
+  force_mono: true                       # Convert stereo to mono (overridden by per-stem use_stereo)
+  silence_threshold: 0.001               # Amplitude below which audio is considered silent (-60 dB)
+  normalize_amplitude: false             # Scale audio to target amplitude before detection
+  target_amplitude: 0.8                  # Target peak amplitude (0-1 range)
+  normalize_stereo_balance: false        # Equalize L/R RMS for fair stereo detection
+  default_note_duration: 0.1             # Default duration for last note (seconds)
+  very_short_duration: 0.01              # Very short note duration for MIDI output (beats)
+  # --- DORMANT (declared but not read by pipeline) ---
+  # min_segment_length: 512
+  # peak_window_sec: 0.1
+  # sustain_window_sec: 0.2
+  # envelope_threshold: 0.1
+  # envelope_smooth_kernel: 51
 
-# === PGA DETECTION (universal 2026-06-20) ===
-onset_detection:
-  # Per-stem overrides: onset_threshold, onset_delta, onset_wait, pga_min_prominence
-  # PGA prominence filter (2026-06-10). PGA candidates with
-  # scipy find_peaks prominence below this threshold are
-  # dropped from the events_pga list before serialization.
-  # Default 1000 was calibrated on project 4: real toms
-  # strikes have prominence 2000-15000, the 74.748/74.925 FPs
-  # have prominence 127-432 (killed by the default). The
-  # 14.84/14.97 "soft hits" have prominence 2127-2727 — they
-  # survive the prominence filter, so the duration feature
-  # is the secondary discriminator for those.
-  # Set to 0 to disable the filter.
-  # TODO 2026-06-12: temporary bump from 1000 to 3000 to clear
-  # 2 FPs (prominence 1500-2000 range) that were capping the
-  # 26.199s real strike's duration. REVERT to 1000 once the
-  # dec_e<60K filter is wired in (2026-06-11 calibration work).
-  pga_min_prominence: 3000
-  # PGA noise-floor gate cap (2026-06-18). The percentile-gated
-  # detector lifts every bin's noise floor to a global gate
-  # value (the max 5th-percentile across bins) to kill
-  # silence-to-noise phantom events. On dense/saturated
-  # mixes the raw gate can rise very high (e.g. -45 dB on a
-  # saturated toms stem), which over-lifts the floor and
-  # suppresses real attacks. This cap clamps the gate to
-  # this dB value at most — the actual gate is
-  # min(raw_gate, pga_max_floor_gate_db). Default -60 dB
-  # sits well below real attack contrast (real toms strikes
-  # are 20-40 dB above the floor) and well above the
-  # digital-silence gap floor (which the original gate was
-  # added to handle). Set to 0 (or a very large positive
-  # value) to effectively disable the cap. Per-stem override:
-  # toms.pga_max_floor_gate_db.
-  pga_max_floor_gate_db: -60.0
-  # Per-stem overrides: onset_threshold, onset_delta, onset_wait, pga_min_prominence
-
-  # PGA absolute envelope threshold (2026-06-18). The PGA
-  # detector's ``find_peaks`` call uses an absolute
-  # minimum-envelope value to count a peak as a real strike.
-  # The default is auto (``null`` here), which uses the
-  # IQR-based rule ``q3 + 2.5*IQR`` of the envelope — a
-  # standard Tukey-outlier formula that adapts to the
-  # song's dynamic range. This works for stems with a wide
-  # dynamic range (toms — quiet frames vs. loud strikes)
-  # but FAILS for stems with a narrow dynamic range
-  # (snare — many similar-loudness hits): the IQR is
-  # small, the auto-threshold lands above the envelope
-  # maximum, and ``find_peaks`` returns zero events.
-  # For those stems, set a fixed value via
-  # ``<stem>.pga_abs_envelope_threshold`` in the project
-  # midiconfig.yaml. Calibration rule of thumb: pick a
-  # value at the ~99th percentile of the envelope
-  # distribution (a value that catches the top ~1% of
-  # frames as candidates). ``null`` = IQR-auto default.
-  pga_abs_envelope_threshold: null
-
-  # PGA detector tuning parameters (2026-06-18). Each
-  # entry below is a per-stem-overridable parameter of
-  # ``detect_percentile_gated_broad_attacks``. The value
-  # here is the GLOBAL default; per-stem overrides go in
-  # the project's ``<stem>.<key>`` section. The same
-  # per-stem > global > module-default precedence is used
-  # for all of them. Set any of them to ``null`` (or just
-  # omit) to use the module's hard-coded default.
-  pga_broad_freq_min_hz: null   # default 600.0 (excludes saturated 0-600Hz low bands on toms)
-  pga_broad_freq_max_hz: null   # default 8000.0
-  pga_db_rise_threshold: null   # default 10.0 dB (an order of magnitude above noise)
-  pga_nms_min_frames: null      # default 20 (~116ms at hop=256; safe NMS floor for typical drumming)
-  pga_strike_offset_sec: null   # default 0.008 (8ms; Hann center-of-bin bias for toms strikes)
-
-  # PGA-only pipeline toggle (2026-06-18, universal 2026-06-20).
-  # When ``true`` for a given stem, ``process_stem_to_midi``
-  # short-circuits to ``processing_shell_percentile_gated.
-  # process_percentile_gated`` for that stem and skips the
-  # energy/spectral/pan detection paths entirely. The per-stem
-  # overrides below set this to ``true`` for every stem — the
-  # PGA detector has been validated end-to-end on all 5 stems
-  # (projects 4, 6, 7). The global key here is documentation /
-  # discoverability only — ``process_stem_to_midi`` reads
-  # ``<stem_type>.use_pga_detection`` per-stem, not this global.
-  use_pga_detection: false
-
-# === PER-STEM OVERRIDES ===
-# All threshold-strategy and energy-method keys were removed in the
-# 2026-06-20 PGA-universal cleanup. The dead keys were:
-#   geomean_threshold, threshold_db, min_peak_spacing_ms,
-#   min_absolute_energy, merge_window_ms, energy_method, peak_hold_ms,
-#   onset_threshold, onset_delta, onset_wait, min_strength_threshold,
-#   min_sustain_ms, expected_clusters, enable_spectral_filter,
-#   reverb_continuation_attack_threshold. The only per-stem detection
-#   tuning surface now is the PGA prominence / decay-col-min / attack-rise
-#   filter chain (see .github/skills/add-filter).
-  # 2026-06-17: global pga_min_envelope_value. Per-stem overrides
-# (e.g., toms.pga_min_envelope_value) win over this value. See
-# stems_to_midi/filter_registry.json for the full spec.
-  pga_min_envelope_value: 1000
-kick:
-  # Kick drum (bass drum) settings
-  midi_note: 36
-  use_pga_detection: true
-
-  # Stereo processing
-  use_stereo: false  # Kick is typically centered, no benefit from stereo analysis
-
-  # Spectral ranges for analysis (Hz) — kept for compatibility with
-  # any tooling that reads these (none in the live pipeline).
-  fundamental_freq_min: 40
-  fundamental_freq_max: 80
-  body_freq_min: 80
-  body_freq_max: 250
-  attack_freq_min: 1500
-  attack_freq_max: 5000
-
-# 2026-06-17: per-stem override of the global
-# onset_detection.pga_min_envelope_value. See
-# stems_to_midi/filter_registry.json for the full spec.
-# Default: 1000. See filter_kinds.md for the
-# kind=min_value semantics.
-  pga_min_envelope_value: 1000
-snare:
-  # MIDI note mappings (General MIDI standard)
-  midi_note: 38
-  midi_note_rimshot: 37
-  midi_note_clap: 39
-  use_pga_detection: true
-
-  # Stereo processing
-  use_stereo: true  # Ghost notes and rimshots may be panned, use stereo analysis
-
-  # Spectral ranges for analysis (Hz) — kept for compatibility with
-  # any tooling that reads these (none in the live pipeline).
-  low_freq_min: 40
-  low_freq_max: 150
-  body_freq_min: 150
-  body_freq_max: 400
-  wire_freq_min: 2000
-  wire_freq_max: 8000
-
-# 2026-06-17: per-stem override of the global
-# onset_detection.pga_min_envelope_value. See
-# stems_to_midi/filter_registry.json for the full spec.
-# Default: 1000. See filter_kinds.md for the
-# kind=min_value semantics.
-  pga_min_envelope_value: 1000
-toms:
-  # Tom drums settings
-  midi_note_low: 45
-  midi_note_mid: 47
-  midi_note_high: 50
-  use_pga_detection: true
-
-  # Stereo processing
-  use_stereo: true  # Toms are often panned left to right, use stereo for identification
-
-  # Spectral-transient detector tuning (2026-06-09, required for the
-  # toms sidecar to fire at the actual attack onset).
-  # Without these the detector falls back to its (0,1,2,3,4)
-  # default — the B0 RING signal — which develops 50-100ms AFTER
-  # the strike and produces events that lag the audio by that
-  # amount. The toms "head snap" lives in B1 (200-600Hz) and B2
-  # (600-1200Hz); peak-picking the SNAP signal in those two bands
-  # gives event times within one STFT frame (~5.8ms) of the true
-  # attack. snap_min_delta is the height threshold; 0.05 is the
-  # module default and is calibrated for the toms head-snap
-  # amplitude on a 44.1kHz signal.
-  spectral_snap_bands: [2, 3]
-  spectral_snap_min_delta: 0.05
-
-  # Spectral ranges for analysis (Hz) — kept for compatibility.
-  fundamental_freq_min: 60
-  fundamental_freq_max: 150
-  body_freq_min: 150
-  body_freq_max: 400
-
-  # 2026-06-15: per-stem override of the global
-  # onset_detection.min_decay_col_min_db. Toms events whose
-  # decay_col_min_median_db (high-res STFT 15ms-post-peak
-  # col_min median, in dB) is below this threshold are
-  # tagged FILTERED. Empirically: real toms strikes
-  # -60 to -84 dB, noise pops -84 to -90 dB. -80 dB is the
-  # safe cut between the two clusters. Set to -120 to
-  # effectively disable. See
-  # stems_to_midi.pga_event_builder.apply_pga_decay_col_min_filter
-  # for the filter logic.
-  min_decay_col_min_db: -80.0
-
-  # 2026-06-17: attack_rise_max_ms filter. Catches wire-tail /
-  # step-back FPs that prominence + decay_col_min miss.
-  # Real toms strikes have attack_rise < 20ms (10-90% rise
-  # time on the high-res STFT envelope). FPs cluster at
-  # 100-500ms — they 'step back' to a previous attack,
-  # producing an unusually long rise. The default 20ms is
-  # a rational cut at the empirical cluster boundary.
-  # Increase the threshold to be more permissive; set to
-  # 500ms to effectively disable.
-  attack_rise_max_ms: 20.0
-
-# 2026-06-17: per-stem override of the global
-# onset_detection.pga_min_envelope_value. See
-# stems_to_midi/filter_registry.json for the full spec.
-# Default: 1000. See filter_kinds.md for the
-# kind=min_value semantics.
-  pga_min_envelope_value: 1000
-hihat:
-  # MIDI note mappings (General MIDI standard)
-  midi_note_closed: 42       # F#1 - Closed hi-hat
-  midi_note_open: 46         # A#1 - Open hi-hat
-  midi_note_foot_close: 44   # G#1 - Foot close (pedal closes open hihat)
-  midi_note_handclap: 39     # D#1 - Hand Clap (detected from hihat bleed)
-  midi_note: 42              # Default (closed) for backward compatibility
-  use_pga_detection: true
-
-  # Stereo processing
-  use_stereo: true  # Hi-hat may be off-center, use stereo for better detection
-
-  # Amplitude normalization (helps with quiet hihat recordings)
-  normalize_amplitude: true        # Override global setting - hihats benefit most from normalization
-  normalize_stereo_balance: true   # Equalize L/R channels
-
-  # Foot close generation
-  generate_foot_close: false  # Generate foot-close events at end of open hihat sustain
-
-  # 2026-06-20: hihat open/closed classification is now driven by
-  # the PGA decay-slope rule (see note_classification_core.
-  # classify_hihat_notes). The legacy geomean+sustain thresholds
-  # were removed; only open_decay_slope_max (in onset_detection)
-  # and hihat_midi_note_* remain as the user-facing knobs.
-
-  # Spectral ranges for analysis (Hz) — kept for compatibility.
-  body_freq_min: 500
-  body_freq_max: 2000
-  sizzle_freq_min: 6000
-  sizzle_freq_max: 12000
-
-# 2026-06-17: per-stem override of the global
-# onset_detection.pga_min_envelope_value. See
-# stems_to_midi/filter_registry.json for the full spec.
-# Default: 1000. See filter_kinds.md for the
-# kind=min_value semantics.
-  pga_min_envelope_value: 1000
-cymbals:
-  # MIDI note mappings (General MIDI standard)
-  midi_note: 57              # Default: Crash 2 (right) for backward compatibility
-  midi_note_crash: 49        # C#2 - Crash Cymbal 1
-  midi_note_ride: 51         # D#2 - Ride Cymbal 1
-  midi_note_chinese: 52      # E2 - Chinese Cymbal
-  use_pga_detection: true
-
-  # Stereo processing
-  use_stereo: true  # Cymbals are often panned left/right, use stereo for crash/ride distinction
-
-                              # Uses actual sustain duration from envelope analysis
-                              # Allows long cymbal crashes to ring out naturally
-
-# 2026-06-20: the clustering / threshold_optimization / debug /
-# learning_mode sections were removed in the PGA-universal cleanup.
-# Those were research/dev tools that no live pipeline uses.
-# PGA prominence / decay_col_min / attack_rise is the new
-# tuning surface (see .github/skills/add-filter).
-
-# MIDI Output Settings
-
-# 2026-06-17: per-stem override of the global
-# onset_detection.pga_min_envelope_value. See
-# stems_to_midi/filter_registry.json for the full spec.
-# Default: 1000. See filter_kinds.md for the
-# kind=min_value semantics.
-  pga_min_envelope_value: 1000
+# === MIDI OUTPUT ===
 midi:
-  min_velocity: 80           # Minimum MIDI velocity (1-127)
-  max_velocity: 110          # Maximum MIDI velocity
-  default_tempo: 120.0       # Default tempo in BPM (matches DAW defaults like Logic Pro)
-  max_note_duration: 0.5     # Maximum duration for any note (seconds)
+  min_velocity: 1                        # Minimum MIDI velocity (1-127)
+  max_velocity: 127                      # Maximum MIDI velocity (1-127)
+  default_tempo: 120.0                   # Default tempo in BPM
+  max_note_duration: 0.5                 # Maximum duration for any note (seconds)
+
+# === ONSET DETECTION / PGA TUNING ===
+# Per-stem overrides for any of the <stem>.pga_* keys below
+# win over these globals. The pga_min_* values are also filter
+# thresholds — see stems_to_midi/filter_registry.json for the
+# full spec.
+onset_detection:
+  hop_length: 512                        # STFT hop for the broad-band envelope (samples)
+  use_pga_detection: false               # Global "documentation" key. Per-stem use_pga_detection is what runs.
+
+  # PGA percentile-gated detector tuning. Per-stem overrides
+  # are the live tuning surface; globals are module-defaults.
+  pga_min_prominence: 3000               # Filter PGA events with prominence below this
+  pga_min_envelope_value: 1000           # Filter PGA events with envelope_value below this
+  pga_min_combined_score: 0              # Filter PGA events with combined_score below this (warble separator; 0 = off)
+  pga_abs_envelope_threshold: null       # null = IQR-auto (q3 + 2.5*IQR). Per-stem override for narrow-DR stems.
+  pga_max_floor_gate_db: -60.0           # Clamp the percentile-gated noise-floor lift to this dB
+  pga_broad_freq_min_hz: null            # null = module default (600.0 Hz; excludes 0-600Hz low bands on toms)
+  pga_broad_freq_max_hz: null            # null = module default (8000.0 Hz)
+  pga_db_rise_threshold: null            # null = module default (10.0 dB; an order of magnitude above noise)
+  pga_nms_min_frames: null               # null = module default (20; ~116ms at hop=256)
+  pga_strike_offset_sec: null            # null = module default (0.008 s; Hann center-of-bin bias)
+  pga_detection_method: null             # null = module default ('envelope'). 'delta' for low-energy stems.
+
+  # DEPRECATED filters — still wired in the pipeline but the
+  # PGA prominence + envelope + combined_score chain usually
+  # catches what these used to. Defaults are large-bypass to
+  # keep them OFF; per-stem overrides can tighten to activate.
+  attack_rise_max_ms: 15000              # DEPRECATED. Real toms < 20ms; FPs 100-500ms. 15000 = OFF.
+  min_decay_col_min_db: -160.0           # DEPRECATED. Real toms -60 to -84 dB; FPs -84 to -90 dB. -160 = OFF.
+  # --- REMOVED-IN-PGA-CLEANUP (do not re-add) ---
+  # threshold: 0.3
+  # delta: 0.01
+  # wait: 3
+
+# === KICK ===
+kick:
+  midi_note: 36                          # C2 - Bass Drum 1 (General MIDI)
+  use_pga_detection: true
+  use_stereo: false                      # Kick is typically centered; stereo adds noise
+  # Per-stem PGA tuning (override the onset_detection.* globals above when needed):
+  pga_min_prominence: null               # inherit onset_detection.pga_min_prominence
+  pga_min_envelope_value: null           # inherit onset_detection.pga_min_envelope_value
+  pga_min_combined_score: null           # inherit onset_detection.pga_min_combined_score
+  # DEPRECATED filters — set per-stem if you want them active:
+  # attack_rise_max_ms: 15000            # usually leave OFF for kick
+  # min_decay_col_min_db: -160.0         # usually leave OFF for kick
+  # --- DORMANT spectral band keys (compat only) ---
+  # fundamental_freq_min: 40
+  # fundamental_freq_max: 80
+  # body_freq_min: 80
+  # body_freq_max: 250
+  # attack_freq_min: 1500
+  # attack_freq_max: 5000
+
+# === SNARE ===
+snare:
+  midi_note: 38                          # D2 - Acoustic Snare
+  midi_note_rimshot: 37                  # C#2 - Acoustic Snare (rim)
+  midi_note_clap: 39                     # D#2 - Hand Clap
+  use_pga_detection: true
+  use_stereo: true                       # Ghost notes and rimshots may be panned
+  expected_clusters: 2                   # 1-3; default 2 (head + rim/clap separated by k-means)
+  cluster_feature: null                  # null = 'spectral_centroid_hz'; override e.g. 'stereo_width' for panning-based separation
+  min_cluster_spread_ratio: 0.10         # K-means spread guardrail (relative IQR; 0.10 = standard)
+  # Pitch detection (used by some k-means feature paths):
+  enable_pitch_detection: false
+  pitch_method: yin                      # 'yin' or 'pyin'
+  min_pitch_hz: 100.0
+  max_pitch_hz: 500.0
+  # Per-stem PGA tuning:
+  pga_min_prominence: null
+  pga_min_envelope_value: null
+  pga_min_combined_score: null
+  # DEPRECATED filters — example active values for snare:
+  # attack_rise_max_ms: 500              # real snare < 100ms; FPs 200-500ms; 500 = permissive
+  # min_decay_col_min_db: -120.0         # conservative off; tune tighter if FPs persist
+  # --- DORMANT spectral band keys (compat only) ---
+  # low_freq_min: 40
+  # low_freq_max: 150
+  # body_freq_min: 150
+  # body_freq_max: 400
+  # wire_freq_min: 2000
+  # wire_freq_max: 8000
+
+# === TOMS ===
+toms:
+  midi_note_low: 45                      # A2 - Low Tom
+  midi_note_mid: 47                      # B2 - Mid Tom
+  midi_note_high: 50                     # D3 - High Tom
+  use_pga_detection: true
+  use_stereo: true                       # Toms are often panned L-R; stereo helps identification
+  expected_clusters: 3                   # 1-4; 3 = low/mid/high (standard)
+  cluster_feature: null
+  min_cluster_spread_ratio: 0.10
+  enable_pitch_detection: true           # Used by cluster_feature='spectral_centroid_hz'
+  pitch_method: yin
+  min_pitch_hz: 60
+  max_pitch_hz: 250
+  # Per-stem PGA tuning (most stems need per-stem overrides because
+  # the global envelope_value 1000 is calibrated for saturated stems):
+  pga_min_prominence: null
+  pga_min_envelope_value: null
+  pga_min_combined_score: null
+  # DEPRECATED filters — example active values for toms:
+  # attack_rise_max_ms: 20.0             # real toms < 20ms; FPs 100-500ms
+  # min_decay_col_min_db: -80.0          # real toms -60 to -84 dB; FPs -84 to -90 dB
+  # --- DORMANT spectral band keys ---
+  # fundamental_freq_min: 60
+  # fundamental_freq_max: 150
+  # body_freq_min: 150
+  # body_freq_max: 400
+  # --- DORMANT spectral-snap detector (spectral transient detector
+  # these keys were meant to configure no longer runs) ---
+  # spectral_snap_bands: [2, 3]
+  # spectral_snap_min_delta: 0.05
+  # --- DORMANT WebUI-only display flags (read by /api/projects,
+  # not by pipeline) ---
+  # show_only_snap_events: false
+  # band_max_ratio_max: 2.0
+  # onset_events_enabled: true
+
+# === HIHAT ===
+hihat:
+  midi_note: 42                          # F#1 - Closed Hi-Hat (default for backward compat)
+  midi_note_closed: 42                   # F#1 - Closed Hi-Hat
+  midi_note_open: 46                     # A#1 - Open Hi-Hat
+  midi_note_foot_close: 44               # G#1 - Foot close (pedal closes open hihat)
+  midi_note_handclap: 39                 # D#1 - Hand Clap (detected from hihat bleed)
+  use_pga_detection: true
+  use_stereo: true                       # Hi-hat may be off-center; stereo helps detection
+  normalize_amplitude: true              # Override global; hihats benefit most from normalization
+  normalize_stereo_balance: true         # Override global; equalize L/R channels
+
+  # Hihat open/closed classifier. Two active knobs:
+  open_decay_slope_max: 0.7              # open if decay_slope < 0.7 (legacy fallback)
+  openness_score_threshold: 0.75         # open if openness_score >= 0.75 (production; 2026-06-29)
+
+  # Per-stem PGA tuning:
+  pga_min_prominence: null
+  pga_min_envelope_value: null
+  pga_min_combined_score: null
+  # DEPRECATED filters — usually leave OFF for hihat (hihat
+  # tail is long enough to fail these — they're not informative):
+  # attack_rise_max_ms: 10000
+  # min_decay_col_min_db: -120.0
+  # --- DORMANT flags (not read by runtime) ---
+  # classifier_method: 'slope'           # 'slope' or 'kmeans'; test-only, not wired
+  # min_sustain_ms: 25                   # legacy open/closed threshold
+  # generate_foot_close: false           # legacy flag, not wired
+  # open_geomean_min: 800.0              # legacy fallback only (pre-2026-06-19 sidecars)
+  # open_sustain_ms: 100.0               # legacy fallback only (pre-2026-06-19 sidecars)
+  # --- DORMANT spectral band keys ---
+  # body_freq_min: 500
+  # body_freq_max: 2000
+  # sizzle_freq_min: 6000
+  # sizzle_freq_max: 12000
+
+# === CYMBALS ===
+cymbals:
+  midi_note: 57                          # Crash 2 (default for backward compat)
+  midi_note_crash: 49                    # C#2 - Crash Cymbal 1
+  midi_note_ride: 51                     # D#2 - Ride Cymbal 1
+  midi_note_chinese: 52                  # E2 - Chinese Cymbal
+  use_pga_detection: true
+  use_stereo: true                       # Cymbals often panned L/R for crash/ride distinction
+  expected_clusters: 2                   # 1-3; default 2 (crash/ride split)
+  cluster_feature: null
+  min_cluster_spread_ratio: 0.10
+  # Per-stem PGA tuning (cymbals: envelope_value is HIGH — 16k+):
+  pga_min_prominence: null
+  pga_min_envelope_value: null
+  pga_min_combined_score: null
+  pga_detection_method: null             # null = 'envelope'; 'delta' for very-low-energy cymbal stacks
+  # DEPRECATED filters — example active values for cymbals:
+  # attack_rise_max_ms: 500
+  # min_decay_col_min_db: -100.0
+  # --- DORMANT spectral band keys ---
+  # body_freq_min: 1000
+  # body_freq_max: 4000
+  # brilliance_freq_min: 4000
+  # brilliance_freq_max: 10000
+  # --- DORMANT envelope-analysis keys (legacy) ---
+  # sustain_analysis_window_sec: 2.0
+  # decay_filter_window_sec: 0.5
+
+# === REMOVED IN PGA-UNIVERSAL CLEANUP (2026-06-20) ===
+# These sections and 70 per-stem keys were removed from the live
+# pipeline when the PGA detector became universal. They are kept
+# here in commented form for historical reference; do NOT add
+# them back without confirming the pipeline still reads them.
+#
+# filtering:                                           # all 6 keys
+#   geomean_threshold:
+#   min_strength_threshold:
+#   min_sustain_ms:
+#   expected_clusters:
+#   enable_spectral_filter: true
+#   reverb_continuation_attack_threshold: 0.4
+#
+# clustering:
+#   method: dbscan                                      # removed
+#
+# threshold_optimization:                               # removed
+#   enabled: false
+#   max_iterations: 20
+#   tolerance: 0
+#
+# debug:                                               # removed
+#   show_all_onsets: true
+#   show_spectral_data: true
+#
+# learning_mode:                                       # removed 2026-06-22
+#   enabled: false
+#   learning_onset_threshold: 0.0001
+#   learning_delta: 0.002
+#   learning_wait: 1
+#   learning_midi_suffix: _learning
