@@ -2153,6 +2153,16 @@ async function loadEventOverrides() {
     } catch {
         eventOverrides = {};
     }
+    // 2026-06-30: refresh the window reference. The export
+    // `window.eventOverrides = eventOverrides` runs at module
+    // load time — but `eventOverrides` is a `let` that gets
+    // reassigned here (and on every cycle click). The window
+    // reference becomes stale the moment we load a project's
+    // overrides, so the cross-module `hasOverrides` check in
+    // threshold-tuning.js's `saveTuningAndReconvert` was always
+    // looking at the initial empty object. The user-reported
+    // "no changes to save" bug is this stale reference.
+    window.eventOverrides = eventOverrides;
     applyOverridesToEvents();
     // After loading, the in-memory `eventOverrides` matches
     // what's on disk — not dirty. The session-dirty flag is

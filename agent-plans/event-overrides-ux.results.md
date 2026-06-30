@@ -350,3 +350,36 @@ frame-based keys instead of time-based. Both tests pass.
   unchanged.
 - **playwright**: 10 passed (was 9 — added spec 08b), 4
   pre-existing failures (specs 02, 03, 04) unchanged.
+
+### Implementation log (Followup 2 — 2026-06-30)
+
+**Bug: "when i click an event and save i get 'no changes to
+save'"**
+
+Root cause: `window.eventOverrides = eventOverrides` runs
+at module load time in waveform.js. `loadEventOverrides`
+later reassigns `eventOverrides = data.overrides || {}` to a
+new object loaded from the server. The window reference
+became stale — it always pointed at the initial empty `{}`
+object.
+
+`saveTuningAndReconvert` in threshold-tuning.js checks
+`typeof window.eventOverrides === 'object' && window.eventOverrides
+&& Object.keys(window.eventOverrides).length > 0` to detect
+"user has overrides to commit even without a config slider
+change". This check was always false because the window
+reference was stale.
+
+**Fix**: in `loadEventOverrides`, after the `eventOverrides = ...`
+reassignment, also re-assign `window.eventOverrides = eventOverrides`.
+Now the window reference follows the latest binding, so the
+`hasOverrides` check correctly sees loaded + cycled overrides.
+
+Added regression test `specs/08c-window-event-overrides-stale-ref.spec.ts`
+that verifies `typeof window.eventOverrides === 'object'` after
+project load — a direct regression guard for this bug.
+
+**Test results**:
+- pytest: 860 passed, 4 pre-existing failures unchanged.
+- playwright: 11 passed (added 08c), 4 pre-existing failures
+  unchanged.
